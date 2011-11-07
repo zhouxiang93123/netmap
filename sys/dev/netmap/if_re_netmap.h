@@ -15,20 +15,6 @@ static int re_netmap_txsync(void *, u_int, int);
 static int re_netmap_rxsync(void *, u_int, int);
 static void re_netmap_lock_wrapper(void *, int, u_int);
 
-static int re_netmap_verbose = 0;
-/*
- * Intr mitigation seems useful, but avoid 0x0*00 because otherwise
- * you won't get any tx interrupt. The value (undocumented) is
- * (TxTimer << 12) | (TxPackets << 8) | (RxTimer << 4) | RxPackets
- */
-static int re_netmap_mitigation = 0x5100;
-
-SYSCTL_INT(_dev_re, OID_AUTO, verbose,
-    CTLFLAG_RW, &re_netmap_verbose, 0, "Verbose flag");
-SYSCTL_INT(_dev_re, OID_AUTO, mitigation,
-    CTLFLAG_RW, &re_netmap_mitigation, 0, "count");
-
-
 static void
 re_netmap_attach(struct rl_softc *sc)
 {
@@ -221,7 +207,7 @@ re_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 		    BUS_DMASYNC_PREWRITE|BUS_DMASYNC_PREREAD);
 
 		/* start ? */
-		CSR_WRITE_1(sc, sc->rl_txstart, RL_TXSTART_START << re_tx_hi);
+		CSR_WRITE_1(sc, sc->rl_txstart, RL_TXSTART_START);
 	}
 	if (do_lock)
 		RL_UNLOCK(sc);
@@ -283,10 +269,6 @@ re_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 		/*  sync was in re_newbuf() */
 		bus_dmamap_sync(sc->rl_ldata.rl_rx_mtag,
 		    rxd[j].rx_dmamap, BUS_DMASYNC_POSTREAD);
-		if (re_netmap_verbose)
-			D("hwcur %d avail %d i %d stat 0x%x len %d",
-				kring->nr_hwcur, kring->nr_hwavail,
-				j, rxstat, total_len);
 		j = RL_RX_DESC_NXT(sc, j);
 	}
 	if (n != kring->nr_hwavail) {
@@ -320,8 +302,6 @@ re_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 				cmd |= RL_RDESC_CMD_EOR;
 
 			desc->rl_cmdstat = htole32(cmd);
-			if (re_netmap_verbose)
-				D("slot %d/%d cmdstat 0x%x", j, k, cmd);
 			slot->flags &= ~NS_REPORT;
 			if (slot->flags & NS_BUF_CHANGED) {
 				uint64_t paddr = vtophys(addr);
