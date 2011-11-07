@@ -23,29 +23,6 @@ static void	lem_netmap_lock_wrapper(void *, int, u_int);
 
 SYSCTL_NODE(_dev, OID_AUTO, lem, CTLFLAG_RW, 0, "lem card");
 
-#ifdef LATENCY_TIMESTAMPS
-#include <netinet/ip_icmp.h>
-#endif /* LATENCY_TIMESTAMPS */
-#if NETMAP_LATENCY_TIMESTAMPS
-/*
- * timestamps used to measure driver latency: one for each interface.
- */
-uint64_t lem_intr_ts0;
-
-static struct stats lem_stats; /* circular array containing interrupt
-				  information. */
-static int
-sysctl_dev_lem_stats(SYSCTL_HANDLER_ARGS)
-{
-	return sysctl_handle_opaque(oidp, &lem_stats, sizeof(lem_stats), req);
-}
-
-SYSCTL_PROC(_dev_lem, OID_AUTO, stats,
-		CTLTYPE_STRUCT|CTLFLAG_RD|CTLFLAG_MPSAFE,
-		0, 0, sysctl_dev_lem_stats, "S,stats",
-		"lem interrupt stats");
-#endif /* defined LATENCY_TIMESTAMPS || NETMAP_LATENCY_TIMESTAMPS */
-
 static void
 lem_netmap_attach(struct adapter *adapter)
 {
@@ -205,12 +182,6 @@ lem_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 	struct netmap_ring *ring = kring->ring;
 	int j, k, n, lim = kring->nkr_num_slots - 1;
 
-#if NETMAP_LATENCY_TIMESTAMPS
-	uint64_t tic, toc;
-	tic = lem_intr_ts0;
-	netmap_rdtsc(toc);
-	ring->containers[0] = (toc > tic) ? toc - tic : 0;
-#endif /* NETMAP_LATENCY_TIMESTAMPS */
 	k = ring->cur;
 	if ( (kring->nr_kflags & NR_REINIT) || k > lim)
 		return netmap_ring_reinit(kring);
