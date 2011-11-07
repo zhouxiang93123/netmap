@@ -1,0 +1,19 @@
+Index: floppy.tree/etc/rc1
+===================================================================
+--- floppy.tree/etc/rc1	(revision 225462)
++++ floppy.tree/etc/rc1	(working copy)
+@@ -22,6 +22,14 @@
+ unset IFS
+ )
+ 
++### Load sysctl.conf, if present
++if [ -f /etc/sysctl.conf ]; then
++	echo "Loading /etc/sysctl.conf"
++	while read line; do
++		sysctl $line
++	done </etc/sysctl.conf
++fi
++
+ rm -f /var/run/*
+ if [ "x$swapfile" != "xNO" -a -w "$swapfile" -a -b /dev/vn0b ]; then
+ 	echo "Adding $swapfile as additional swap."

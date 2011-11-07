@@ -1,0 +1,41 @@
+Netmap - a device for fast access to network adapters from userland
+===================================================================
+
+This directory contains sources for "netmap", a system to give direct
+access to network devices to userland programs. Details on the system
+are given at
+
+	http://info.iet.unipi.it/~luigi/netmap/
+
+Install
+-------
+Assuming your kernel source tree is in ${BASE}, to build netmap
+you should do the following:
+
+   + copy the sources for the the netmap module from sys/ into ${BASE}/sys
+     excluding .svn directories (e.g. rsync -aC sys/ ${BASE}/sys)
+
+   + apply the patch in head-netmap.diff
+     (it updates some device drivers and config files. Currently tested
+     are ixgbe, em, lem and (partially) re.
+     The patch is for HEAD, but it *might* work also for RELENG_8.
+
+Then you can build kernel adding "device netmap" to the kernel config.
+and modules and reinstall it.
+
+The directory examples/ contains some programs that use the netmap API
+
+    pkt-gen	a packet generator/receiver working at line rate at 10Gbit/s
+    bridge	a utility that bridges two interfaces or one interface
+		with the host stack
+    pcap.c	a simple libpcap-over-netmap library, and some test
+		code, to help porting pcap applications to netmap.
+		The library compiles as libnetmap.so, you can use it
+		to replace your libpcap.so.* 
+
+Credits
+-------
+netmap is a project of the Universita` di Pisa, partially supported
+by Intel Research Berkeley and EU FP7 project CHANGE.
+The code has been entirely developed by Luigi Rizzo and Matteo Landi,
+and is distributed under a BSD Copyright.

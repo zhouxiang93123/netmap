@@ -1,0 +1,68 @@
+Index: sbin/ping/ping.c
+===================================================================
+--- sbin/ping/ping.c	(revision 225462)
++++ sbin/ping/ping.c	(working copy)
+@@ -213,6 +213,15 @@
+ static void tvsub(struct timeval *, const struct timeval *);
+ static void usage(void) __dead2;
+ 
++static __inline uint64_t
++rdtsc(void)
++{
++        uint64_t rv;
++
++        __asm __volatile("rdtsc" : "=A" (rv));
++        return (rv);
++}
++
+ int
+ main(int argc, char *const *argv)
+ {
+@@ -966,6 +975,21 @@
+ 			bcopy((void *)&tv32,
+ 			    (void *)&outpack[ICMP_MINLEN + phdr_len],
+ 			    sizeof(tv32));
++#ifdef LATENCY_TIMESTAMPS
++		 /*
++		 * if the message payload is large enough (68 bytes) to contain
++		 * and index and 8 timestamps, then take a timestamp and place
++		 * it in the first available timestamp slot.
++		 */
++		if (datalen >= 68) {
++			int32_t *idxp = (int32_t *) ((char *)icp + ICMP_MINLEN);
++			uint64_t *ts = (uint64_t *) &idxp[1];
++
++			*idxp = 0;
++			ts[*idxp] = rdtsc();
++			*idxp += 1;
++		}
++#endif /* LATENCY_TIMESTAMPS */
+ 	}
+ 
+ 	cc = ICMP_MINLEN + phdr_len + datalen;
+@@ -1040,6 +1064,25 @@
+ 			return;			/* 'Twas not our ECHO */
+ 		++nreceived;
+ 		triptime = 0.0;
++#ifdef LATENCY_TIMESTAMPS
++		/*
++		 * if the message payload is large enough (68 bytes), collect
++		 * the last timestamp and print a summary of all the timestamps
++		 * taken so far.
++		 */
++		if (datalen >= 68) {
++			int32_t *idxp = (int32_t *) ((char *)icp + ICMP_MINLEN);
++			uint64_t *ts = (uint64_t *) &idxp[1];
++
++			if (*idxp != 7)
++				printf("Unexpected idx value: %d\n", *idxp);
++
++			ts[*idxp] = rdtsc();
++
++			printf ("%llu %llu %llu %llu %llu %llu %llu %llu\n",
++				ts[0], ts[1], ts[2], ts[3], ts[4], ts[5], ts[6], ts[7]);
++		}
++#endif /* LATENCY_TIMESTAMPS */
+ 		if (timing) {
+ 			struct timeval tv1;
+ 			struct tv32 tv32;
