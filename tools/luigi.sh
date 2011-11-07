@@ -31,13 +31,18 @@ while [ true ] ; do
     diff)	# compute diffs
 	(cd $FREEBSD_TREE/sys; svn diff $MY_FILES)
 	;;
-    revert)	# compute diffs
-	(cd $FREEBSD_TREE/sys; svn revert $MY_FILES)
+    revert)	# remove additional files
+	(cd $FREEBSD_TREE/sys; svn revert $MY_FILES; \
+		rm dev/netmap; rm net/netmap*)
 	;;
     patch)	# compute diffs
 	in=$2
 	[ x"$in" = x ] && in=$NETMAP_TREE/head-netmap.diff
-	(cd $FREEBSD_TREE/sys; patch ${DRY} < $in)
+	(cd $FREEBSD_TREE/sys; patch ${DRY} < $in ; \
+	    ln -s $NETMAP_TREE/sys/dev/netmap dev/netmap; \
+	    ln -s $NETMAP_TREE/sys/net/netmap.h net/netmap.h; \
+	    ln -s $NETMAP_TREE/sys/net/netmap_user.h net/netmap_user.h; \
+	)
 	;;
     *)
 	break;
