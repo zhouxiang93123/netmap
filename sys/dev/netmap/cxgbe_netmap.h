@@ -296,12 +296,6 @@ cxgbe_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 		if ((staterr & IXGBE_RXD_STAT_DD) == 0)
 			break;
 		ring->slot[j].len = le16toh(curr->wb.upper.length);
-#if NETMAP_DOUBLE_PACKETS
-		if (netmap_double_packets && ring->slot[j].len < 1024) {
-			char *p = NETMAP_BUF(ring, ring->slot[j].buf_idx);
-			memcpy(p + 1024, p, ring->slot[j].len);
-		}
-#endif /* NETMAP_DOUBLE_PACKETS */
 		bus_dmamap_sync(rxr->ptag,
 			rxr->rx_buffers[j].pmap, BUS_DMASYNC_POSTREAD);
 		j = (j == lim) ? 0 : j + 1;
