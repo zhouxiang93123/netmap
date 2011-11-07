@@ -76,6 +76,8 @@ const char *default_payload="netmap pkt-gen Luigi Rizzo and Matteo Landi\n"
 
 #include <net/netmap.h>
 #include <net/netmap_user.h>
+#include <pcap/pcap.h>
+
 
 static inline int min(int a, int b) { return a < b ? a : b; }
 
@@ -84,7 +86,9 @@ static inline int min(int a, int b) { return a < b ? a : b; }
 	fprintf(stderr, "%s [%d] " format "\n", 	\
 	__FUNCTION__, __LINE__, ##__VA_ARGS__)
 
+#ifndef EXPERIMENTAL
 #define EXPERIMENTAL 0
+#endif
 
 int verbose = 0;
 #define MAX_QUEUES 64	/* no need to limit */
@@ -105,6 +109,22 @@ int verbose = 0;
 		(t) = rdtsc();						\
 	} while (0)
 
+static __inline void
+do_cpuid(u_int ax, u_int *p)
+{
+	__asm __volatile("cpuid"
+			 : "=a" (p[0]), "=b" (p[1]), "=c" (p[2]), "=d" (p[3])
+			 :  "0" (ax));
+}
+
+static __inline uint64_t
+rdtsc(void)
+{
+	uint64_t rv;
+
+	__asm __volatile("rdtsc" : "=A" (rv));
+	return (rv);
+}
 #define MAX_SAMPLES 100000
 #endif /* EXPERIMENTAL */
 
@@ -154,7 +174,9 @@ struct targ {
 	int me;
 	pthread_t thread;
 	int affinity;
+	int use_pcap;
 
+	pcap_t *p;
 
 	uint8_t	dst_mac[6];
 	uint8_t	src_mac[6];
@@ -164,11 +186,6 @@ struct targ {
 	uint32_t src_ip;
 	u_int dst_ip_range;
 	u_int src_ip_range;
-	u_long ctrs[MAX_QUEUES];
-	u_long batches[MAX_DESCS + 1];
-#if EXPERIMENTAL
-	struct mystat mystats[MAX_SAMPLES];
-#endif /* EXPERIMENTAL */
 
 	struct pkt pkt;
 };
@@ -177,24 +194,6 @@ struct targ {
 static struct targ targs[1 + MAX_QUEUES];
 static int global_nthreads;
 
-#if EXPERIMENTAL
-static __inline void
-do_cpuid(u_int ax, u_int *p)
-{
-	__asm __volatile("cpuid"
-			 : "=a" (p[0]), "=b" (p[1]), "=c" (p[2]), "=d" (p[3])
-			 :  "0" (ax));
-}
-
-static __inline uint64_t
-rdtsc(void)
-{
-	uint64_t rv;
-
-	__asm __volatile("rdtsc" : "=A" (rv));
-	return (rv);
-}
-#endif /* EXPERIMENTAL */
 
 /* control-C handler */
 static void
@@ -212,6 +211,7 @@ sigint_h(__unused int sig)
 
 	signal(SIGINT, SIG_DFL);
 }
+
 
 /* sysctl wrapper to return the number of active CPUs */
 static int
@@ -284,26 +284,6 @@ setaffinity(pthread_t me, int i)
 	}
 	return 0;
 }
-
-#if EXPERIMENTAL
-static void
-update_stats(struct targ *targ, int last)
-{
-	struct netmap_if *nifp = targ->nifp;
-	int i;
-
-	if (last > MAX_SAMPLES)
-		return;
-
-	for (i = targ->qfirst; i < targ->qlast; i++) {
-		struct netmap_ring *rxring = NETMAP_RXRING(nifp, i);
-
-		targ->mystats[last].containers[i] = rxring->containers[0];
-	}
-	targ->mystats[last].containers[i] = nifp->containers[1] - nifp->containers[0];
-	targ->mystats[last].containers[i + 1] = nifp->containers[3] - nifp->containers[2];
-}
-#endif /* EXPERIMENTAL */
 
 /* Compute the checksum of the given ip header. */
 static uint16_t
@@ -464,9 +444,6 @@ sender_body(void *data)
 	struct netmap_ring *txring;
 	int i, n = targ->g->npackets / targ->g->nthreads, sent = 0;
 	int fill_all = 1;
-#if EXPERIMENTAL
-	int j = 0;
-#endif /* EXPERIMENTAL */
 
 	if (setaffinity(targ->thread, targ->affinity))
 		goto quit;
@@ -477,11 +454,21 @@ sender_body(void *data)
 
 	/* main loop.*/
 	gettimeofday(&targ->tic, NULL);
+    if (targ->use_pcap) {
+	int size = targ->g->pkt_size;
+	void *pkt = &targ->pkt;
+	pcap_t *p = targ->p;
+
+	for (; sent < n; sent++) {
+		if (pcap_inject(p, pkt, size) == -1)
+			break;
+	}
+    } else {
 	while (sent < n) {
+
 		/*
 		 * wait for available room in the send queue(s)
 		 */
-
 		if (poll(fds, 1, 2000) <= 0) {
 			D("poll error/timeout on queue %d\n", targ->me);
 			goto quit;
@@ -499,14 +486,9 @@ sender_body(void *data)
 				continue;
 			m = send_packets(txring, &targ->pkt, targ->g->pkt_size,
 					 limit, fill_all);
-			targ->ctrs[i] += m;
-			targ->batches[m] += 1;
 			sent += m;
 			targ->count = sent;
 		}
-#if EXPERIMENTAL
-		update_stats(targ, j++);
-#endif /* EXPERIMENTAL */
 		if (targ->g->force_txsync)
 			ioctl(fds[0].fd, NIOCTXSYNC, NULL);
 	}
@@ -521,6 +503,7 @@ sender_body(void *data)
 			usleep(1); /* wait 1 tick */
 		}
 	}
+    }
 
 	gettimeofday(&targ->toc, NULL);
 	targ->completed = 1;
@@ -533,6 +516,14 @@ quit:
 	return (NULL);
 }
 
+
+static void
+receive_pcap(u_char *user, __unused const struct pcap_pkthdr * h,
+	__unused const u_char * bytes)
+{
+	int *count = (int *)user;
+	(*count)++;
+}
 
 static int
 receive_packets(struct netmap_ring *ring, u_int limit, int skip_payload)
@@ -565,9 +556,6 @@ receiver_body(void *data)
 	struct netmap_if *nifp = targ->nifp;
 	struct netmap_ring *rxring;
 	int i, received = 0;
-#if EXPERIMENTAL
-	int j = 0;
-#endif /* EXPERIMENTAL */
 
 	if (setaffinity(targ->thread, targ->affinity))
 		goto quit;
@@ -579,13 +567,7 @@ receiver_body(void *data)
 
 	/* unbounded wait for the first packet. */
 	for (;;) {
-#if EXPERIMENTAL
-		netmap_rdtsc(nifp->containers[0]);
-#endif /* EXPERIMENTAL */
 		i = poll(fds, 1, 1000);
-#if EXPERIMENTAL
-		netmap_rdtsc(nifp->containers[3]);
-#endif /* EXPERIMENTAL */
 		if (i > 0 && !(fds[0].revents & POLLERR))
 			break;
 		D("waiting for initial packets, poll returns %d %d", i, fds[0].revents);
@@ -593,12 +575,12 @@ receiver_body(void *data)
 
 	/* main loop, exit after 1s silence */
 	gettimeofday(&targ->tic, NULL);
+    if (targ->use_pcap) {
+	for (;;) {
+		pcap_dispatch(targ->p, targ->g->burst, receive_pcap, NULL);
+	}
+    } else {
 	while (1) {
-#if EXPERIMENTAL
-		update_stats(targ, j++);
-
-		netmap_rdtsc(nifp->containers[0]);
-#endif /* EXPERIMENTAL */
 		/* Once we started to receive packets, wait at most 1 seconds
 		   before quitting. */
 		if (poll(fds, 1, 1 * 1000) <= 0) {
@@ -606,9 +588,7 @@ receiver_body(void *data)
 			targ->toc.tv_sec -= 1; /* Substract timeout time. */
 			break;
 		}
-#if EXPERIMENTAL
-		netmap_rdtsc(nifp->containers[3]);
-#endif /* EXPERIMENTAL */
+
 		for (i = targ->qfirst; i < targ->qlast; i++) {
 			int m;
 
@@ -620,13 +600,12 @@ receiver_body(void *data)
 					SKIP_PAYLOAD);
 			received += m;
 			targ->count = received;
-			targ->ctrs[i] += m;
-			targ->batches[m] += 1;
 		}
 
 		// tell the card we have read the data
 		//ioctl(fds[0].fd, NIOCRXSYNC, NULL);
 	}
+    }
 
 	targ->completed = 1;
 	targ->count = received;
@@ -709,14 +688,13 @@ usage(void)
 int
 main(int arc, char **argv)
 {
-	int i, j, fd;
+	int i, fd;
 
 	struct glob_arg g;
 
 	struct nmreq nmr;
 	void *mmap_addr;		/* the mmap address */
 	void *(*td_body)(void *) = receiver_body;
-	u_long *ctrs, *batches;
 	int ch;
 	int report_interval = 1000;	/* report interval */
 	char *ifname = NULL;
@@ -733,14 +711,6 @@ main(int arc, char **argv)
 	g.nthreads = 1;
 	g.cpus = 1;
 	g.devqueues = 1;
-
-	ctrs = calloc(1, (MAX_QUEUES) * sizeof(u_long));
-	if (ctrs == NULL)
-		return (1);
-
-	batches = calloc(1, (MAX_DESCS + 1) * sizeof(u_long));
-	if (batches == NULL)
-		return (1);
 
 	while ( (ch = getopt(arc, argv,
 			"i:t:r:l:d:s:D:S:b:c:p:T:w:vf")) != -1) {
@@ -1039,12 +1009,6 @@ main(int arc, char **argv)
 			tic = targs[i].tic;
 		if (!timerisset(&toc) || timercmp(&targs[i].toc, &toc, >))
 			toc = targs[i].toc;
-
-		for (j = 0; j < MAX_QUEUES; j++)
-			ctrs[j] += targs[i].ctrs[j];
-
-		for (j = 0; j < MAX_DESCS + 1; j++)
-			batches[j] += targs[i].batches[j];
 	}
 
 	/* print output. */
@@ -1055,29 +1019,6 @@ main(int arc, char **argv)
 	else
 		rx_output(count, delta_t);
     }
-
-#if 0
-	for (j = 0; j < MAX_QUEUES; j++)
-		printf("%s[%2d] = %lu\n",
-			td_body == sender_body ? "sent" : "received",
-			j, ctrs[j]);
-	for (j = 0; j < MAX_DESCS + 1; j++)
-		if (batches[j] != 0)
-			printf("batches[%4d] = %lu\n", j, batches[j]);
-#endif
-#if EXPERIMENTAL
-	for (j = 0; j < MAX_SAMPLES; j++) {
-		printf("%llu %llu %llu %llu %llu %llu %llu %llu\n",
-			targs[0].mystats[j].containers[0],
-			targs[0].mystats[j].containers[1],
-			targs[0].mystats[j].containers[2],
-			targs[0].mystats[j].containers[3],
-			targs[0].mystats[j].containers[4],
-			targs[0].mystats[j].containers[5],
-			targs[0].mystats[j].containers[6],
-			targs[0].mystats[j].containers[7]);
-	}
-#endif /* EXPERIMENTAL */
 
 	ioctl(fd, NIOCUNREGIF, &nmr);
 	munmap(mmap_addr, nmr.nr_memsize);
