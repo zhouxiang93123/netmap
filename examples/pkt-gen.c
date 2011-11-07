@@ -412,8 +412,6 @@ send_packets(struct netmap_ring *ring, struct pkt *pkt,
 
 		if (fill_all)
 			memcpy(p, pkt, size);
-		/* dest ip: x.x.x.$(var) */
-		/*p[33] = (sent % 255) + 1;*/
 
 		slot->len = size;
 		if (sent == count - 1)
