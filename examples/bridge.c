@@ -3,7 +3,8 @@
  *
  * BSD license
  *
- * A simple program to bridge two network interfaces
+ * A netmap client to bridge two network interfaces
+ * (or one interface and the host stack).
  */
 
 #include <errno.h>
@@ -47,7 +48,7 @@ int verbose = 0;
 
 char *version = "$Id$";
 
-static int ABORT = 0;
+static int do_abort = 0;
 
 /*
  * info on a ring we handle
@@ -70,7 +71,7 @@ struct my_ring {
 static void
 sigint_h(__unused int sig)
 {
-	ABORT = 1;
+	do_abort = 1;
 	signal(SIGINT, SIG_DFL);
 }
 
@@ -282,7 +283,7 @@ howmany(struct my_ring *me, int tx)
 {
 	u_int i, tot = 0;
 
-ND("me %p begin %d end %d", me, me->begin, me->end);
+	ND("me %p begin %d end %d", me, me->begin, me->end);
 	for (i = me->begin; i < me->end; i++) {
 		struct netmap_ring *ring = tx ?
 			NETMAP_TXRING(me->nifp, i) : NETMAP_RXRING(me->nifp, i);
@@ -293,15 +294,16 @@ ND("me %p begin %d end %d", me, me->begin, me->end);
 			me->ifname, tx ? "tx": "rx",
 			me->end > me->nifp->ni_num_queues ?
 				"host":"net",
-		tot, NETMAP_TXRING(me->nifp, me->begin)->cur);
+			tot, NETMAP_TXRING(me->nifp, me->begin)->cur);
 	return tot;
 }
 
 /*
- * bridge [-v] if1 if2
+ * bridge [-v] if1 [if2]
  *
  * If only one name, or the two interfaces are the same,
- * bridges userland and the adapter.
+ * bridges userland and the adapter. Otherwise bridge
+ * two intefaces.
  */
 int
 main(int argc, char **argv)
@@ -334,15 +336,13 @@ main(int argc, char **argv)
 		i = NETMAP_SW_RING;
 		me[1].ifname = argv[1];
 	} else {
-		/* two different interfaces. Take all rings on if1,
-		 * and fetch the name for if2
-		 */
+		/* two different interfaces. Take all rings on if1 */
 		i = 0;	// all hw rings
 		me[1].ifname = argv[2];
 	}
 	if (netmap_open(me, i))
 		return (1);
-	me[1].mem = me[0].mem;
+	me[1].mem = me[0].mem; /* copy the pointer, so only one mmap */
 	if (netmap_open(me+1, 0))
 		return (1);
 
@@ -395,7 +395,7 @@ main(int argc, char **argv)
 
 	/* main loop */
 	signal(SIGINT, sigint_h);
-	while (!ABORT) {
+	while (!do_abort) {
 		int n0, n1, ret;
 		pollfd[0].events = pollfd[1].events = 0;
 		pollfd[0].revents = pollfd[1].revents = 0;
@@ -413,7 +413,7 @@ main(int argc, char **argv)
 		if (ret <= 0 || verbose)
 		    D("poll %s [0] ev %x %x rx %d@%d tx %d,"
 			     " [1] ev %x %x rx %d@%d tx %d",
-			ret <= 0 ? "timeout" : "ok",
+				ret <= 0 ? "timeout" : "ok",
 				pollfd[0].events,
 				pollfd[0].revents,
 				howmany(me, 0),
