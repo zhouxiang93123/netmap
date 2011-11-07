@@ -12,7 +12,6 @@ MY_FILES="\
 	dev/re/if_re.c \
 	dev/bge/if_bge.c \
 	dev/ixgbe/ixgbe.c \
-	dev/ixgbe/ixgbe.h \
 	"
 
 while [ true ] ; do
