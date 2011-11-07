@@ -1055,9 +1055,6 @@ netmap_poll(__unused struct cdev *dev, int events, struct thread *td)
 	if (devfs_get_cdevpriv((void **)&priv) != 0 || priv == NULL)
 		return POLLERR;
 
-#if NETMAP_LATENCY_TIMESTAMPS
-	netmap_rdtsc(priv->np_nifp->containers[1]);
-#endif /* NETMAP_LATENCY_TIMESTAMPS */
 	ifp = priv->np_ifp;
 	// XXX check for deleting() ?
 	if ( (ifp->if_capenable & IFCAP_NETMAP) == 0)
@@ -1240,9 +1237,6 @@ netmap_poll(__unused struct cdev *dev, int events, struct thread *td)
 	if (core_lock == LOCKED_CL)
 		na->nm_lock(adapter, NETMAP_CORE_UNLOCK, 0);
 
-#if NETMAP_LATENCY_TIMESTAMPS
-	netmap_rdtsc(priv->np_nifp->containers[2]);
-#endif /* NETMAP_LATENCY_TIMESTAMPS */
 	return (revents);
 }
 

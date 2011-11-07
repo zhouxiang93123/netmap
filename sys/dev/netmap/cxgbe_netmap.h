@@ -278,12 +278,6 @@ cxgbe_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 	struct netmap_ring *ring = kring->ring;
 	int j, k, n, lim = kring->nkr_num_slots - 1;
 
-#if NETMAP_LATENCY_TIMESTAMPS
-	uint64_t tic, toc;
-	tic = (adapter->ifp->if_dunit == 0) ? ixgbe_intr_ts0 : ixgbe_intr_ts1;
-	netmap_rdtsc(toc);
-	ring->containers[0] = (toc > tic) ? toc - tic : 0;
-#endif /* NETMAP_LATENCY_TIMESTAMPS */
 	k = ring->cur;	/* ring is not protected by any lock */
 	if ( (kring->nr_kflags & NR_REINIT) || k > lim)
 		return netmap_ring_reinit(kring);

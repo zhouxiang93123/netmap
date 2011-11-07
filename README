@@ -1,7 +1,7 @@
-Netmap - a device for fast access to network adapters from userland
+Netmap - a framework for fast packet I/O
 ===================================================================
 
-This directory contains sources for "netmap", a system to give direct
+This directory contains sources for "netmap", a framework to give direct
 access to network devices to userland programs. Details on the system
 are given at
 

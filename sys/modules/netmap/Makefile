@@ -1,4 +1,8 @@
 # $FreeBSD$
+#
+# Compile netmap as a module, though it is not useful now
+# because drivers do depend on it.
+
 .PATH: ${.CURDIR}/../../dev/netmap
 .PATH.h: ${.CURDIR}/../../net
 KMOD	= netmap

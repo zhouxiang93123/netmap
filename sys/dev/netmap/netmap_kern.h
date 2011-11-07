@@ -46,42 +46,6 @@
 MALLOC_DECLARE(M_NETMAP);
 #endif
 
-/* set of defines enabling specific debug operations. */
-#define NETMAP_SKIP_POLL		0
-#define NETMAP_SLOW_POLL		0
-#define NETMAP_DOUBLE_PACKETS		0
-#define NETMAP_LATENCY_TIMESTAMPS	0
-#define LATENCY_TIMESTAMPS
-
-#if NETMAP_LATENCY_TIMESTAMPS
-//XXX a value greater than this will produce a panic
-#define NETMAP_MAX_STATS 10000
-
-struct statsdata {
-	uint64_t tsc;
-	uint8_t unit;
-	uint8_t queue;
-	uint8_t padding[2];
-};
-
-struct stats {
-	int next;
-	struct statsdata statsdata[NETMAP_MAX_STATS];
-};
-
-#define STATS_ADD(__stats, __unit, __queue)				\
-	do {								\
-		struct statsdata *__sd = (__stats).statsdata;		\
-		int __i = (__stats).next;				\
-									\
-		netmap_rdtsc(__sd[__i].tsc);				\
-		__sd[__i].unit = (__unit);				\
-		__sd[__i].queue = (__queue);				\
-		if (++((__stats).next) == NETMAP_MAX_STATS)		\
-			(__stats).next = 0;				\
-	} while (0)
-#endif /* NETMAP_LATENCY_TIMESTAMPS */
-
 #define ND(format, ...)
 #define D(format, ...)					\
 	do {						\

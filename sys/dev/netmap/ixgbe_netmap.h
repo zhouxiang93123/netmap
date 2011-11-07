@@ -22,43 +22,6 @@ static void	ixgbe_netmap_lock_wrapper(void *, int, u_int);
 
 SYSCTL_NODE(_dev, OID_AUTO, ixgbe, CTLFLAG_RW, 0, "ixgbe card");
 
-#ifdef LATENCY_TIMESTAMPS
-#include <netinet/ip_icmp.h>
-#endif
-#if NETMAP_LATENCY_TIMESTAMPS
-/*
- * timestamps used to measure driver latency: one for each interface (on the
- * testing machine we have only two).
- */
-uint64_t ixgbe_intr_ts0;
-uint64_t ixgbe_intr_ts1;
-
-static struct stats ixgbe_stats; /* circular array containing interrupt
-				    information. */
-static int
-sysctl_dev_ixgbe_stats(SYSCTL_HANDLER_ARGS)
-{
-	return sysctl_handle_opaque(oidp, &ixgbe_stats,
-			sizeof(ixgbe_stats), req);
-}
-
-SYSCTL_PROC(_dev_ixgbe, OID_AUTO, stats,
-		CTLTYPE_STRUCT|CTLFLAG_RD|CTLFLAG_MPSAFE,
-		0, 0, sysctl_dev_ixgbe_stats, "S,stats",
-		"ixgbe interrupt stats");
-#endif /* defined LATENCY_TIMESTAMPS || NETMAP_LATENCY_TIMESTAMPS */
-
-#if NETMAP_DOUBLE_PACKETS
-static int netmap_double_packets = 0; /* if a rcvd packet is less than 1K, then
-					 memcpy it on the second half of the
-					 packet buffer (2K): this is useful to
-					 test the impact of memory copies */
-
-SYSCTL_INT(_dev_ixgbe, OID_AUTO, netmap_double_packets,
-    CTLFLAG_RW, &netmap_double_packets, 0, "double the size of small packets");
-#endif /* NETMAP_DOUBLE_PACKETS */
-
-
 static void
 ixgbe_netmap_attach(struct adapter *adapter)
 {
@@ -308,12 +271,6 @@ ixgbe_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 	struct netmap_ring *ring = kring->ring;
 	int j, k, n, lim = kring->nkr_num_slots - 1;
 
-#if NETMAP_LATENCY_TIMESTAMPS
-	uint64_t tic, toc;
-	tic = (adapter->ifp->if_dunit == 0) ? ixgbe_intr_ts0 : ixgbe_intr_ts1;
-	netmap_rdtsc(toc);
-	ring->containers[0] = (toc > tic) ? toc - tic : 0;
-#endif /* NETMAP_LATENCY_TIMESTAMPS */
 	k = ring->cur;	/* ring is not protected by any lock */
 	if ( (kring->nr_kflags & NR_REINIT) || k > lim)
 		return netmap_ring_reinit(kring);
@@ -332,12 +289,6 @@ ixgbe_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 		if ((staterr & IXGBE_RXD_STAT_DD) == 0)
 			break;
 		ring->slot[j].len = le16toh(curr->wb.upper.length);
-#if NETMAP_DOUBLE_PACKETS
-		if (netmap_double_packets && ring->slot[j].len < 1024) {
-			char *p = NETMAP_BUF(ring, ring->slot[j].buf_idx);
-			memcpy(p + 1024, p, ring->slot[j].len);
-		}
-#endif /* NETMAP_DOUBLE_PACKETS */
 		bus_dmamap_sync(rxr->ptag,
 			rxr->rx_buffers[j].pmap, BUS_DMASYNC_POSTREAD);
 		j = (j == lim) ? 0 : j + 1;

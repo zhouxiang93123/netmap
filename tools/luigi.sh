@@ -5,7 +5,7 @@
 
 # MYFILES is the list of kernel files modified
 FREEBSD_TREE=${HOME}/FreeBSD/head
-NETMAP_TREE=/usr/ports-luigi/netmap/netmap-v2
+NETMAP_TREE=/usr/ports-luigi/netmap-release
 MY_FILES="\
 	conf/NOTES conf/files conf/options \
 	dev/e1000/if_igb.c dev/e1000/if_lem.c dev/e1000/if_em.c \
