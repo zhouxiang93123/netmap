@@ -93,11 +93,7 @@ static inline int min(int a, int b) { return a < b ? a : b; }
 int verbose = 0;
 #define MAX_QUEUES 64	/* no need to limit */
 
-#define MAX_DESCS 2048
-
 #define SKIP_PAYLOAD 1 /* do not check payload. */
-
-#define	NM_BUF_SIZE	2048
 
 #if EXPERIMENTAL
 /* Wrapper around `rdtsc' to take reliable timestamps flushing the pipeline */ 
@@ -133,7 +129,7 @@ struct pkt {
 	struct ether_header eh;
 	struct ip ip;
 	struct udphdr udp;
-	uint8_t body[NM_BUF_SIZE];
+	uint8_t body[NETMAP_BUF_SIZE];
 } __attribute__((__packed__));
 
 /*
@@ -146,10 +142,11 @@ struct glob_arg {
 	const char *dst_mac;
 	int pkt_size;
 	int burst;
-	int npackets;
+	int npackets;	/* total packets to send */
 	int nthreads;
 	int cpus;
-	int devqueues;	/* number of rings in use */
+	int use_pcap;
+	pcap_t *p;
 };
 
 struct mystat {
@@ -173,9 +170,6 @@ struct targ {
 	int me;
 	pthread_t thread;
 	int affinity;
-	int use_pcap;
-
-	pcap_t *p;
 
 	uint8_t	dst_mac[6];
 	uint8_t	src_mac[6];
@@ -190,9 +184,8 @@ struct targ {
 };
 
 
-static struct targ targs[1 + MAX_QUEUES];
+static struct targ *targs;
 static int global_nthreads;
-
 
 /* control-C handler */
 static void
@@ -453,10 +446,10 @@ sender_body(void *data)
 
 	/* main loop.*/
 	gettimeofday(&targ->tic, NULL);
-    if (targ->use_pcap) {
+    if (targ->g->use_pcap) {
 	int size = targ->g->pkt_size;
 	void *pkt = &targ->pkt;
-	pcap_t *p = targ->p;
+	pcap_t *p = targ->g->p;
 
 	for (; sent < n; sent++) {
 		if (pcap_inject(p, pkt, size) == -1)
@@ -572,9 +565,9 @@ receiver_body(void *data)
 
 	/* main loop, exit after 1s silence */
 	gettimeofday(&targ->tic, NULL);
-    if (targ->use_pcap) {
+    if (targ->g->use_pcap) {
 	for (;;) {
-		pcap_dispatch(targ->p, targ->g->burst, receive_pcap, NULL);
+		pcap_dispatch(targ->g->p, targ->g->burst, receive_pcap, NULL);
 	}
     } else {
 	while (1) {
@@ -696,6 +689,7 @@ main(int arc, char **argv)
 	int report_interval = 1000;	/* report interval */
 	char *ifname = NULL;
 	int wait_link = 2;
+	int devqueues = 1;	/* how many device queues */
 
 	bzero(&g, sizeof(g));
 
@@ -707,7 +701,6 @@ main(int arc, char **argv)
 	g.burst = 512;		// default
 	g.nthreads = 1;
 	g.cpus = 1;
-	g.devqueues = 1;
 
 	while ( (ch = getopt(arc, argv,
 			"i:t:r:l:d:s:D:S:b:c:p:T:w:v")) != -1) {
@@ -750,6 +743,10 @@ main(int arc, char **argv)
 			break;
 		case 'p':
 			g.nthreads = atoi(optarg);
+			break;
+
+		case 'P':
+			g.use_pcap = 1;
 			break;
 
 		case 'D': /* destination mac */
@@ -810,12 +807,12 @@ main(int arc, char **argv)
 		if ((ioctl(fd, NIOCGINFO, &nmr)) == -1) {
 			D("Unable to get if info for %s", ifname);
 		}
-		g.devqueues = nmr.nr_numrings;
+		devqueues = nmr.nr_numrings;
 	}
 
 	/* validate provided nthreads. */
-	if (g.nthreads < 1 || g.nthreads > g.devqueues) {
-		D("bad nthreads %d, have %d queues", g.nthreads, g.devqueues);
+	if (g.nthreads < 1 || g.nthreads > devqueues) {
+		D("bad nthreads %d, have %d queues", g.nthreads, devqueues);
 		// continue, fail later
 	}
 
@@ -862,7 +859,7 @@ main(int arc, char **argv)
 		"%s %s: %d queues, %d threads and %d cpus.\n",
 		(td_body == sender_body) ? "Sending on" : "Receiving from",
 		ifname,
-		g.devqueues,
+		devqueues,
 		g.nthreads,
 		g.cpus);
 	if (td_body == sender_body) {
@@ -887,6 +884,11 @@ main(int arc, char **argv)
 	global_nthreads = g.nthreads;
 	signal(SIGINT, sigint_h);
 
+	if (g.use_pcap) {
+		// XXX g.p = pcap_open_live(..);
+	}
+
+	targs = calloc(g.nthreads, sizeof(*targs));
 	/*
 	 * Now create the desired number of threads, each one
 	 * using a single descriptor.
@@ -896,6 +898,10 @@ main(int arc, char **argv)
 		struct nmreq tifreq;
 		int tfd;
 
+	    if (g.use_pcap) {
+		tfd = -1;
+		tnifp = NULL;
+	    } else {
 		/* register interface. */
 		tfd = open("/dev/netmap", O_RDWR);
 		if (tfd == -1) {
@@ -921,7 +927,7 @@ main(int arc, char **argv)
 			continue;
 		}
 		tnifp = NETMAP_IF(mmap_addr, tifreq.nr_offset);
-
+	    }
 		/* start threads. */
 		bzero(&targs[i], sizeof(targs[i]));
 		targs[i].g = &g;
