@@ -17,7 +17,7 @@ you should do the following:
 
    + apply the patch in head-netmap.diff
      (it updates some device drivers and config files. Currently tested
-     are ixgbe, em, lem and (partially) re.
+     are ixgbe, em, lem and re.
      The patch is for HEAD, but it *might* work also for RELENG_8.
 
 Then you can build kernel adding "device netmap" to the kernel config.

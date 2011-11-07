@@ -3,7 +3,7 @@ SUBDIR= examples test
 .include <bsd.subdir.mk>
 
 # build a distribution
-DIST_NAME := netmap-0.4-20110704.tar.gz
+DIST_NAME := netmap-0.5-20111108.tar.gz
 DIST_SRCS := ./sys/net ./sys/modules ./Makefile 
 DIST_SRCS += ./sys/dev
 DIST_SRCS += ./examples ./test
