@@ -149,8 +149,7 @@ struct glob_arg {
 	int npackets;
 	int nthreads;
 	int cpus;
-	int devqueues;
-	int force_txsync;
+	int devqueues;	/* number of rings in use */
 };
 
 struct mystat {
@@ -489,8 +488,6 @@ sender_body(void *data)
 			sent += m;
 			targ->count = sent;
 		}
-		if (targ->g->force_txsync)
-			ioctl(fds[0].fd, NIOCTXSYNC, NULL);
 	}
 	/* Tell the interface that we have new packets. */
 	ioctl(fds[0].fd, NIOCTXSYNC, NULL);
@@ -713,7 +710,7 @@ main(int arc, char **argv)
 	g.devqueues = 1;
 
 	while ( (ch = getopt(arc, argv,
-			"i:t:r:l:d:s:D:S:b:c:p:T:w:vf")) != -1) {
+			"i:t:r:l:d:s:D:S:b:c:p:T:w:v")) != -1) {
 		switch(ch) {
 		default:
 			D("bad option %c %s", ch, optarg);
@@ -754,10 +751,7 @@ main(int arc, char **argv)
 		case 'p':
 			g.nthreads = atoi(optarg);
 			break;
-		case 'f':
-			g.force_txsync = 1;
-			D("forcing tx sync");
-			break;
+
 		case 'D': /* destination mac */
 			g.dst_mac = optarg;
 	{
