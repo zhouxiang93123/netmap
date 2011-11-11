@@ -27,6 +27,11 @@ while [ true ] ; do
     --dry)	# dry run
 	DRY=-C
 	;;
+    --h*)	# help
+	echo "sh ... --netmap netmap_tree --src bsd_tree [diff|patch|revert] "
+	exit 0
+	;;
+
     diff)	# compute diffs
 	(cd $FREEBSD_TREE/sys; svn diff $MY_FILES)
 	;;
