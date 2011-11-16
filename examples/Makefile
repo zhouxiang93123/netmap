@@ -1,6 +1,6 @@
 # For multiple programs using a single source file each,
 # we can just define 'progs' and create custom targets.
-PROGS	=	pkt-gen pkt-gen-pcap bridge pingd testpcap libnetmap.so
+PROGS	=	pkt-gen bridge pingd testpcap libnetmap.so
 
 CLEANFILES = $(PROGS) pcap.o
 NO_MAN=
