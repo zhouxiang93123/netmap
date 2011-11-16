@@ -31,9 +31,8 @@
  */
 
 /*
- * $Id$
- *
  * $FreeBSD$
+ * $Id$
  *
  * The header contains the definitions of constants and function
  * prototypes used only in kernelspace.
@@ -225,14 +224,5 @@ NMB(struct netmap_slot *slot)
 		netmap_buffer_base + (i *NETMAP_BUF_SIZE);
 #endif
 }
-
-/* Wrapper around `rdtsc' to take reliable timestamps flushing the pipeline */ 
-#define netmap_rdtsc(t) \
-	do { \
-		int __regs[4];						\
-									\
-		do_cpuid(0, __regs);					\
-		(t) = rdtsc();						\
-	} while (0)
 
 #endif /* _NET_NETMAP_KERN_H_ */

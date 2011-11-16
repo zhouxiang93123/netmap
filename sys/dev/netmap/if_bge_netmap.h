@@ -3,6 +3,7 @@
  *
  * BSD copyright
  *
+ * $FreeBSD$
  * $Id$
  *
  * netmap support for if_bge.c

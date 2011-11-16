@@ -3,6 +3,7 @@
  *
  * BSD Copyright
  *
+ * $FreeBSD$
  * $Id: cxgbe_netmap.h 9520 2011-10-24 14:11:01Z svn_landi $
  *
  * netmap modifications for cxgbe

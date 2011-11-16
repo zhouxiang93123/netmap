@@ -2,6 +2,10 @@
  * (C) 2011 Luigi Rizzo - Universita` di Pisa
  *
  * BSD copyright
+ *
+ * $FreeBSD$
+ * $Id$
+ *
  */
 
 #include <net/netmap.h>

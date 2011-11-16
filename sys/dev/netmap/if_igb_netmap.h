@@ -3,6 +3,7 @@
  *
  * BSD Copyright
  *
+ * $FreeBSD$
  * $Id$
  *
  * netmap modifications for igb

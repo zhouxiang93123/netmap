@@ -3,6 +3,7 @@
  *
  * BSD Copyright
  *
+ * $FreeBSD$
  * $Id$
  *
  * netmap support for if_lem.c

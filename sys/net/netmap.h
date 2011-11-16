@@ -31,6 +31,7 @@
  */
 
 /*
+ * $FreeBSD$
  * $Id$
  *
  * This header contains the definitions of the constants and the
@@ -41,12 +42,11 @@
 #ifndef _NET_NETMAP_H_
 #define _NET_NETMAP_H_
 
-
 /*
- * Description of netmap data structures:
+ * --- Netmap data structures ---
  *
  * The data structures used by netmap are shown below. Those in
- * capital letters are in an mmapped area shared with userspace,
+ * capital letters are in an mmapp()ed area shared with userspace,
  * while others are private to the kernel.
  * Shared structures do not contain pointers but only relative
  * offsets, so that addressing is portable between kernel and userspace.
@@ -61,13 +61,15 @@
  softc
 +----------------+
 | standard fields|
-|                |
-+----------------+
+| if_pspare[0] ----------+
++----------------+       |
+                         |
++----------------+<------+
 |(netmap_adapter)|
 |                |                             netmap_kring
 | tx_rings *--------------------------------->+-------------+
 |                |       netmap_kring         | ring *---------> ...
-| rx_rings *---------->+--------------+         nr_hwcur    |
+| rx_rings *---------->+--------------+       | nr_hwcur    |
 +----------------+     | ring    *-------+    | nr_hwavail  |
                        | nr_hwcur     |  |    | selinfo     |
                        | nr_hwavail   |  |    +-------------+
@@ -80,7 +82,7 @@
                                          |      NETMAP_RING
                                          +---->+-------------+
                                              / | cur         |
-   NETMAP_IF  (one per file descriptor)     /  | avail       |
+   NETMAP_IF  (nifp, one per file desc.)    /  | avail       |
     +---------------+                      /   | buf_ofs     |
     | ni_num_queues |                     /    +=============+
     |               |                    /     | buf_idx     | slot[0]
@@ -195,11 +197,6 @@ struct netmap_ring {
 
 	struct timeval	ts;		/* time of last *sync() */
 
-	/* containers[] stores debug info such as delta times,
-	 * number of processed packets, etc.
-	 */
-	uint64_t containers[8];		/* XXX debug */
-
 	/* the slots follow. This struct has variable size */
 	struct netmap_slot slot[0]; /* array of slots. */
 };
@@ -215,13 +212,9 @@ struct netmap_ring {
  */
 struct netmap_if {
 	char ni_name[IFNAMSIZ]; /* name of the interface. */
+	const u_int ni_version;	/* API version, currently unused */
 	const u_int ni_num_queues; /* number of queue pairs (TX/RX). */
-
-	/* containers[] stores debug info such as delta times,
-	 * number of processed packets, etc.
-	 */
-	uint64_t containers[8];		/* XXX debug */
-
+	const u_int ni_rx_queues;  /* if zero, use ni_num_queues */
 	/*
 	 * the following array contains the offset of the
 	 * each netmap ring from this structure. The first num_queues+1
@@ -260,6 +253,7 @@ struct netmap_if {
  */
 struct nmreq {
 	char		nr_name[IFNAMSIZ];
+	uint32_t	nr_version;	/* API version (unused) */
 	uint32_t	nr_offset;	/* nifp offset in the shared region */
 	uint32_t	nr_memsize;	/* size of the shared region */
 	uint32_t	nr_numslots;	/* descriptors per queue */
@@ -283,9 +277,5 @@ struct nmreq {
 #define NIOCTXSYNC	_IO('i', 148) /* sync tx queues */
 #define NIOCRXSYNC	_IO('i', 149) /* sync rx queues */
 #endif /* !NIOCREGIF */
-
-/* return values for NIOCGINFO */
-#define ifr_numqueues	ifr_ifru.ifru_cap[0]
-#define ifr_numdescs	ifr_ifru.ifru_cap[1]
 
 #endif /* _NET_NETMAP_H_ */
