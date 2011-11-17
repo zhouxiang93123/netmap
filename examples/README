@@ -1,4 +1,4 @@
-$Id$
+$FreeBSD: head/tools/tools/netmap/README 227614 2011-11-17 12:17:39Z luigi $
 
 This directory contains examples that use netmap
 
@@ -8,4 +8,4 @@ This directory contains examples that use netmap
 
 	testpcap	a jumper wire using libnetmap (or libpcap)
 
-	click/		various click examples
+	click*		various click examples
