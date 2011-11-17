@@ -137,23 +137,6 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, total_buffers,
 SYSCTL_INT(_dev_netmap, OID_AUTO, free_buffers,
     CTLFLAG_RD, &nm_buf_pool.free, 0, "free_buffers");
 
-#if NETMAP_SKIP_POLL
-static int skip_poll; /* debug poll */
-
-SYSCTL_INT(_dev_netmap, OID_AUTO, skip_poll,
-    CTLFLAG_RW, &skip_poll, 0, "skip_poll");
-#endif /* NETMAP_SKIP_POLL */
-
-
-#if NETMAP_SLOW_POLL
-static int slow_poll; /* force the poll handler skip the free-lock run; this
-			 way, locks are always acquired. */
-
-SYSCTL_INT(_dev_netmap, OID_AUTO, slow_poll,
-    CTLFLAG_RW, &slow_poll, 0, "slow_poll");
-#endif /* NETMAP_SLOW_POLL */
-
-
 /*
  * Allocate n buffers from the ring, and fill the slot.
  * Buffer 0 is the 'junk' buffer.
@@ -1040,12 +1023,6 @@ netmap_poll(__unused struct cdev *dev, int events, struct thread *td)
 	u_int i, check_all, want_tx, want_rx, revents = 0;
 	void *adapter;
 
-#if NETMAP_SKIP_POLL
-	// XXX debugging -- just measure the cost of poll()
-	if (skip_poll)
-		return events;
-#endif /* NETMAP_SKIP_POLL */
-
 	if (devfs_get_cdevpriv((void **)&priv) != 0 || priv == NULL)
 		return POLLERR;
 
@@ -1134,9 +1111,6 @@ netmap_poll(__unused struct cdev *dev, int events, struct thread *td)
 	 * data available. If this fails, then lock and call the sync
 	 * routines.
 	 */
-#if NETMAP_SLOW_POLL
-	if (slow_poll == 0) {
-#endif /* NETMAP_SLOW_POLL */
 		for (i = priv->np_qfirst; want_rx && i < priv->np_qlast; i++) {
 			kring = &na->rx_rings[i];
 			if (kring->ring->avail > 0) {
@@ -1151,9 +1125,6 @@ netmap_poll(__unused struct cdev *dev, int events, struct thread *td)
 				want_tx = 0;	/* also breaks the loop */
 			}
 		}
-#if NETMAP_SLOW_POLL
-	}
-#endif /* NETMAP_SLOW_POLL */
 
 	/*
 	 * If we to push packets out (priv->np_txpoll) or want_tx is
