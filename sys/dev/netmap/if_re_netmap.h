@@ -170,7 +170,7 @@ re_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 	/* record completed transmissions */
         for (n = 0, l = sc->rl_ldata.rl_tx_considx;
 	    l != sc->rl_ldata.rl_tx_prodidx;
-	    n++, l = RL_TX_DESC_NXT(sc, j)) {
+	    n++, l = RL_TX_DESC_NXT(sc, l)) {
 		uint32_t cmdstat =
 			le32toh(sc->rl_ldata.rl_tx_list[l].rl_cmdstat);
 		if (cmdstat & RL_TDESC_STAT_OWN)
@@ -360,7 +360,7 @@ re_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 		    BUS_DMASYNC_PREWRITE|BUS_DMASYNC_PREREAD);
 	}
 	/* tell userspace that there are new packets */
-	ring->avail = kring->nr_hwavail ;
+	ring->avail = kring->nr_hwavail;
 	if (do_lock)
 		RL_UNLOCK(sc);
 	return 0;
