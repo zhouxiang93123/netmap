@@ -1312,6 +1312,24 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, int n,
 		return NULL;	/* nothing to reinitialize */
 	kring = tx == NR_TX ?  na->tx_rings + n : na->rx_rings + n;
 	ring = kring->ring;
+	lim = kring->nkr_num_slots - 1;
+
+	if (tx == NR_TX)
+		new_hwofs = kring->nr_hwcur - new_cur;
+	else
+		new_hwofs = kring->nr_hwcur + kring->nr_hwavail - new_cur;
+	if (new_hwofs < 0)
+		new_hwofs += lim + 1;
+	else if (new_hwofs > lim)
+		new_hwofs -= lim + 1;
+
+	/* Alwayws set the new offset value and realign the ring. */
+	kring->nkr_hwofs = new_hwofs;
+	if (tx == NR_TX)
+		kring->nr_hwavail = kring->nkr_num_slots - 1;
+	D("new hwofs %d on %s %s[%d]",
+			kring->nkr_hwofs, na->ifp->if_xname,
+			tx == NR_TX ? "TX" : "RX", n);
 
 	/*
 	 * We do the wakeup here, but the ring is not yet reconfigured.
