@@ -255,14 +255,15 @@ ixgbe_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 	if (n == 0 || kring->nr_hwavail < 1) {
 		int delta;
 
-		/* record completed transmissions. TODO
-		 *
+		/*
+		 * Record completed transmissions.
 		 * The datasheet discourages the use of TDH to find out the
 		 * number of sent packets. We should rather check the DD
 		 * status bit in a packet descriptor. However, we only set
 		 * the `report status' bit for some descriptors (a kind of
 		 * interrupt mitigation), so we can only check on those.
-		 * For the time being we use TDH.
+		 * For the time being we use TDH, as we do it infrequently
+		 * enough not to pose performance problems.
 		 */
 		l = IXGBE_READ_REG(&adapter->hw, IXGBE_TDH(ring_nr));
 		if (l >= kring->nkr_num_slots) { /* XXX can happen */
