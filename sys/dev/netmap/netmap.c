@@ -678,6 +678,13 @@ get_ifp(const char *name, struct ifnet **ifp)
  * Error routine called when txsync/rxsync detects an error.
  * Can't do much more than resetting cur = hwcur, avail = hwavail.
  * Return 1 on reinit.
+ *
+ * This routine is only called by the upper half of the kernel.
+ * It only reads hwcur (which is changed only by the upper half, too)
+ * and hwavail (which may be changed by the lower half, but only on
+ * a tx ring and only to increase it, so any error will be recovered
+ * on the next call). For the above, we don't strictly need to call
+ * it under lock.
  */
 int
 netmap_ring_reinit(struct netmap_kring *kring)

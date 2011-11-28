@@ -94,7 +94,7 @@ struct netmap_adapter {
 	u_int num_rx_desc;
 	u_int buff_size;
 
-	u_int	flags;	/* NR_REINIT */
+	u_int	flags;
 	/* tx_rings and rx_rings are private but allocated
 	 * as a contiguous chunk of memory. Each array has
 	 * N+1 entries, for the adapter queues and for the host queue.

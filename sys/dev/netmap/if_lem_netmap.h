@@ -94,7 +94,9 @@ lem_netmap_lock_wrapper(void *_a, int what, u_int ringid)
 
 
 /*
- * Reconcile kernel and user view of the transmit ring. see ixgbe.c
+ * Reconcile kernel and user view of the transmit ring.
+ * See ixgbe_netmap.h::ixgbe_netmap_txsync() for details of the
+ * code in this function.
  */
 static int
 lem_netmap_txsync(void *a, u_int ring_nr, int do_lock)
@@ -103,13 +105,13 @@ lem_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(adapter->ifp);
 	struct netmap_kring *kring = &na->tx_rings[0];
 	struct netmap_ring *ring = kring->ring;
-	int j, k, n, lim = kring->nkr_num_slots - 1;
+	int delta, j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
 
 	/* generate an interrupt approximately every half ring */
 	int report_frequency = kring->nkr_num_slots >> 1;
 
 	k = ring->cur;
-	if ( (kring->nr_kflags & NR_REINIT) || k > lim)
+	if (k > lim)
 		return netmap_ring_reinit(kring);
 
 	if (do_lock)
@@ -121,12 +123,12 @@ lem_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 	 *
 	 * instead of using TDH, we could read the transmitted status bit.
 	 */
-	j = E1000_READ_REG(&adapter->hw, E1000_TDH(0));
-	if (j >= kring->nkr_num_slots) { /* can it happen ? */
-		D("bad TDH %d", j);
-		j -= kring->nkr_num_slots;
+	l = E1000_READ_REG(&adapter->hw, E1000_TDH(0));
+	if (l >= kring->nkr_num_slots) { /* can it happen ? */
+		D("bad TDH %d", l);
+		l -= kring->nkr_num_slots;
 	}
-	int delta = j - adapter->next_tx_to_clean;
+	delta = l - adapter->next_tx_to_clean;
 	if (delta) {
 		if (delta < 0)
 			delta += kring->nkr_num_slots;
@@ -139,11 +141,13 @@ lem_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 
 	j = kring->nr_hwcur;
 	if (j != k) {	/* we have new packets to send */
-		n = 0;
+		l = kring->nr_hwcur - kring->nkr_hwofs;
+		if (l < 0)
+			l += lim + 1;
 		while (j != k) {
 			struct netmap_slot *slot = &ring->slot[j];
-			struct e1000_tx_desc *curr = &adapter->tx_desc_base[j];
-			struct em_buffer *txbuf = &adapter->tx_buffer_area[j];
+			struct e1000_tx_desc *curr = &adapter->tx_desc_base[l];
+			struct em_buffer *txbuf = &adapter->tx_buffer_area[l];
 			void *addr = NMB(slot);
 			int flags = ((slot->flags & NS_REPORT) ||
 				j == 0 || j == report_frequency) ?
