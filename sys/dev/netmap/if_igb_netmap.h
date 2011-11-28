@@ -144,6 +144,7 @@ fail:
 
 /*
  * Reconcile kernel and user view of the transmit ring.
+ * See ixgbe_netmap.h :: ixgbe_netmap_txsync for details on the code.
  *
  * Userspace has filled tx slots up to cur (excluded).
  * The last unused slot previously known to the kernel was nr_hwcur,
@@ -168,13 +169,13 @@ igb_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(adapter->ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	int j, k, n, lim = kring->nkr_num_slots - 1;
+	int delta, j, k, l, lim = kring->nkr_num_slots - 1;
 
 	/* generate an interrupt approximately every half ring */
 	int report_frequency = kring->nkr_num_slots >> 1;
 
-	k = ring->cur;	/* ring is not protected by any lock */
-	if ( (kring->nr_kflags & NR_REINIT) || k > lim)
+	k = ring->cur;
+	if (k > lim)
 		return netmap_ring_reinit(kring);
 
 	if (do_lock)
@@ -182,20 +183,19 @@ igb_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 	bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
 			BUS_DMASYNC_POSTREAD);
 
-	/* record completed transmissions. TODO
-	 *
+	/* record completed transmission. TODO (see ixgbe)
 	 * Instead of reading from the TDH register, we could and try to check
 	 * the status bit of descriptor packets.
 	 */
-	j = E1000_READ_REG(&adapter->hw, E1000_TDH(ring_nr));
-	if (j >= kring->nkr_num_slots) /* XXX can it happen ? */
-		j -= kring->nkr_num_slots;
-	int delta = j - txr->next_to_clean;
+	l = E1000_READ_REG(&adapter->hw, E1000_TDH(ring_nr));
+	if (l >= kring->nkr_num_slots) /* XXX can it happen ? */
+		l -= kring->nkr_num_slots;
+	delta = l - txr->next_to_clean;
 	if (delta) {
 		/* new tx were completed */
 		if (delta < 0)
 			delta += kring->nkr_num_slots;
-		txr->next_to_clean = j;
+		txr->next_to_clean = l;
 		kring->nr_hwavail += delta;
 	}
 
@@ -205,17 +205,20 @@ igb_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 	j = kring->nr_hwcur;
 	if (j != k) {	/* we have new packets to send */
 		u32 olinfo_status = 0;
-		n = 0;
+		int n = 0;
 
+		l = kring->nr_hwcur - kring->nkr_hwofs;
+		if (l < 0)
+			l += lim + 1;
 		/* 82575 needs the queue index added */
 		if (adapter->hw.mac.type == e1000_82575)
 			olinfo_status |= txr->me << 4;
 
 		while (j != k) {
 			struct netmap_slot *slot = &ring->slot[j];
-			struct igb_tx_buffer *txbuf = &txr->tx_buffers[j];
+			struct igb_tx_buffer *txbuf = &txr->tx_buffers[l];
 			union e1000_adv_tx_desc *curr =
-				(union e1000_adv_tx_desc *)&txr->tx_base[j];
+				(union e1000_adv_tx_desc *)&txr->tx_base[l];
 			void *addr = NMB(slot);
 			int flags = ((slot->flags & NS_REPORT) ||
 				j == 0 || j == report_frequency) ?
@@ -248,6 +251,7 @@ igb_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 			bus_dmamap_sync(txr->txtag, txbuf->map,
 				BUS_DMASYNC_PREWRITE);
 			j = (j == lim) ? 0 : j + 1;
+			l = (l == lim) ? 0 : l + 1;
 			n++;
 		}
 		kring->nr_hwcur = k;
@@ -263,7 +267,7 @@ igb_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 		bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
 			BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 
-		E1000_WRITE_REG(&adapter->hw, E1000_TDT(txr->me), k);
+		E1000_WRITE_REG(&adapter->hw, E1000_TDT(txr->me), l);
 	}
 	if (do_lock)
 		IGB_TX_UNLOCK(txr);
@@ -291,10 +295,10 @@ igb_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(adapter->ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	int j, k, n, lim = kring->nkr_num_slots - 1;
+	int j, k, l, n, lim = kring->nkr_num_slots - 1;
 
-	k = ring->cur;	/* ring is not protected by any lock */
-	if ( (kring->nr_kflags & NR_REINIT) || k > lim)
+	k = ring->cur;
+	if (k > lim)
 		return netmap_ring_reinit(kring);
 
 	if (do_lock)
@@ -304,9 +308,12 @@ igb_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 	bus_dmamap_sync(rxr->rxdma.dma_tag, rxr->rxdma.dma_map,
 	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 
-	j = rxr->next_to_check;
+	l = rxr->next_to_check;
+	j = l + kring->nkr_hwofs;
+	if (j > lim)
+		j -= lim + 1;
 	for (n = 0; ; n++) {
-		union e1000_adv_rx_desc *curr = &rxr->rx_base[j];
+		union e1000_adv_rx_desc *curr = &rxr->rx_base[l];
 		uint32_t staterr = le32toh(curr->wb.upper.status_error);
 
 		if ((staterr & E1000_RXD_STAT_DD) == 0)
@@ -314,15 +321,13 @@ igb_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 		ring->slot[j].len = le16toh(curr->wb.upper.length);
 		
 		bus_dmamap_sync(rxr->ptag,
-			rxr->rx_buffers[j].pmap, BUS_DMASYNC_POSTREAD);
+			rxr->rx_buffers[l].pmap, BUS_DMASYNC_POSTREAD);
 		j = (j == lim) ? 0 : j + 1;
+		l = (l == lim) ? 0 : l + 1;
 	}
 	if (n) {
-		rxr->next_to_check = j;
+		rxr->next_to_check = l;
 		kring->nr_hwavail += n;
-		if (kring->nr_hwavail >= lim - 10) {
-			ND("rx ring %d almost full %d", ring_nr, kring->nr_hwavail);
-		}
 	}
 
 	/* skip past packets that userspace has already processed,
@@ -332,12 +337,15 @@ igb_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 	 * Also increase nr_hwavail
 	 */
 	j = kring->nr_hwcur;
+	l = kring->nr_hwcur - kring->nkr_hwofs;
+	if (l < 0)
+		l += lim + 1;
 	if (j != k) {	/* userspace has read some packets. */
 		n = 0;
 		while (j != k) {
 			struct netmap_slot *slot = ring->slot + j;
-			union e1000_adv_rx_desc *curr = &rxr->rx_base[j];
-			struct igb_rx_buf *rxbuf = rxr->rx_buffers + j;
+			union e1000_adv_rx_desc *curr = &rxr->rx_base[l];
+			struct igb_rx_buf *rxbuf = rxr->rx_buffers + l;
 			void *addr = NMB(slot);
 
 			if (addr == netmap_buffer_base) { /* bad buf */
@@ -358,6 +366,7 @@ igb_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 				BUS_DMASYNC_PREREAD);
 
 			j = (j == lim) ? 0 : j + 1;
+			l = (l == lim) ? 0 : l + 1;
 			n++;
 		}
 		kring->nr_hwavail -= n;
@@ -365,10 +374,10 @@ igb_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 		bus_dmamap_sync(rxr->rxdma.dma_tag, rxr->rxdma.dma_map,
 			BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 		/* IMPORTANT: we must leave one free slot in the ring,
-		 * so move j back by one unit
+		 * so move l back by one unit
 		 */
-		j = (j == 0) ? lim : j - 1;
-		E1000_WRITE_REG(&adapter->hw, E1000_RDT(rxr->me), j);
+		l = (l == 0) ? lim : l - 1;
+		E1000_WRITE_REG(&adapter->hw, E1000_RDT(rxr->me), l);
 	}
 	/* tell userspace that there are new packets */
 	ring->avail = kring->nr_hwavail ;
