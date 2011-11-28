@@ -225,7 +225,7 @@ lem_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 		j -= lim + 1;
 	for (n = 0; ; n++) {
 		struct e1000_rx_desc *curr = &adapter->rx_desc_base[l];
-		int len = le16toh(adapter->rx_desc_base[l].length) - 4; // CRC
+		int len = le16toh(curr->length) - 4; // CRC
 
 		if ((curr->status & E1000_RXD_STAT_DD) == 0)
 			break;
