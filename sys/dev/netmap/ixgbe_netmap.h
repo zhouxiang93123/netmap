@@ -343,7 +343,7 @@ ixgbe_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 		l = (l == lim) ? 0 : l + 1;
 	}
 	if (n) {
-		rxr->next_to_check = j;
+		rxr->next_to_check = l;
 		kring->nr_hwavail += n;
 	}
 

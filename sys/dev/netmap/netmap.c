@@ -717,29 +717,10 @@ netmap_ring_reinit(struct netmap_kring *kring)
 			ring->avail, kring->nr_hwavail);
 		ring->cur = kring->nr_hwcur;
 		ring->avail = kring->nr_hwavail;
-		ring->flags |= NR_REINIT;
-		kring->na->flags |= NR_REINIT;
 	}
 	return (errors ? 1 : 0);
 }
 
-/*
- * Clean the reinit flag for our rings.
- * XXX at the moment, clear for all rings
- */
-static void
-netmap_clean_reinit(struct netmap_adapter *na)
-{
-	//struct netmap_kring *kring;
-	u_int i;
-
-	na->flags &= ~NR_REINIT;
-	D("--- NR_REINIT reset on %s", na->ifp->if_xname);
-	for (i = 0; i < na->num_queues + 1; i++) {
-		na->tx_rings[i].ring->flags &= ~NR_REINIT;
-		na->rx_rings[i].ring->flags &= ~NR_REINIT;
-	}
-}
 
 /*
  * Set the ring ID. For devices with a single queue, a request
@@ -943,9 +924,6 @@ error:
 		na = NA(ifp); /* retrieve netmap adapter */
 		adapter = ifp->if_softc;	/* shorthand */
 
-		if (na->flags & NR_REINIT)
-			netmap_clean_reinit(na);
-
 		if (priv->np_qfirst == na->num_queues) {
 			/* queues to/from host */
 			if (cmd == NIOCTXSYNC)
@@ -1039,13 +1017,6 @@ netmap_poll(__unused struct cdev *dev, int events, struct thread *td)
 	adapter = ifp->if_softc;
 	na = NA(ifp); /* retrieve netmap adapter */
 
-	/* pending reinit, report up as a poll error. Pending
-	 * reads and writes are lost.
-	 */
-	if (na->flags & NR_REINIT) {
-		netmap_clean_reinit(na);
-		revents |= POLLERR;
-	}
 	/* how many queues we are scanning */
 	i = priv->np_qfirst;
 	if (i == na->num_queues) { /* from/to host */
@@ -1326,24 +1297,6 @@ done:
  * netmap_reset() is called by the driver routines when reinitializing
  * a ring. The driver is in charge of locking to protect the kring.
  * If netmap mode is not set just return NULL.
- * Otherwise set NR_REINIT (in the ring and in na) to signal
- * that a ring has been reinitialized,
- * set cur = hwcur = 0 and avail = hwavail = num_slots - 1 .
- * IT IS IMPORTANT to leave one slot free even in the tx ring because
- * we rely on cur=hwcur only for empty rings.
- * These are good defaults but can be overridden later in the device
- * specific code if, after a reinit, the ring does not start from 0
- * (e.g. if_em.c does this).
- *
- * XXX we shouldn't be touching the ring, but there is a
- * race anyways and this is our best option.
- *
- * XXX setting na->flags makes the syscall code faster, as there is
- * only one place to check. On the other hand, we will need a better
- * way to notify multiple threads that rings have been reset.
- * One way is to increment na->rst_count at each ring reset.
- * Each thread in its own priv structure will keep a matching counter,
- * and on a reset will acknowledge and clean its own rings.
  */
 struct netmap_slot *
 netmap_reset(struct netmap_adapter *na, enum txrx tx, int n,
@@ -1351,8 +1304,7 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, int n,
 {
 	struct netmap_kring *kring;
 	struct netmap_ring *ring;
-	struct netmap_slot *slot;
-	u_int i;
+	u_int lim, new_hwofs;
 
 	if (na == NULL)
 		return NULL;	/* no netmap support here */
@@ -1360,74 +1312,10 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, int n,
 		return NULL;	/* nothing to reinitialize */
 	kring = tx == NR_TX ?  na->tx_rings + n : na->rx_rings + n;
 	ring = kring->ring;
-    if (tx == NR_TX) {
-	/*
-	 * The last argument is the new value of next_to_clean.
-	 *
-	 * In the TX ring, we have P pending transmissions (from
-	 * next_to_clean to nr_hwcur) followed by nr_hwavail free slots.
-	 * Generally we can use all the slots in the ring so
-	 * P = ring_size - nr_hwavail hence (modulo ring_size):
-	 *	next_to_clean == nr_hwcur + nr_hwavail
-	 * 
-	 * If, upon a reset, nr_hwavail == ring_size and next_to_clean
-	 * does not change we have nothing to report. Otherwise some
-	 * pending packets may be lost, or newly injected packets will.
-	 */
-	/* if hwcur does not change, nothing to report.
-	 * otherwise remember the change so perhaps we can
-	 * shift the block at the next reinit
-	 */
-	if (new_cur == kring->nr_hwcur &&
-		    kring->nr_hwavail == kring->nkr_num_slots - 1) {
-		/* all ok */
-		D("+++ NR_REINIT ok on %s TX[%d]", na->ifp->if_xname, n);
-	} else {
-		D("+++ NR_REINIT set on %s TX[%d]", na->ifp->if_xname, n);
-	}
-		ring->flags |= NR_REINIT;
-		na->flags |= NR_REINIT;
-		ring->avail = kring->nr_hwavail = kring->nkr_num_slots - 1;
-		ring->cur = kring->nr_hwcur = new_cur;
-    } else {
-	/*
-	 * The last argument is the next free slot.
-	 * In the RX ring we have nr_hwavail full buffers starting
-	 * from nr_hwcur.
-	 * If nr_hwavail == 0 and nr_hwcur does not change we are ok
-	 * otherwise we might be in trouble as the buffers are
-	 * changing.
-	 */
-	if (new_cur == kring->nr_hwcur && kring->nr_hwavail == 0) {
-		/* all ok */
-		D("+++ NR_REINIT ok on %s RX[%d]", na->ifp->if_xname, n);
-	} else {
-		D("+++ NR_REINIT set on %s RX[%d]", na->ifp->if_xname, n);
-	}
-	ring->flags |= NR_REINIT;
-	na->flags |= NR_REINIT;
-	ring->avail = kring->nr_hwavail = 0; /* no data */
-	ring->cur = kring->nr_hwcur = new_cur;
-    }
 
-	slot = ring->slot;
 	/*
-	 * Check that buffer indexes are correct. If we find a
-	 * bogus value we are a bit in trouble because we cannot
-	 * recover easily. Best we can do is (probably) persistently
-	 * reset the ring.
-	 */
-	for (i = 0; i < kring->nkr_num_slots; i++) {
-		if (slot[i].buf_idx >= netmap_total_buffers) {
-			D("invalid buf_idx %d at slot %d", slot[i].buf_idx, i);
-			slot[i].buf_idx = 0; /* XXX reset */
-		}
-		/* XXX we don't really need to set the length */
-		slot[i].len = 0;
-	}
-	/* wakeup possible waiters, both on the ring and on the global
-	 * selfd. Perhaps a bit early now but the device specific
-	 * routine is locked so hopefully we won't have a race.
+	 * We do the wakeup here, but the ring is not yet reconfigured.
+	 * However, we are under lock so there are no races.
 	 */
 	selwakeuppri(&kring->si, PI_NET);
 	selwakeuppri(&kring[na->num_queues + 1 - n].si, PI_NET);
