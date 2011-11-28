@@ -169,13 +169,17 @@ ixgbe_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(adapter->ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	int j, k, n = 0, lim = kring->nkr_num_slots - 1;
+	int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
 
 	/* generate an interrupt approximately every half ring */
 	int report_frequency = kring->nkr_num_slots >> 1;
 
-	k = ring->cur;	/* ring is not protected by any lock */
-	if ( (kring->nr_kflags & NR_REINIT) || k > lim)
+	/* take a copy of ring->cur now, and never read from
+	 * ring afterwards to make sure the userspace cannot
+	 * modify the content we see.
+	 */
+	k = ring->cur;
+	if (k > lim)	/* invalid index, we need a reset */
 		return netmap_ring_reinit(kring);
 
 	if (do_lock)
@@ -188,10 +192,21 @@ ixgbe_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 
 	j = kring->nr_hwcur;
 	if (j != k) {	/* we have new packets to send */
+		/*
+		 * l is the index of next descriptor to use in the NIC ring;
+		 * j is the index of the next slot containing  outgoing
+		 * packets; l and j may be different because of link resets
+		 * which could cause offsets between the userspace and kernel
+		 * view of the ring.
+		 */
+		l = kring->nr_hwcur - kring->nkr_hwofs;
+		if (l < 0)
+			l += lim + 1;
+
 		while (j != k) {
 			struct netmap_slot *slot = &ring->slot[j];
-			struct ixgbe_tx_buf *txbuf = &txr->tx_buffers[j];
-			union ixgbe_adv_tx_desc *curr = &txr->tx_base[j];
+			struct ixgbe_tx_buf *txbuf = &txr->tx_buffers[l];
+			union ixgbe_adv_tx_desc *curr = &txr->tx_base[l];
 			void *addr = NMB(slot);
 			int flags = ((slot->flags & NS_REPORT) ||
 				j == 0 || j == report_frequency) ?
@@ -222,6 +237,7 @@ ixgbe_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 			bus_dmamap_sync(txr->txtag, txbuf->map,
 				BUS_DMASYNC_PREWRITE);
 			j = (j == lim) ? 0 : j + 1;
+			l = (l == lim) ? 0 : l + 1;
 			n++;
 		}
 		kring->nr_hwcur = k;
@@ -233,33 +249,33 @@ ixgbe_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 		bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
 			BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 
-		IXGBE_WRITE_REG(&adapter->hw, IXGBE_TDT(txr->me), k);
+		IXGBE_WRITE_REG(&adapter->hw, IXGBE_TDT(txr->me), l);
 	}
 
 	if (n == 0 || kring->nr_hwavail < 1) {
+		int delta;
+
 		/* record completed transmissions. TODO
 		 *
 		 * The datasheet discourages the use of TDH to find out the
-		 * number of sent packets; the right way to do so, is to check
-		 * the DD bit inside the status of a packet descriptor.  On the
-		 * other hand, we avoid to set the `report status' bit for
-		 * *all* outgoing packets (kind of interrupt mitigation),
-		 * consequently the DD bit is not guaranteed to be set for all
-		 * the packets: thats way, for the moment we continue to use
-		 * TDH.
+		 * number of sent packets. We should rather check the DD
+		 * status bit in a packet descriptor. However, we only set
+		 * the `report status' bit for some descriptors (a kind of
+		 * interrupt mitigation), so we can only check on those.
+		 * For the time being we use TDH.
 		 */
-		j = IXGBE_READ_REG(&adapter->hw, IXGBE_TDH(ring_nr));
-		if (j >= kring->nkr_num_slots) { /* XXX can happen */
-			D("TDH wrap %d", j);
-			j -= kring->nkr_num_slots;
+		l = IXGBE_READ_REG(&adapter->hw, IXGBE_TDH(ring_nr));
+		if (l >= kring->nkr_num_slots) { /* XXX can happen */
+			D("TDH wrap %d", l);
+			l -= kring->nkr_num_slots;
 		}
-		int delta = j - txr->next_to_clean;
+		delta = l - txr->next_to_clean;
 		if (delta) {
 			/* new transmissions were completed, increment
 			   ring->nr_hwavail. */
 			if (delta < 0)
 				delta += kring->nkr_num_slots;
-			txr->next_to_clean = j;
+			txr->next_to_clean = l;
 			kring->nr_hwavail += delta;
 			ring->avail = kring->nr_hwavail;
 		}
@@ -291,10 +307,10 @@ ixgbe_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(adapter->ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	int j, k, n, lim = kring->nkr_num_slots - 1;
+	int j, k, l, n, lim = kring->nkr_num_slots - 1;
 
-	k = ring->cur;	/* ring is not protected by any lock */
-	if ( (kring->nr_kflags & NR_REINIT) || k > lim)
+	k = ring->cur;	/* same as for the txsync code */
+	if (k > lim)
 		return netmap_ring_reinit(kring);
 
 	if (do_lock)
@@ -303,24 +319,32 @@ ixgbe_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 	bus_dmamap_sync(rxr->rxdma.dma_tag, rxr->rxdma.dma_map,
 			BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 
-	j = rxr->next_to_check;
+	/*
+	 * l is the index of next descriptor to acknowledge; j is the index of
+	 * the next slot to use for incoming packets; l and j may be different
+	 * because of link resets which could cause offsets between the
+	 * userspace and kernel view of the ring.
+	 */
+	l = rxr->next_to_check;
+	j = rxr->next_to_check + kring->nkr_hwofs;
+	if (j > lim)
+		j -= lim + 1;
+
 	for (n = 0; ; n++) {
-		union ixgbe_adv_rx_desc *curr = &rxr->rx_base[j];
+		union ixgbe_adv_rx_desc *curr = &rxr->rx_base[l];
 		uint32_t staterr = le32toh(curr->wb.upper.status_error);
 
 		if ((staterr & IXGBE_RXD_STAT_DD) == 0)
 			break;
 		ring->slot[j].len = le16toh(curr->wb.upper.length);
 		bus_dmamap_sync(rxr->ptag,
-			rxr->rx_buffers[j].pmap, BUS_DMASYNC_POSTREAD);
+			rxr->rx_buffers[l].pmap, BUS_DMASYNC_POSTREAD);
 		j = (j == lim) ? 0 : j + 1;
+		l = (l == lim) ? 0 : l + 1;
 	}
 	if (n) {
 		rxr->next_to_check = j;
 		kring->nr_hwavail += n;
-		if (kring->nr_hwavail >= lim - 10) {
-			ND("rx ring %d almost full %d", ring_nr, kring->nr_hwavail);
-		}
 	}
 
 	/* skip past packets that userspace has already processed,
@@ -332,10 +356,13 @@ ixgbe_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 	j = kring->nr_hwcur;
 	if (j != k) {	/* userspace has read some packets. */
 		n = 0;
+		l = kring->nr_hwcur - kring->nkr_hwofs;
+		if (l < 0)
+			l += lim + 1;
 		while (j != k) {
 			struct netmap_slot *slot = ring->slot + j;
-			union ixgbe_adv_rx_desc *curr = &rxr->rx_base[j];
-			struct ixgbe_rx_buf *rxbuf = rxr->rx_buffers + j;
+			union ixgbe_adv_rx_desc *curr = &rxr->rx_base[l];
+			struct ixgbe_rx_buf *rxbuf = rxr->rx_buffers + l;
 			void *addr = NMB(slot);
 
 			if (addr == netmap_buffer_base) { /* bad buf */
@@ -356,6 +383,7 @@ ixgbe_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 				BUS_DMASYNC_PREREAD);
 
 			j = (j == lim) ? 0 : j + 1;
+			l = (l == lim) ? 0 : l + 1;
 			n++;
 		}
 		kring->nr_hwavail -= n;
@@ -363,10 +391,10 @@ ixgbe_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 		bus_dmamap_sync(rxr->rxdma.dma_tag, rxr->rxdma.dma_map,
 			BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 		/* IMPORTANT: we must leave one free slot in the ring,
-		 * so move j back by one unit
+		 * so move l back by one unit
 		 */
-		j = (j == 0) ? lim : j - 1;
-		IXGBE_WRITE_REG(&adapter->hw, IXGBE_RDT(rxr->me), j);
+		l = (l == 0) ? lim : l - 1;
+		IXGBE_WRITE_REG(&adapter->hw, IXGBE_RDT(rxr->me), l);
 	}
 	/* tell userspace that there are new packets */
 	ring->avail = kring->nr_hwavail ;
