@@ -188,10 +188,7 @@ re_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 	j = kring->nr_hwcur;
 	if (j != k) {	/* we have new packets to send */
 		n = 0;
-		// XXX l = sc->rl_ldata.rl_tx_prodidx;
-		l = kring->nr_hwcur - kring->nkr_hwofs;
-		if (l < 0)
-			l += lim + 1;
+		l = sc->rl_ldata.rl_tx_prodidx;
 		while (j != k) {
 			struct netmap_slot *slot = &ring->slot[j];
 			struct rl_desc *desc = &sc->rl_ldata.rl_tx_list[l];
@@ -222,7 +219,7 @@ re_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 			slot->flags &= ~NS_REPORT;
 			desc->rl_cmdstat = htole32(cmd);
 			bus_dmamap_sync(sc->rl_ldata.rl_tx_mtag,
-				txd[j].tx_dmamap, BUS_DMASYNC_PREWRITE);
+				txd[l].tx_dmamap, BUS_DMASYNC_PREWRITE);
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
 			n++;
@@ -442,7 +439,7 @@ re_netmap_rx_init(struct rl_softc *sc)
 		paddr = vtophys(addr);
 		desc[i].rl_bufaddr_lo = htole32(RL_ADDR_LO(paddr));
 		desc[i].rl_bufaddr_hi = htole32(RL_ADDR_HI(paddr));
-		cmdstat = slot[i].len = na->buff_size;
+		cmdstat = na->buff_size;
 		if (i == sc->rl_ldata.rl_rx_desc_cnt - 1)
 			cmdstat |= RL_RDESC_CMD_EOR;
 		/*

@@ -132,7 +132,7 @@ lem_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 	if (delta) {
 		if (delta < 0)
 			delta += kring->nkr_num_slots;
-		adapter->next_tx_to_clean = j;
+		adapter->next_tx_to_clean = l;
 		kring->nr_hwavail += delta;
 	}
 
@@ -176,9 +176,10 @@ lem_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 			bus_dmamap_sync(adapter->txtag, txbuf->map,
 				BUS_DMASYNC_PREWRITE);
 			j = (j == lim) ? 0 : j + 1;
+			l = (l == lim) ? 0 : l + 1;
 			n++;
 		}
-		kring->nr_hwcur = ring->cur;
+		kring->nr_hwcur = k;
 
 		/* decrease avail by number of sent packets */
 		ring->avail -= n;
@@ -187,7 +188,7 @@ lem_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 		bus_dmamap_sync(adapter->txdma.dma_tag, adapter->txdma.dma_map,
 				BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 
-		E1000_WRITE_REG(&adapter->hw, E1000_TDT(0), ring->cur);
+		E1000_WRITE_REG(&adapter->hw, E1000_TDT(0), l);
 	}
 	if (do_lock)
 		EM_TX_UNLOCK(adapter);
@@ -205,10 +206,10 @@ lem_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(adapter->ifp);
 	struct netmap_kring *kring = &na->rx_rings[0];
 	struct netmap_ring *ring = kring->ring;
-	int j, k, n, lim = kring->nkr_num_slots - 1;
+	int j, k, l, n, lim = kring->nkr_num_slots - 1;
 
 	k = ring->cur;
-	if ( (kring->nr_kflags & NR_REINIT) || k > lim)
+	if (k > lim)
 		return netmap_ring_reinit(kring);
 
 	if (do_lock)
@@ -218,10 +219,13 @@ lem_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 			BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 
 	/* acknowldge all the received packets. */
-	j = adapter->next_rx_desc_to_check;
+	l = adapter->next_rx_desc_to_check;
+	j = l + kring->nkr_hwofs;
+	if (j > lim)
+		j -= lim + 1;
 	for (n = 0; ; n++) {
-		struct e1000_rx_desc *curr = &adapter->rx_desc_base[j];
-		int len = le16toh(adapter->rx_desc_base[j].length) - 4; // CRC
+		struct e1000_rx_desc *curr = &adapter->rx_desc_base[l];
+		int len = le16toh(adapter->rx_desc_base[l].length) - 4; // CRC
 
 		if ((curr->status & E1000_RXD_STAT_DD) == 0)
 			break;
@@ -231,12 +235,13 @@ lem_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 			len = 0;
 		}
 		ring->slot[j].len = len;
-		bus_dmamap_sync(adapter->rxtag, adapter->rx_buffer_area[j].map,
+		bus_dmamap_sync(adapter->rxtag, adapter->rx_buffer_area[l].map,
 			BUS_DMASYNC_POSTREAD);
 		j = (j == lim) ? 0 : j + 1;
+		l = (l == lim) ? 0 : l + 1;
 	}
 	if (n) {
-		adapter->next_rx_desc_to_check = j;
+		adapter->next_rx_desc_to_check = l;
 		kring->nr_hwavail += n;
 	}
 
@@ -247,10 +252,13 @@ lem_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 	j = kring->nr_hwcur;
 	if (j != k) {	/* userspace has read some packets. */
 		n = 0;
+		l = kring->nr_hwcur - kring->nkr_hwofs;
+		if (l < 0)
+			l += lim + 1;
 		while (j != k) {
 			struct netmap_slot *slot = &ring->slot[j];
-			struct e1000_rx_desc *curr = &adapter->rx_desc_base[j];
-			struct em_buffer *rxbuf = &adapter->rx_buffer_area[j];
+			struct e1000_rx_desc *curr = &adapter->rx_desc_base[l];
+			struct em_buffer *rxbuf = &adapter->rx_buffer_area[l];
 			void *addr = NMB(slot);
 
 			if (addr == netmap_buffer_base) { /* bad buf */
@@ -258,20 +266,19 @@ lem_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 					EM_RX_UNLOCK(adapter);
 				return netmap_ring_reinit(kring);
 			}
-			curr = &adapter->rx_desc_base[j];
 			curr->status = 0;
 			if (slot->flags & NS_BUF_CHANGED) {
 				curr->buffer_addr = htole64(vtophys(addr));
 				/* buffer has changed, unload and reload map */
 				netmap_reload_map(adapter->rxtag, rxbuf->map,
 					addr, na->buff_size);
-				slot->flags &= ~NS_BUF_CHANGED;
 			}
 
 			bus_dmamap_sync(adapter->rxtag, rxbuf->map,
 				BUS_DMASYNC_PREREAD);
 
 			j = (j == lim) ? 0 : j + 1;
+			l = (l == lim) ? 0 : l + 1;
 			n++;
 		}
 		kring->nr_hwavail -= n;
@@ -280,10 +287,10 @@ lem_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 			BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 		/*
 		 * IMPORTANT: we must leave one free slot in the ring,
-		 * so move j back by one unit
+		 * so move l back by one unit
 		 */
-		j = (j == 0) ? lim : j - 1;
-		E1000_WRITE_REG(&adapter->hw, E1000_RDT(0), j);
+		l = (l == 0) ? lim : l - 1;
+		E1000_WRITE_REG(&adapter->hw, E1000_RDT(0), l);
 	}
 
 	/* tell userspace that there are new packets */
