@@ -7,6 +7,8 @@
  * $Id$
  *
  * netmap support for if_bge.c
+ * see ixgbe_netmap.h for details on the structure of the
+ * various functions.
  */
 
 #include <net/netmap.h>
@@ -49,7 +51,7 @@ bge_netmap_attach(struct bge_softc *sc)
 
 /*
  * wrapper to export locks to the generic code
- * We should not use the tx/rx locks
+ * bge does not have separate tx/rx locks
  */
 static void
 bge_netmap_lock_wrapper(void *_a, int what, u_int queueid)
@@ -120,70 +122,54 @@ fail:
 
 /*
  * Reconcile kernel and user view of the transmit ring.
- *
- * Userspace has filled tx slots up to cur (excluded).
- * The last unused slot previously known to the kernel was nr_hwcur,
- * and the last interrupt reported nr_hwavail slots available
- * (using the special value -1 to indicate idle transmit ring).
- * The function must first update avail to what the kernel
- * knows (translating the -1 to nkr_num_slots - 1),
- * subtract the newly used slots (cur - nr_hwcur)
- * from both avail and nr_hwavail, and set nr_hwcur = cur
- * issuing a dmamap_sync on all slots.
  */
 static int
 bge_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 {
 	struct bge_softc *sc = a;
-	bus_dmamap_t *txmap = sc->bge_cdata.bge_tx_dmamap;
 	struct netmap_adapter *na = NA(sc->bge_ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	int j, k, n, lim = kring->nkr_num_slots - 1;
-	uint32_t end;
+	int delta, j, k, l, lim = kring->nkr_num_slots - 1;
 
 	k = ring->cur;
-	if ( (kring->nr_kflags & NR_REINIT) || k > lim)
+	if (k > lim)
 		return netmap_ring_reinit(kring);
 
 	if (do_lock)
 		BGE_LOCK(sc);
 
-#if 0
-	bus_dmamap_sync(sc->bge_cdata.bge_status_tag,
-		sc->bge_cdata.bge_status_map,
-		BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
-#endif
-	end = sc->bge_ldata.bge_status_block->bge_idx[0].bge_tx_cons_idx;
+	/* bge_tx_cons_idx is the equivalent of TDH on intel cards,
+	 * i.e. the index of the tx frame most recently completed.
+	 */
+	l = sc->bge_ldata.bge_status_block->bge_idx[0].bge_tx_cons_idx;
 
 	/* Sync the TX descriptor list */
 	bus_dmamap_sync(sc->bge_cdata.bge_tx_ring_tag,
 		sc->bge_cdata.bge_tx_ring_map, BUS_DMASYNC_POSTWRITE);
 
-	/* record completed transmissions
-	 * XXX unclear how the notification is done -- txeof() always
-	 * scans all packets reported in bge_tx_cons_idx, even though
-	 * the opackets counter is incremented only when the flag is set.
-	 */
-	n = end - sc->bge_tx_saved_considx;
-	if (n < 0)
-		n += BGE_TX_RING_CNT;
-	if (n > 0) {
-		sc->bge_tx_saved_considx = end;
-		sc->bge_txcnt -= n;
-		kring->nr_hwavail += n;
+	/* record completed transmissions */
+	delta = l - sc->bge_tx_saved_considx;
+	if (delta < 0)	/* wrap around */
+		delta += BGE_TX_RING_CNT;
+	if (delta > 0) {	/* some tx completed */
+		sc->bge_tx_saved_considx = l;
+		sc->bge_txcnt -= delta;
+		kring->nr_hwavail += delta;
 	}
 
 	/* update avail to what the hardware knows */
 	ring->avail = kring->nr_hwavail;
-	
-	/* we trust prodidx, not hwcur */
-	j = kring->nr_hwcur = sc->bge_tx_prodidx;
+
+	j = kring->nr_hwcur;
 	if (j != k) {	/* we have new packets to send */
-		n = 0;
+		bus_dmamap_t *txmap = sc->bge_cdata.bge_tx_dmamap;
+		int n = 0;
+
+		l = sc->bge_tx_prodidx;
 		while (j != k) {
 			struct netmap_slot *slot = &ring->slot[j];
-			struct bge_tx_bd *d = &sc->bge_ldata.bge_tx_ring[j];
+			struct bge_tx_bd *d = &sc->bge_ldata.bge_tx_ring[l];
 			void *addr = NMB(slot);
 			int len = slot->len;
 
@@ -192,32 +178,41 @@ bge_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 					BGE_UNLOCK(sc);
 				return netmap_ring_reinit(kring);
 			}
-			
+
 			if (slot->flags & NS_BUF_CHANGED) {
 				uint64_t paddr = vtophys(addr);
 				d->bge_addr.bge_addr_lo = BGE_ADDR_LO(paddr);
 				d->bge_addr.bge_addr_hi = BGE_ADDR_HI(paddr);
 				/* buffer has changed, unload and reload map */
 				netmap_reload_map(sc->bge_cdata.bge_tx_mtag,
-					txmap[j], addr, na->buff_size);
+					txmap[l], addr, na->buff_size);
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
 			slot->flags &= ~NS_REPORT;
 			d->bge_len = len;
 			d->bge_flags = BGE_TXBDFLAG_END;
 			bus_dmamap_sync(sc->bge_cdata.bge_tx_mtag,
-				txmap[j], BUS_DMASYNC_PREWRITE);
+				txmap[l], BUS_DMASYNC_PREWRITE);
 			j = (j == lim) ? 0 : j + 1;
+			l = (l == lim) ? 0 : l + 1;
 			n++;
 		}
-		kring->nr_hwcur = ring->cur;
+		kring->nr_hwcur = k;
+		sc->bge_tx_prodidx = l;
 
 		/* decrease avail by number of sent packets */
 		ring->avail -= n;
 		kring->nr_hwavail = ring->avail;
 
-		/* let the start routine to the job */
-		bge_start_locked(sc->bge_ifp);
+		/* now repeat the last part of bge_start_locked() */
+		bus_dmamap_sync(sc->bge_cdata.bge_tx_ring_tag,
+                    sc->bge_cdata.bge_tx_ring_map, BUS_DMASYNC_PREWRITE);
+                /* Transmit. */
+                bge_writembx(sc, BGE_MBX_TX_HOST_PROD0_LO, l);
+                /* 5700 b2 errata */
+                if (sc->bge_chiprev == BGE_CHIPREV_5700_BX)
+                        bge_writembx(sc, BGE_MBX_TX_HOST_PROD0_LO, l);
+                sc->bge_timer = 5;
 	}
 	if (do_lock)
 		BGE_UNLOCK(sc);
@@ -227,21 +222,31 @@ bge_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 
 /*
  * Reconcile kernel and user view of the receive ring.
+ * In bge, the rx ring is initialized by setting the ring size
+ * bge_writembx(sc, BGE_MBX_RX_STD_PROD_LO, BGE_STD_RX_RING_CNT - 1);
+ * and the receiver always starts from 0.
+ *  sc->bge_rx_saved_considx starts from 0 and is the place from
+ * which the driver reads incoming packets.
+ * sc->bge_ldata.bge_status_block->bge_idx[0].bge_rx_prod_idx is the
+ * next (free) receive buffer where the hardware will put incoming packets.
  *
- * Userspace has read rx slots up to cur (excluded).
- * The last unread slot previously known to the kernel was nr_hwcur,
- * and the last interrupt reported nr_hwavail slots available.
- * We must subtract the newly consumed slots (cur - nr_hwcur)
- * from nr_hwavail, clearing the descriptors for the next
- * read, tell the hardware that they are available,
- * and set nr_hwcur = cur and avail = nr_hwavail.
- * issuing a dmamap_sync on all slots.
+ * sc->bge_rx_saved_considx is maintained in software and represents XXX
+ *
+ * After a successful rxeof we do
+ *	sc->bge_rx_saved_considx = rx_cons;
+ *	^---- effectively becomes rx_prod_idx
+ *
+ *	bge_writembx(sc, BGE_MBX_RX_CONS0_LO, sc->bge_rx_saved_considx);
+ *	^--- we have freed some descriptors
+ *
+ *	bge_writembx(sc, BGE_MBX_RX_STD_PROD_LO, (sc->bge_std +
+ *                  BGE_STD_RX_RING_CNT - 1) % BGE_STD_RX_RING_CNT);
+ *	^---- we have freed some buffers
  */
 static int
 bge_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 {
 	struct bge_softc *sc = a;
-	struct bge_rx_bd *r = sc->bge_ldata.bge_rx_std_ring;
 	struct netmap_adapter *na = NA(sc->bge_ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
@@ -249,7 +254,7 @@ bge_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 	uint32_t end;
 
 	k = ring->cur;
-	if ( (kring->nr_kflags & NR_REINIT) || k > lim)
+	if (k > lim)
 		return netmap_ring_reinit(kring);
 
 	if (do_lock)
@@ -260,24 +265,34 @@ bge_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
         bus_dmamap_sync(sc->bge_cdata.bge_rx_std_ring_tag,
             sc->bge_cdata.bge_rx_std_ring_map, BUS_DMASYNC_POSTWRITE);
 
-	j = sc->bge_rx_saved_considx;
+	l = sc->bge_rx_saved_considx;
+	j = kring->nkr_hwcur + kring->nkr_hwavail;
+	l = j + kring->nkr_hwofs;
+	if (j > lim)
+		j -= lim + 1;
+	/* bge_rx_prod_idx is the same as RDH on intel cards -- the next
+	 * (empty) buffer to be used for receptions.
+	 * To decide when to stop we rely on bge_rx_prod_idx
+	 * and not on the flags in the frame descriptors.
+	 */
 	end = sc->bge_ldata.bge_status_block->bge_idx[0].bge_rx_prod_idx;
-	for (n = 0; j != end; n++) {
-		struct bge_rx_bd *cur_rx;
-		uint32_t rxidx, len;
+	if (l != end) {
+		for (n = 0; l != end; n++) {
+			struct bge_rx_bd *cur_rx;
+			uint32_t len;
 
-		cur_rx = &sc->bge_ldata.bge_rx_return_ring[j];
-		rxidx = cur_rx->bge_idx;
-		len = cur_rx->bge_len - ETHER_CRC_LEN;
-		kring->ring->slot[j].len = len;
-		/*  sync was in bge_newbuf() */
-		bus_dmamap_sync(sc->bge_cdata.bge_rx_mtag,
-			sc->bge_cdata.bge_rx_std_dmamap[j],
-		    	BUS_DMASYNC_POSTREAD);
-		j = j == lim ? 0 : j + 1;
-	}
-	if (n > 0) {
+			cur_rx = &sc->bge_ldata.bge_rx_return_ring[l];
+			len = cur_rx->bge_len - ETHER_CRC_LEN;
+			kring->ring->slot[j].len = len;
+			/*  sync was in bge_newbuf() */
+			bus_dmamap_sync(sc->bge_cdata.bge_rx_mtag,
+				sc->bge_cdata.bge_rx_std_dmamap[l],
+				BUS_DMASYNC_POSTREAD);
+			j = j == lim ? 0 : j + 1;
+			l = l == lim ? 0 : l + 1;
+		}
 		sc->bge_rx_saved_considx = end;
+		bge_writembx(sc, BGE_MBX_RX_CONS0_LO, end);
 		sc->bge_ifp->if_ipackets += n;
 		kring->nr_hwavail += n;
 	}
@@ -291,7 +306,11 @@ bge_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 	j = kring->nr_hwcur;
 	if (j != k) {	/* userspace has read some packets. */
 		n = 0;
+		l = kring->nr_hwcur - kring->nkr_hwofs;
+		if (l < 0)
+			l += lim + 1;
 		while (j != k) {
+			struct bge_rx_bd *r = sc->bge_ldata.bge_rx_std_ring + l;
 			struct netmap_slot *slot = ring->slot + j;
 			void *addr = NMB(slot);
 			uint64_t paddr = vtophys(addr);
@@ -303,21 +322,22 @@ bge_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 			}
 
 			slot->flags &= ~NS_REPORT;
-			r[j].bge_addr.bge_addr_lo = BGE_ADDR_LO(paddr);
-			r[j].bge_addr.bge_addr_hi = BGE_ADDR_HI(paddr);
+			r->bge_addr.bge_addr_lo = BGE_ADDR_LO(paddr);
+			r->bge_addr.bge_addr_hi = BGE_ADDR_HI(paddr);
 			if (slot->flags & NS_BUF_CHANGED) {
 				netmap_reload_map(sc->bge_cdata.bge_rx_mtag,
-					sc->bge_cdata.bge_rx_std_dmamap[j],
+					sc->bge_cdata.bge_rx_std_dmamap[l],
 					addr, na->buff_size);
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
-			r[j].bge_flags = BGE_RXBDFLAG_END;
-			r[j].bge_len = na->buff_size;
-			r[j].bge_idx = j;
+			r->bge_flags = BGE_RXBDFLAG_END;
+			r->bge_len = na->buff_size;
+			r->bge_idx = l;
 			bus_dmamap_sync(sc->bge_cdata.bge_rx_mtag,
-				sc->bge_cdata.bge_rx_std_dmamap[j],
+				sc->bge_cdata.bge_rx_std_dmamap[l],
 				BUS_DMASYNC_PREREAD);
 			j = (j == lim) ? 0 : j + 1;
+			l = (l == lim) ? 0 : l + 1;
 			n++;
 		}
 		kring->nr_hwavail -= n;
@@ -325,10 +345,8 @@ bge_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 		/* Flush the RX DMA ring */
 
 		bus_dmamap_sync(sc->bge_cdata.bge_rx_return_ring_tag,
-		    sc->bge_cdata.bge_rx_return_ring_map, BUS_DMASYNC_PREREAD);
-		bus_dmamap_sync(sc->bge_cdata.bge_rx_std_ring_tag,
-		    sc->bge_cdata.bge_rx_std_ring_map, BUS_DMASYNC_PREWRITE);
-
+		    sc->bge_cdata.bge_rx_return_ring_map,
+		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 	}
 	/* tell userspace that there are new packets */
 	ring->avail = kring->nr_hwavail ;
@@ -349,11 +367,23 @@ bge_netmap_tx_init(struct bge_softc *sc)
 	if (!slot)
 		return;
 	/* in netmap mode, overwrite addresses and maps */
-
 	for (i = 0; i < BGE_TX_RING_CNT; i++) {
-		void *addr = NMB(slot+i);
-		uint64_t paddr = vtophys(addr);
+		/*
+		 * the first time, ``slot`` points the first slot of
+		 * the ring; the reset might have introduced some kind
+		 * of offset between the kernel and userspace view of
+		 * the ring; for these reasons, we use l to point
+		 * to the slot linked to the i-th descriptor.
+		 */
+		void *addr;
+		uint64_t paddr;
+		struct netmap_kring *kring = &na->tx_rings[0];
+		int l = i + kring->nkr_hwofs;
+		if (l >= sc->rl_ldata.rl_tx_desc_cnt)
+			l -= sc->rl_ldata.rl_tx_desc_cnt;
 
+		addr = NMB(slot + l);
+		paddr = vtophys(addr);
 		d[i].bge_addr.bge_addr_lo = BGE_ADDR_LO(paddr);
 		d[i].bge_addr.bge_addr_hi = BGE_ADDR_HI(paddr);
 		netmap_load_map(sc->bge_cdata.bge_tx_mtag,
@@ -375,14 +405,33 @@ bge_netmap_rx_init(struct bge_softc *sc)
 		return;
 
 	for (i = 0; i < BGE_STD_RX_RING_CNT; i++) {
-		void *addr = NMB(slot+i);
-		uint64_t paddr = vtophys(addr);
+		/*
+		 * the first time, ``slot`` points the first slot of
+		 * the ring; the reset might have introduced some kind
+		 * of offset between the kernel and userspace view of
+		 * the ring; for these reasons, we use l to point
+		 * to the slot linked to the i-th descriptor.
+		 */
+		void *addr;
+		uint64_t paddr;
+		struct netmap_kring *kring = &na->rx_rings[0];
+		int l = i + kring->nkr_hwofs;
+		if (l >= sc->rl_ldata.rl_rx_desc_cnt)
+			l -= sc->rl_ldata.rl_rx_desc_cnt;
 
+		addr = NMB(slot + l);
+		paddr = vtophys(addr);
 		r[i].bge_addr.bge_addr_lo = BGE_ADDR_LO(paddr);
 		r[i].bge_addr.bge_addr_hi = BGE_ADDR_HI(paddr);
 		r[i].bge_flags = BGE_RXBDFLAG_END;
 		r[i].bge_len = na->buff_size;
 		r[i].bge_idx = i;
+		/*
+		 * userspace knows that hwavail packets were ready before the
+		 * reset, so we need to tell the NIC that last hwavail
+		 * descriptors of the ring are still owned by the driver.
+		 */
+		D("incomplete driver: don't know how to reserve hwavail slots");
 
 		netmap_reload_map(sc->bge_cdata.bge_rx_mtag,
 			sc->bge_cdata.bge_rx_std_dmamap[i],
