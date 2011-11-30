@@ -62,6 +62,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/module.h>
 #include <sys/errno.h>
 #include <sys/param.h>	/* defines used in kernel.h */
+#include <sys/jail.h>
 #include <sys/kernel.h>	/* types used in module initialization */
 #include <sys/conf.h>	/* cdevsw struct */
 #include <sys/uio.h>	/* uio struct */
@@ -70,6 +71,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/mman.h>	/* PROT_EXEC */
 #include <sys/poll.h>
+#include <sys/proc.h>
 #include <vm/vm.h>	/* vtophys */
 #include <vm/pmap.h>	/* vtophys */
 #include <sys/socket.h> /* sockaddrs */
@@ -78,6 +80,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysctl.h>
 #include <net/if.h>
 #include <net/bpf.h>		/* BIOCIMMEDIATE */
+#include <net/vnet.h>
 #include <net/netmap.h>
 #include <dev/netmap/netmap_kern.h>
 #include <machine/bus.h>	/* bus_dmamap_* */
@@ -789,7 +792,7 @@ netmap_set_ringid(struct netmap_priv_d *priv, u_int ringid)
  */
 static int
 netmap_ioctl(__unused struct cdev *dev, u_long cmd, caddr_t data,
-	__unused int fflag, __unused struct thread *td)
+	__unused int fflag, struct thread *td)
 {
 	struct netmap_priv_d *priv = NULL;
 	struct ifnet *ifp;
@@ -800,9 +803,13 @@ netmap_ioctl(__unused struct cdev *dev, u_long cmd, caddr_t data,
 	u_int i;
 	struct netmap_if *nifp;
 
+	CURVNET_SET(TD_TO_VNET(td));
+
 	error = devfs_get_cdevpriv((void **)&priv);
-	if (error != ENOENT && error != 0)
+	if (error != ENOENT && error != 0) {
+		CURVNET_RESTORE();
 		return (error);
+	}
 
 	error = 0;	/* Could be ENOENT */
 	switch (cmd) {
@@ -824,8 +831,10 @@ netmap_ioctl(__unused struct cdev *dev, u_long cmd, caddr_t data,
 		break;
 
 	case NIOCREGIF:
-		if (priv != NULL)	/* thread already registered */
-			return netmap_set_ringid(priv, nmr->nr_ringid);
+		if (priv != NULL) {	/* thread already registered */
+			error = netmap_set_ringid(priv, nmr->nr_ringid);
+			break;
+		}
 		/* find the interface and a reference */
 		error = get_ifp(nmr->nr_name, &ifp); /* keep reference */
 		if (error)
@@ -915,8 +924,10 @@ error:
 		break;
 
 	case NIOCUNREGIF:
-		if (priv == NULL)
-			return (ENXIO);
+		if (priv == NULL) {
+			error = ENXIO;
+			break;
+		}
 
 		/* the interface is unregistered inside the
 		   destructor of the private data. */
@@ -925,8 +936,10 @@ error:
 
 	case NIOCTXSYNC:
         case NIOCRXSYNC:
-		if (priv == NULL)
-			return (ENXIO);
+		if (priv == NULL) {
+			error = ENXIO;
+			break;
+		}
 		ifp = priv->np_ifp;	/* we have a reference */
 		na = NA(ifp); /* retrieve netmap adapter */
 		adapter = ifp->if_softc;	/* shorthand */
@@ -937,7 +950,7 @@ error:
 				netmap_sync_to_host(na);
 			else
 				netmap_sync_from_host(na, NULL);
-			return error;
+			break;
 		}
 
 		for (i = priv->np_qfirst; i < priv->np_qlast; i++) {
@@ -984,6 +997,7 @@ error:
 	    }
 	}
 
+	CURVNET_RESTORE();
 	return (error);
 }
 
