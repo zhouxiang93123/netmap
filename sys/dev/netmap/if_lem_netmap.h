@@ -62,7 +62,7 @@ lem_netmap_attach(struct adapter *adapter)
 	na.nm_rxsync = lem_netmap_rxsync;
 	na.nm_lock = lem_netmap_lock_wrapper;
 	na.nm_register = lem_netmap_reg;
-	na.buff_size = MCLBYTES;
+	na.buff_size = NETMAP_BUF_SIZE;
 	netmap_attach(&na, 1);
 }
 

@@ -205,9 +205,6 @@ em_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 	bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
 			BUS_DMASYNC_POSTREAD);
 
-	/* update avail to what the hardware knows */
-	ring->avail = kring->nr_hwavail;
-
 	/* check for new packets to send.
 	 * j indexes the netmap ring, l indexes the nic ring, and
 	 *	j = kring->nr_hwcur, l = E1000_TDT (not tracked),
@@ -256,10 +253,9 @@ em_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 
 		/* decrease avail by number of sent packets */
 		kring->nr_hwavail -= n;
-		ring->avail = kring->nr_hwavail;
 
 		bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
-			BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
+		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 
 		E1000_WRITE_REG(&adapter->hw, E1000_TDT(txr->me), l);
 	}
@@ -280,9 +276,11 @@ em_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 				delta += kring->nkr_num_slots;
 			txr->next_to_clean = l;
 			kring->nr_hwavail += delta;
-			ring->avail = kring->nr_hwavail;
 		}
 	}
+	/* update avail to what the hardware knows */
+	ring->avail = kring->nr_hwavail;
+
 	if (do_lock)
 		EM_TX_UNLOCK(txr);
 	return 0;

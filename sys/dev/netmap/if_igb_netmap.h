@@ -58,12 +58,7 @@ igb_netmap_attach(struct adapter *adapter)
 	na.nm_rxsync = igb_netmap_rxsync;
 	na.nm_lock = igb_netmap_lock_wrapper;
 	na.nm_register = igb_netmap_reg;
-	/*
-	 * adapter->rx_mbuf_sz is set by SIOCSETMTU, but in netmap mode
-	 * we allocate the buffers on the first register. So we must
-	 * disallow a SIOCSETMTU when if_capenable & IFCAP_NETMAP is set.
-	 */
-	na.buff_size = MCLBYTES;
+	na.buff_size = NETMAP_BUF_SIZE;
 	netmap_attach(&na, adapter->num_queues);
 }	
 
@@ -111,7 +106,7 @@ igb_netmap_reg(struct ifnet *ifp, int onoff)
 	struct netmap_adapter *na = NA(ifp);
 	int error = 0;
 
-	if (!na)
+	if (na == NULL)
 		return EINVAL;
 
 	igb_disable_intr(adapter);
@@ -144,22 +139,6 @@ fail:
 
 /*
  * Reconcile kernel and user view of the transmit ring.
- * See ixgbe_netmap.h :: ixgbe_netmap_txsync for details on the code.
- *
- * Userspace has filled tx slots up to cur (excluded).
- * The last unused slot previously known to the kernel was nr_hwcur,
- * and the last interrupt reported nr_hwavail slots available
- * (using the special value -1 to indicate idle transmit ring).
- * The function must first update avail to what the kernel
- * knows, subtract the newly used slots (cur - nr_hwcur)
- * from both avail and nr_hwavail, and set nr_hwcur = cur
- * issuing a dmamap_sync on all slots.
- *
- * Check parameters in the struct netmap_ring.
- * We don't use avail, only check for bogus values.
- * Make sure cur is valid, and same goes for buffer indexes and lengths.
- * To avoid races, read the values once, and never use those from
- * the ring afterwards.
  */
 static int
 igb_netmap_txsync(void *a, u_int ring_nr, int do_lock)
@@ -169,7 +148,7 @@ igb_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(adapter->ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	int delta, j, k, l, lim = kring->nkr_num_slots - 1;
+	int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
 
 	/* generate an interrupt approximately every half ring */
 	int report_frequency = kring->nkr_num_slots >> 1;
@@ -181,33 +160,17 @@ igb_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 	if (do_lock)
 		IGB_TX_LOCK(txr);
 	bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
-			BUS_DMASYNC_POSTREAD);
-
-	/* record completed transmission. TODO (see ixgbe)
-	 * Instead of reading from the TDH register, we could and try to check
-	 * the status bit of descriptor packets.
-	 */
-	l = E1000_READ_REG(&adapter->hw, E1000_TDH(ring_nr));
-	if (l >= kring->nkr_num_slots) /* XXX can it happen ? */
-		l -= kring->nkr_num_slots;
-	delta = l - txr->next_to_clean;
-	if (delta) {
-		/* new tx were completed */
-		if (delta < 0)
-			delta += kring->nkr_num_slots;
-		txr->next_to_clean = l;
-		kring->nr_hwavail += delta;
-	}
+	    BUS_DMASYNC_POSTREAD);
 
 	/* update avail to what the hardware knows */
 	ring->avail = kring->nr_hwavail;
 
-	j = kring->nr_hwcur;
+	j = kring->nr_hwcur; /* netmap ring index */
 	if (j != k) {	/* we have new packets to send */
 		u32 olinfo_status = 0;
 		int n = 0;
 
-		l = kring->nr_hwcur - kring->nkr_hwofs;
+		l = j - kring->nkr_hwofs; /* NIC ring index */
 		if (l < 0)
 			l += lim + 1;
 		/* 82575 needs the queue index added */
@@ -218,7 +181,7 @@ igb_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 			struct netmap_slot *slot = &ring->slot[j];
 			struct igb_tx_buffer *txbuf = &txr->tx_buffers[l];
 			union e1000_adv_tx_desc *curr =
-				(union e1000_adv_tx_desc *)&txr->tx_base[l];
+			    (union e1000_adv_tx_desc *)&txr->tx_base[l];
 			void *addr = NMB(slot);
 			int flags = ((slot->flags & NS_REPORT) ||
 				j == 0 || j == report_frequency) ?
@@ -232,6 +195,7 @@ igb_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 			}
 
 			slot->flags &= ~NS_REPORT;
+			// XXX do we need to set the address ?
 			curr->read.buffer_addr = htole64(vtophys(addr));
 			curr->read.olinfo_status =
 			    htole32(olinfo_status |
@@ -242,7 +206,7 @@ igb_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 				    E1000_ADVTXD_DCMD_DEXT |
 				    E1000_ADVTXD_DCMD_EOP | flags);
 			if (slot->flags & NS_BUF_CHANGED) {
-				/* buffer has changed, unload and reload map */
+				/* buffer has changed, reload map */
 				netmap_reload_map(txr->txtag, txbuf->map,
 					addr, na->buff_size);
 				slot->flags &= ~NS_BUF_CHANGED;
@@ -257,17 +221,34 @@ igb_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 		kring->nr_hwcur = k;
 
 		/* decrease avail by number of sent packets */
-		ring->avail -= n;
-		kring->nr_hwavail = ring->avail;
+		kring->nr_hwavail -= n;
+		ring->avail = kring->nr_hwavail;
 
-		/* Set the watchdog */
+		/* Set the watchdog XXX ? */
 		txr->queue_status = IGB_QUEUE_WORKING;
 		txr->watchdog_time = ticks;
 
 		bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
-			BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
+		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 
 		E1000_WRITE_REG(&adapter->hw, E1000_TDT(txr->me), l);
+	}
+	if (n == 0 || kring->nr_hwavail < 1) {
+		int delta;
+
+		/* record completed transmission using TDH */
+		l = E1000_READ_REG(&adapter->hw, E1000_TDH(ring_nr));
+		if (l >= kring->nkr_num_slots) /* XXX can it happen ? */
+			l -= kring->nkr_num_slots;
+		delta = l - txr->next_to_clean;
+		if (delta) {
+			/* new tx were completed */
+			if (delta < 0)
+				delta += kring->nkr_num_slots;
+			txr->next_to_clean = l;
+			kring->nr_hwavail += delta;
+			ring->avail = kring->nr_hwavail;
+		}
 	}
 	if (do_lock)
 		IGB_TX_UNLOCK(txr);
@@ -277,15 +258,6 @@ igb_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 
 /*
  * Reconcile kernel and user view of the receive ring.
- *
- * Userspace has read rx slots up to cur (excluded).
- * The last unread slot previously known to the kernel was nr_hwcur,
- * and the last interrupt reported nr_hwavail slots available.
- * We must subtract the newly consumed slots (cur - nr_hwcur)
- * from nr_hwavail, clearing the descriptors for the next
- * read, tell the hardware that they are available,
- * and set nr_hwcur = cur and avail = nr_hwavail.
- * issuing a dmamap_sync on all slots.
  */
 static int
 igb_netmap_rxsync(void *a, u_int ring_nr, int do_lock)

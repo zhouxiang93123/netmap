@@ -209,22 +209,22 @@ ixgbe_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 	 */
 	int report_frequency = kring->nkr_num_slots >> 1;
 
-	/* take a copy of ring->cur now, and never read it again */
-	k = ring->cur;
-	/*
-	 * if ring->cur index is invalid reinitialize the ring.
-	 * No need to be under lock as we only modify the user region.
-	 */
-	if (k > lim)
-		return netmap_ring_reinit(kring);
-
 	if (do_lock)
 		IXGBE_TX_LOCK(txr);
+	/* take a copy of ring->cur now, and never read it again */
+	k = ring->cur;
+	l = k - kring->nr_hwcur;
+	if (l < 0)
+		l += lim + 1;
+	/* if cur is invalid reinitialize the ring. */
+	if (k > lim || l > kring->nr_hwavail) {
+		if (do_lock)
+			IXGBE_TX_UNLOCK(txr);
+		return netmap_ring_reinit(kring);
+	}
+
 	bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
 			BUS_DMASYNC_POSTREAD);
-
-	/* update avail to what the hardware knows */
-	ring->avail = kring->nr_hwavail;
 
 	/*
 	 * Process new packets to send. j is the current index in the
@@ -312,13 +312,12 @@ ixgbe_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 				BUS_DMASYNC_PREWRITE);
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
-			n++; /* count packets sent */
+			n++;
 		}
 		kring->nr_hwcur = k; /* the saved ring->cur */
 
 		/* decrease avail by number of sent packets */
-		ring->avail -= n;
-		kring->nr_hwavail = ring->avail;
+		kring->nr_nwavail -= n;
 
 		/* synchronize the NIC ring */
 		bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
@@ -364,13 +363,18 @@ ixgbe_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 				delta += kring->nkr_num_slots;
 			txr->next_to_clean = l;
 			kring->nr_hwavail += delta;
-			ring->avail = kring->nr_hwavail;
+			if (kring->nr_hwavail > lim)
+				goto ring_reset;
 		}
 	}
+	/* update avail to what the kernel knows */
+	ring->avail = kring->nr_hwavail;
 
 	if (do_lock)
 		IXGBE_TX_UNLOCK(txr);
 	return 0;
+
+ring_reset:
 }
 
 
@@ -399,11 +403,16 @@ ixgbe_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 	int j, k, l, n, lim = kring->nkr_num_slots - 1;
 
 	k = ring->cur;	/* cache and check value, same as in txsync */
-	if (k > lim)
+	n = k - kring->nr_hwcur;
+	if (n < 0)
+		n += lim + 1;
+	if (k > lim || n > kring->nr_hwavail) /* userspace is cheating */
 		return netmap_ring_reinit(kring);
 
 	if (do_lock)
 		IXGBE_RX_LOCK(rxr);
+	if (n < 0)
+		n += lim + 1;
 	/* XXX check sync modes */
 	bus_dmamap_sync(rxr->rxdma.dma_tag, rxr->rxdma.dma_map,
 			BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
@@ -440,6 +449,7 @@ ixgbe_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 		j = (j == lim) ? 0 : j + 1;
 		l = (l == lim) ? 0 : l + 1;
 	}
+	maxread = kring->nr_hwavail;
 	if (n) { /* update the state variables */
 		rxr->next_to_check = l;
 		kring->nr_hwavail += n;
@@ -471,11 +481,8 @@ ixgbe_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 			struct ixgbe_rx_buf *rxbuf = &rxr->rx_buffers[l];
 			void *addr = NMB(slot);
 
-			if (addr == netmap_buffer_base) { /* bad buf */
-				if (do_lock)
-					IXGBE_RX_UNLOCK(rxr);
-				return netmap_ring_reinit(kring);
-			}
+			if (addr == netmap_buffer_base) /* bad buf */
+				goto ring_reset;
 
 			curr->wb.upper.status_error = 0;
 			curr->read.pkt_addr = htole64(vtophys(addr));
@@ -507,5 +514,10 @@ ixgbe_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 	if (do_lock)
 		IXGBE_RX_UNLOCK(rxr);
 	return 0;
+
+ring_reset:
+	if (do_lock)
+		IXGBE_RX_UNLOCK(rxr);
+	return netmap_ring_reinit(kring);
 }
 /* end of file */
