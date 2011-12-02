@@ -1325,7 +1325,7 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, int n,
 {
 	struct netmap_kring *kring;
 	struct netmap_ring *ring;
-	u_int lim, new_hwofs;
+	int new_hwofs, lim;
 
 	if (na == NULL)
 		return NULL;	/* no netmap support here */
@@ -1339,9 +1339,7 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, int n,
 		new_hwofs = kring->nr_hwcur - new_cur;
 	else
 		new_hwofs = kring->nr_hwcur + kring->nr_hwavail - new_cur;
-	if (new_hwofs < 0)
-		new_hwofs += lim + 1;
-	else if (new_hwofs > lim)
+	if (new_hwofs > lim)
 		new_hwofs -= lim + 1;
 
 	/* Alwayws set the new offset value and realign the ring. */

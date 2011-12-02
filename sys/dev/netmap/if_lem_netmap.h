@@ -28,6 +28,9 @@
  * $Id$
  *
  * netmap support for if_lem.c
+ *
+ * For structure and details on the individual functions please see
+ * ixgbe_netmap.h
  */
 
 #include <net/netmap.h>
@@ -95,8 +98,6 @@ lem_netmap_lock_wrapper(void *_a, int what, u_int ringid)
 
 /*
  * Reconcile kernel and user view of the transmit ring.
- * See ixgbe_netmap.h::ixgbe_netmap_txsync() for details of the
- * code in this function.
  */
 static int
 lem_netmap_txsync(void *a, u_int ring_nr, int do_lock)
@@ -197,7 +198,7 @@ lem_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 
 
 /*
- * Reconcile kernel and user view of the receive ring. see ixgbe.c
+ * Reconcile kernel and user view of the receive ring.
  */
 static int
 lem_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
@@ -218,7 +219,7 @@ lem_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 	bus_dmamap_sync(adapter->rxdma.dma_tag, adapter->rxdma.dma_map,
 			BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 
-	/* acknowldge all the received packets. */
+	/* acknowledge all received packets. */
 	l = adapter->next_rx_desc_to_check;
 	j = l + kring->nkr_hwofs;
 	if (j > lim)

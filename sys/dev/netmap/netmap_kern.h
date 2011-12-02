@@ -68,7 +68,7 @@ struct netmap_kring {
 	u_int nr_kflags;
 	u_int nkr_num_slots;
 
-	u_int	nkr_hwofs;	/* offset between NIC and netmap ring */
+	int	nkr_hwofs;	/* offset between NIC and netmap ring */
 	struct netmap_adapter *na;	 // debugging
 	struct selinfo si; /* poll/select wait queue */
 };
