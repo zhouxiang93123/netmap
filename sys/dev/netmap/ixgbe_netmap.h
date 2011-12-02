@@ -493,7 +493,7 @@ ixgbe_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 			n++;
 		}
 		kring->nr_hwavail -= n;
-		kring->nr_hwcur = ring->cur;
+		kring->nr_hwcur = k;
 		bus_dmamap_sync(rxr->rxdma.dma_tag, rxr->rxdma.dma_map,
 		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 		/* IMPORTANT: we must leave one free slot in the ring,

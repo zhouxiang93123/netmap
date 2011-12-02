@@ -61,12 +61,7 @@ em_netmap_attach(struct adapter *adapter)
 	na.nm_rxsync = em_netmap_rxsync;
 	na.nm_lock = em_netmap_lock_wrapper;
 	na.nm_register = em_netmap_reg;
-	/*
-	 * adapter->rx_mbuf_sz is set by SIOCSETMTU, but in netmap mode
-	 * we allocate the buffers on the first register. So we must
-	 * disallow a SIOCSETMTU when if_capenable & IFCAP_NETMAP is set.
-	 */
-	na.buff_size = MCLBYTES;
+	na.buff_size = NETMAP_BUF_SIZE;
 	netmap_attach(&na, adapter->num_queues);
 }
 
@@ -103,6 +98,7 @@ em_netmap_lock_wrapper(void *_a, int what, u_int queueid)
 }
 
 
+// XXX do we need to block/unblock the tasks ?
 static void
 em_netmap_block_tasks(struct adapter *adapter)
 {
@@ -165,9 +161,6 @@ em_netmap_reg(struct ifnet *ifp, int onoff)
 	if (onoff) {
 		ifp->if_capenable |= IFCAP_NETMAP;
 
-		/* save if_transmit for later restore.
-		 * XXX also if_start and if_qflush ?
-		 */
 		na->if_transmit = ifp->if_transmit;
 		ifp->if_transmit = netmap_start;
 
@@ -182,7 +175,6 @@ fail:
 		ifp->if_transmit = na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
 		em_init_locked(adapter);	/* also enable intr */
-
 	}
 	em_netmap_unblock_tasks(adapter);
 	return (error);
@@ -199,7 +191,7 @@ em_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(adapter->ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	int delta, j, k, l, lim = kring->nkr_num_slots - 1;
+	int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
 
 	/* generate an interrupt approximately every half ring */
 	int report_frequency = kring->nkr_num_slots >> 1;
@@ -213,32 +205,17 @@ em_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 	bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
 			BUS_DMASYNC_POSTREAD);
 
-	/* record completed transmissions TODO
-	 *
-	 * instead of using TDH, we could read the transmitted status bit.
-	 */
-	l = E1000_READ_REG(&adapter->hw, E1000_TDH(ring_nr));
-	if (l >= kring->nkr_num_slots) { /* XXX can happen */
-		D("TDH wrap %d", l);
-		l -= kring->nkr_num_slots;
-	}
-	delta = l - txr->next_to_clean;
-	if (delta) {
-		/* new transmissions were completed, increment hwavail. */
-		if (delta < 0)
-			delta += kring->nkr_num_slots;
-		txr->next_to_clean = l;
-		kring->nr_hwavail += delta;
-	}
-
 	/* update avail to what the hardware knows */
 	ring->avail = kring->nr_hwavail;
 
+	/* check for new packets to send.
+	 * j indexes the netmap ring, l indexes the nic ring, and
+	 *	j = kring->nr_hwcur, l = E1000_TDT (not tracked),
+	 *	j == (l + kring->nkr_hwofs) % ring_size
+	 */
 	j = kring->nr_hwcur;
 	if (j != k) {	/* we have packets to send */
-		int n = 0;
-
-		l = kring->nr_hwcur - kring->nkr_hwofs;
+		l = j - kring->nkr_hwofs;
 		if (l < 0)
 			l += lim + 1;
 		while (j != k) {
@@ -259,15 +236,13 @@ em_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 			slot->flags &= ~NS_REPORT;
 			curr->upper.data = 0;
 			curr->lower.data = 
-			    htole32(
-				adapter->txd_cmd |
-				(E1000_TXD_CMD_EOP | flags) |
-				slot->len);
+			    htole32(adapter->txd_cmd | len |
+				(E1000_TXD_CMD_EOP | flags) );
 			if (slot->flags & NS_BUF_CHANGED) {
 				curr->buffer_addr = htole64(vtophys(addr));
-				/* buffer has changed, unload and reload map */
+				/* buffer has changed, reload map */
 				netmap_reload_map(txr->txtag, txbuf->map,
-					addr, na->buff_size);
+				    addr, na->buff_size);
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
 
@@ -280,13 +255,33 @@ em_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 		kring->nr_hwcur = k;
 
 		/* decrease avail by number of sent packets */
-		ring->avail -= n;
-		kring->nr_hwavail = ring->avail;
+		kring->nr_hwavail -= n;
+		ring->avail = kring->nr_hwavail;
 
 		bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
 			BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 
 		E1000_WRITE_REG(&adapter->hw, E1000_TDT(txr->me), l);
+	}
+
+	if (n == 0 || kring->nr_hwavail < 1) {
+		int delta;
+
+		/* record completed transmissions using THD. */
+		l = E1000_READ_REG(&adapter->hw, E1000_TDH(ring_nr));
+		if (l >= kring->nkr_num_slots) { /* XXX can happen */
+			D("TDH wrap %d", l);
+			l -= kring->nkr_num_slots;
+		}
+		delta = l - txr->next_to_clean;
+		if (delta) {
+			/* some completed, increment hwavail. */
+			if (delta < 0)
+				delta += kring->nkr_num_slots;
+			txr->next_to_clean = l;
+			kring->nr_hwavail += delta;
+			ring->avail = kring->nr_hwavail;
+		}
 	}
 	if (do_lock)
 		EM_TX_UNLOCK(txr);
@@ -316,7 +311,13 @@ em_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 	bus_dmamap_sync(rxr->rxdma.dma_tag, rxr->rxdma.dma_map,
 			BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 
-	/* acknowledge all the received packets. */
+	/* import newly received packets into the netmap ring.
+	 * j is an index in the netmap ring, l in the NIC ring, and
+	 *	j = (kring->nr_hwcur + kring->nr_hwavail) % ring_size
+	 *	l = rxr->next_to_check;
+	 * and
+	 *	j == (l + kring->nkr_hwofs) % ring_size
+	 */
 	l = rxr->next_to_check;
 	j = l + kring->nkr_hwofs;
 	/* here nkr_hwofs can be negative so must check for j < 0 */
@@ -333,6 +334,8 @@ em_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 		bus_dmamap_sync(rxr->tag, rxr->rx_buffers[l].map,
 			BUS_DMASYNC_POSTREAD);
 		j = (j == lim) ? 0 : j + 1;
+		/* make sure next_to_refresh follows next_to_check */
+		rxr->next_to_refresh = l;	// XXX
 		l = (l == lim) ? 0 : l + 1;
 	}
 	if (n) {
@@ -340,17 +343,12 @@ em_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 		kring->nr_hwavail += n;
 	}
 
-	/* skip past packets that userspace has already processed:
-	 * making them available for reception.
-	 * advance nr_hwcur and issue a bus_dmamap_sync on the
-	 * buffers so it is safe to write to them.
-	 * Also increase nr_hwavail
-         */
+	/* skip past packets that userspace has already processed */
 	j = kring->nr_hwcur;
 	if (j != k) { /* userspace has read some packets. */
 		n = 0;
-		l = kring->nr_hwcur - kring->nkr_hwofs;
-		/* here nkr_hwofs can be negative so must check for l > lim */
+		l = j - kring->nkr_hwofs; /* NIC ring index */
+		/* here nkr_hwofs can be negative so check for l > lim */
 		if (l < 0)
 			l += lim + 1;
 		else if (l > lim)
@@ -370,14 +368,14 @@ em_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 			curr->status = 0;
 			if (slot->flags & NS_BUF_CHANGED) {
 				curr->buffer_addr = htole64(vtophys(addr));
-				/* buffer has changed, unload and reload map */
+				/* buffer has changed, reload map */
 				netmap_reload_map(rxr->rxtag, rxbuf->map,
-					addr, na->buff_size);
+				    addr, na->buff_size);
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
 
 			bus_dmamap_sync(rxr->rxtag, rxbuf->map,
-				BUS_DMASYNC_PREREAD);
+			    BUS_DMASYNC_PREREAD);
 
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
@@ -386,7 +384,7 @@ em_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 		kring->nr_hwavail -= n;
 		kring->nr_hwcur = k;
 		bus_dmamap_sync(rxr->rxdma.dma_tag, rxr->rxdma.dma_map,
-			BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
+		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 		/*
 		 * IMPORTANT: we must leave one free slot in the ring,
 		 * so move l back by one unit
