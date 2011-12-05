@@ -4017,7 +4017,7 @@ ixgbe_initialize_receive_units(struct adapter *adapter)
 
 		/* Setup the HW Rx Head and Tail Descriptor Pointers */
 		IXGBE_WRITE_REG(hw, IXGBE_RDH(i), 0);
-#ifdef DEV_NETMAP /* DEV_NETMAP */
+#ifdef DEV_NETMAP
 		/*
 		 * In netmap mode, we must preserve the buffers made
 		 * available to userspace before the if_init()
