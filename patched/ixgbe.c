@@ -229,10 +229,10 @@ MODULE_DEPEND(ixgbe, ether, 1, 1, 1);
 ** is varied over time based on the
 ** traffic for that interrupt vector
 */
-static int ixgbe_enable_aim = 0; // TRUE;
+static int ixgbe_enable_aim = TRUE;
 TUNABLE_INT("hw.ixgbe.enable_aim", &ixgbe_enable_aim);
 
-static int ixgbe_max_interrupt_rate = 0; // (8000000 / IXGBE_LOW_LATENCY);
+static int ixgbe_max_interrupt_rate = (8000000 / IXGBE_LOW_LATENCY);
 TUNABLE_INT("hw.ixgbe.max_interrupt_rate", &ixgbe_max_interrupt_rate);
 
 /* How many packets rxeof tries to clean at a time */
@@ -274,7 +274,7 @@ TUNABLE_INT("hw.ixgbe.hdr_split", &ixgbe_header_split);
  * number of cpus with a max of 8. This
  * can be overriden manually here.
  */
-static int ixgbe_num_queues = 1; // 0;
+static int ixgbe_num_queues = 0;
 TUNABLE_INT("hw.ixgbe.num_queues", &ixgbe_num_queues);
 
 /*
