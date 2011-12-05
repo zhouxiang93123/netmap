@@ -310,8 +310,8 @@ bge_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 		if (l < 0)
 			l += lim + 1;
 		while (j != k) {
-			struct bge_rx_bd *r = sc->bge_ldata.bge_rx_std_ring + l;
 			struct netmap_slot *slot = ring->slot + j;
+			struct bge_rx_bd *r = sc->bge_ldata.bge_rx_std_ring + l;
 			void *addr = NMB(slot);
 			uint64_t paddr = vtophys(addr);
 
