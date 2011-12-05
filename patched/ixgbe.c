@@ -1737,7 +1737,6 @@ ixgbe_xmit(struct tx_ring *txr, struct mbuf **m_headp)
 		if (++i == adapter->num_tx_desc)
 			i = 0;
 
-		// XXX should we sync each buffer ?
 		txbuf->m_head = NULL;
 		txbuf->eop_index = -1;
 	}
