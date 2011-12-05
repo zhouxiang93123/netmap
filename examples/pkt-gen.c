@@ -45,6 +45,7 @@ const char *default_payload="netmap pkt-gen Luigi Rizzo and Matteo Landi\n"
 #include <signal.h>	/* signal */
 #include <stdlib.h>
 #include <stdio.h>
+#include <inttypes.h>	/* PRI* macros */
 #include <string.h>	/* strcmp */
 #include <fcntl.h>	/* open */
 #include <unistd.h>	/* close */
@@ -616,7 +617,7 @@ tx_output(uint64_t sent, int size, double delta)
 		punit += 1;
 	}
 
-	printf("Sent %llu packets, %d bytes each, in %.2f seconds.\n",
+	printf("Sent %" PRIu64 " packets, %d bytes each, in %.2f seconds.\n",
 	       sent, size, delta);
 	printf("Speed: %.2f%cpps. Bandwidth: %.2f%cbps.\n",
 	       pps, units[punit], amount, units[aunit]);
@@ -636,7 +637,7 @@ rx_output(uint64_t received, double delta)
 		punit += 1;
 	}
 
-	printf("Received %llu packets, in %.2f seconds.\n", received, delta);
+	printf("Received %" PRIu64 " packets, in %.2f seconds.\n", received, delta);
 	printf("Speed: %.2f%cpps.\n", pps, units[punit]);
 }
 
@@ -971,7 +972,7 @@ main(int arc, char **argv)
 		if (pps < 10000)
 			continue;
 		pps = (my_count - prev)*1000000 / pps;
-		D("%llu pps", pps);
+		D("%" PRIu64 " pps", pps);
 		prev = my_count;
 		toc = now;
 		if (done == g.nthreads)
