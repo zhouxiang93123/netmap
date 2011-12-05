@@ -31,9 +31,8 @@
  */
 
 /*
+ * $FreeBSD: head/sys/net/netmap_user.h 227614 2011-11-17 12:17:39Z luigi $
  * $Id$
- *
- * $FreeBSD$
  *
  * This header contains the macros used to manipulate netmap structures
  * and packets in userspace. See netmap(4) for more information.
