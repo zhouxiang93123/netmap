@@ -3383,7 +3383,7 @@ lem_initialize_receive_unit(struct adapter *adapter)
 	 * Tail Descriptor Pointers
 	 */
 	E1000_WRITE_REG(&adapter->hw, E1000_RDH(0), 0);
-#ifdef DEV_NETMAP /* DEV_NETMAP */
+#ifdef DEV_NETMAP
 	/* preserve buffers already made available to clients */
 	if (ifp->if_capenable & IFCAP_NETMAP) {
 		struct netmap_adapter *na = NA(adapter->ifp);

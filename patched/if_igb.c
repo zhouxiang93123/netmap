@@ -3990,7 +3990,7 @@ igb_setup_receive_ring(struct rx_ring *rxr)
 	struct lro_ctrl		*lro = &rxr->lro;
 	int			rsize, nsegs, error = 0;
 #ifdef DEV_NETMAP
-	struct netmap_adapter *na = NA(adapter->ifp);
+	struct netmap_adapter *na = NA(rxr->adapter->ifp);
 	struct netmap_slot *slot;
 #endif /* DEV_NETMAP */
 
@@ -4332,7 +4332,7 @@ igb_initialize_receive_units(struct adapter *adapter)
 		if (ifp->if_capenable & IFCAP_NETMAP) {
 			struct netmap_adapter *na = NA(adapter->ifp);
 			struct netmap_kring *kring = &na->rx_rings[i];
-			int t = rxr->next_to_refresh - kring->nr_hwavail
+			int t = rxr->next_to_refresh - kring->nr_hwavail;
 
 			if (t >= adapter->num_rx_desc)
 				t -= adapter->num_rx_desc;
