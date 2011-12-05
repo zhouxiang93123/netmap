@@ -405,7 +405,7 @@ re_netmap_rx_init(struct rl_softc *sc)
 		int l = i + kring->nkr_hwofs;
 
 		if (l >= n)
-			l -= n)
+			l -= n;
 
 		addr = NMB(slot + l);
 		paddr = vtophys(addr);

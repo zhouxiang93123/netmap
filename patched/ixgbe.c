@@ -2874,7 +2874,7 @@ ixgbe_setup_transmit_ring(struct tx_ring *txr)
 		 * si = i + kring->nkr_hwofs make sure to handle wraparounds.
 		 */
 		if (slot) {
-			int si = i + na->tx_rings[txr->me].kring->nkr_hwofs;
+			int si = i + na->tx_rings[txr->me].nkr_hwofs;
 			void *addr;
 
 			if (si >= na->num_tx_desc)
@@ -3812,7 +3812,7 @@ ixgbe_setup_receive_ring(struct rx_ring *rxr)
 		 * an mbuf, so end the block with a continue;
 		 */
 		if (slot) {
-			int sj = j + na->rx_rings[rxr->me].kring->nkr_hwofs;
+			int sj = j + na->rx_rings[rxr->me].nkr_hwofs;
 			void *addr;
 
 			if (sj >= na->num_rx_desc)

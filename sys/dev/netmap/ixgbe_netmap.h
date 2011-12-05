@@ -44,7 +44,7 @@
  * already include them by default
 
 #include <vm/vm.h>
-#include <vm/pmap.h>    /* vtophys ? */
+#include <vm/pmap.h>
 
  */
 
@@ -277,6 +277,7 @@ ixgbe_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 			 * unsigned so no need to check for negative values.
 			 */
 			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
+ring_reset:
 				if (do_lock)
 					IXGBE_TX_UNLOCK(txr);
 				return netmap_ring_reinit(kring);
@@ -317,7 +318,7 @@ ixgbe_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 		kring->nr_hwcur = k; /* the saved ring->cur */
 
 		/* decrease avail by number of sent packets */
-		kring->nr_nwavail -= n;
+		kring->nr_hwavail -= n;
 
 		/* synchronize the NIC ring */
 		bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
@@ -374,7 +375,6 @@ ixgbe_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 		IXGBE_TX_UNLOCK(txr);
 	return 0;
 
-ring_reset:
 }
 
 
@@ -449,7 +449,6 @@ ixgbe_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 		j = (j == lim) ? 0 : j + 1;
 		l = (l == lim) ? 0 : l + 1;
 	}
-	maxread = kring->nr_hwavail;
 	if (n) { /* update the state variables */
 		rxr->next_to_check = l;
 		kring->nr_hwavail += n;

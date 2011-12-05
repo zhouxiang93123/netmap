@@ -2668,7 +2668,7 @@ lem_setup_transmit_structures(struct adapter *adapter)
 #ifdef DEV_NETMAP
 		if (slot) {
 			/* slot si is mapped to the i-th NIC-ring entry */
-			int si = i + na->tx_rings[0].kring->nkr_hwofs;
+			int si = i + na->tx_rings[0].nkr_hwofs;
 			void *addr;
 
 			if (si > na->num_tx_desc)
@@ -3220,7 +3220,7 @@ lem_setup_receive_structures(struct adapter *adapter)
 	int i, error;
 #ifdef DEV_NETMAP
 	/* we are already under lock */
-	struct netmap_adapter *na = NA(adapter->ifp;
+	struct netmap_adapter *na = NA(adapter->ifp);
 	struct netmap_slot *slot = netmap_reset(na, NR_RX, 0, 0);
 #endif
 
@@ -3245,7 +3245,7 @@ lem_setup_receive_structures(struct adapter *adapter)
 #ifdef DEV_NETMAP
 		if (slot) {
 			/* slot si is mapped to the i-th NIC-ring entry */
-			int si = i + na->rx_rings[0].kring->nkr_hwofs;
+			int si = i + na->rx_rings[0].nkr_hwofs;
 			void *addr;
 
 			if (si > na->num_rx_desc)

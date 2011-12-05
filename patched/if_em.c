@@ -4049,7 +4049,7 @@ em_setup_receive_ring(struct rx_ring *rxr)
 	struct netmap_adapter *na = NA(adapter->ifp);
 	struct netmap_slot *slot = netmap_reset(na,
 		NR_RX, rxr->me, rxr->next_to_check);
-	int sj = kring->nkr_hwofs;
+	int sj = slot ? na->rx_rings[rxr->me].nkr_hwofs : 0;
 
 	/* slot sj corresponds to entry j in the NIC ring */
 	if (sj < 0)
@@ -4279,7 +4279,7 @@ em_initialize_receive_unit(struct adapter *adapter)
 		if (ifp->if_capenable & IFCAP_NETMAP) {
 			struct netmap_adapter *na = NA(adapter->ifp);
 			struct netmap_kring *kring = &na->rx_rings[i];
-			int t = rxr->next_to_refresh - kring->nr_hwavail
+			int t = rxr->next_to_refresh - kring->nr_hwavail;
 
 			if (t < 0)
 				t += na->num_rx_desc;
