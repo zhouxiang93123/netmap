@@ -2874,7 +2874,6 @@ ixgbe_setup_transmit_ring(struct tx_ring *txr)
 		 */
 		if (slot) {
 			int si = i + na->tx_rings[txr->me].nkr_hwofs;
-			void *addr;
 
 			if (si >= na->num_tx_desc)
 				si -= na->num_tx_desc;
