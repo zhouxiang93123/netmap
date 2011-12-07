@@ -2,6 +2,33 @@
 
 # $Id$
 
+20111207 lr performance tests
+
+	ixgbe, RELENG_8 picobsd, no IPFW, no INVARIANTS, no i586
+	software LRO even on 82599
+
+	Peak
+	Tput	transmitter		receiver
+	======= =======================	========================
+	4975	-csum,-tso,-lro		-csum,-tso,-lro
+	5050	-csum,-tso,-lro, w 100	-csum,-tso,-lro
+
+	5350	-csum,-tso,-lro		-csum,-tso,+lro
+	5500	-csum,-tso,-lro, w 100	-csum,-tso,+lro
+	6000	-csum,-tso,-lro, w 150	-csum,-tso,+lro
+	6000	-csum,-tso,-lro, w 200	-csum,-tso,+lro
+
+	8000	csum,-tso,-lro		-csum,-tso,+lro
+
+	3144	-csum,tso,-lro		-csum,-tso,+lro
+	1600	csum,tso,-lro		-csum,-tso,+lro
+	2600	csum,tso,-lro		-csum,-tso,-lro
+	5200	-csum,tso,-lro		-csum,-tso,-lro
+
+	9400	csum,tso,-lro,l=0	-csum,-tso,hwlro
+	8400	-csum,tso,-lro,l=0	-csum,-tso,hwlro
+	7700	csum,tso,-lro,l=0	-csum,-tso,-lro (6.3 to 7.7)
+
 20111107 lr - forked version for the release
 
 20111021 - cache and memory latencies for various architectures
