@@ -7,27 +7,53 @@
 	ixgbe, RELENG_8 picobsd, no IPFW, no INVARIANTS, no i586
 	software LRO even on 82599
 
+	default latency is 16us, l=0 means no interrupt mitigation.
+	lro is the software implementation of lro,
+	hwlro is the hardware one (on 82599)
+
+	Summary:
+
+	- hardware checksum seems to help a lot on the tx side
+	  but practically useless on the receive side.
+
+	- with default interrupt mitigation, setting
+	  HWCSUM and TSO on the sender is really disruptive;
+	  (while it seems to help a bit with l=0)
+
+	- lro helps a lot on the receive side.
+
+	- the software lro on the transmit side is detrimental,
+	  not sure why (acks collapsed too much ?)
+	  Disabling it on pure acks 
+	  The sw version is actually pretty good., but on the tx side
+		the software version kills performance.
+		it really starves
+		
 	Peak
 	Tput	transmitter		receiver
 	======= =======================	========================
 	4975	-csum,-tso,-lro		-csum,-tso,-lro
 	5050	-csum,-tso,-lro, w 100	-csum,-tso,-lro
 
-	5350	-csum,-tso,-lro		-csum,-tso,+lro
-	5500	-csum,-tso,-lro, w 100	-csum,-tso,+lro
-	6000	-csum,-tso,-lro, w 150	-csum,-tso,+lro
-	6000	-csum,-tso,-lro, w 200	-csum,-tso,+lro
+	5350	-csum,-tso,-lro		+csum,-tso,+lro
+	5500	-csum,-tso,-lro, w 100	+csum,-tso,+lro
+	6000	-csum,-tso,-lro, w 150	+csum,-tso,+lro
+	6000	-csum,-tso,-lro, w 200	+csum,-tso,+lro
 
-	8000	csum,-tso,-lro		-csum,-tso,+lro
+	8000	csum,-tso,-lro		+csum,-tso,+lro
+	3950	csum,-tso,+lro		+csum,-tso,+lro
 
-	3144	-csum,tso,-lro		-csum,-tso,+lro
-	1600	csum,tso,-lro		-csum,-tso,+lro
+	3144	-csum,tso,-lro		+csum,-tso,+lro
+	1600	csum,tso,-lro		+csum,-tso,+lro
 	2600	csum,tso,-lro		-csum,-tso,-lro
 	5200	-csum,tso,-lro		-csum,-tso,-lro
 
-	9400	csum,tso,-lro,l=0	-csum,-tso,hwlro
-	8400	-csum,tso,-lro,l=0	-csum,-tso,hwlro
-	7700	csum,tso,-lro,l=0	-csum,-tso,-lro (6.3 to 7.7)
+	9400	csum,tso,-lro,l=0	+csum,-tso,hwlro
+	8400	-csum,tso,-lro,l=0	+csum,-tso,hwlro
+	7700	csum,tso,-lro,l=0	+csum,-tso,-lro (6.3 to 7.7)
+
+	8000	csum,-tso,lro, w 100	+csum,-tso,hwlro
+	7500	csum,-tso,lro, w 1000	+csum,-tso,hwlro	cache effect ?
 
 20111107 lr - forked version for the release
 
