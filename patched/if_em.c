@@ -30,7 +30,7 @@
   POSSIBILITY OF SUCH DAMAGE.
 
 ******************************************************************************/
-/*$FreeBSD: head/sys/dev/e1000/if_em.c 227309 2011-11-07 15:43:11Z ed $*/
+/*$FreeBSD$*/
 
 #ifdef HAVE_KERNEL_OPTION_HEADERS
 #include "opt_device_polling.h"
@@ -4372,7 +4372,6 @@ em_rxeof(struct rx_ring *rxr, int count, int *done)
 		EM_CORE_LOCK(adapter);
 		selwakeuppri(&na->rx_rings[na->num_queues + 1].si, PI_NET);
 		EM_CORE_UNLOCK(adapter);
-		EM_RX_LOCK(rxr);
 		return (0);
 	}
 #endif /* DEV_NETMAP */

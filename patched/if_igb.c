@@ -30,7 +30,7 @@
   POSSIBILITY OF SUCH DAMAGE.
 
 ******************************************************************************/
-/*$FreeBSD: head/sys/dev/e1000/if_igb.c 227309 2011-11-07 15:43:11Z ed $*/
+/*$FreeBSD$*/
 
 
 #ifdef HAVE_KERNEL_OPTION_HEADERS
@@ -4524,7 +4524,7 @@ igb_rxeof(struct igb_queue *que, int count, int *done)
 		struct netmap_adapter *na = NA(ifp);
 
 		selwakeuppri(&na->rx_rings[rxr->me].si, PI_NET);
-		IGB_RX_UNLOCK(rxr); /* deadlock avoidance */
+		IGB_RX_UNLOCK(rxr);
 		IGB_CORE_LOCK(adapter);
 		selwakeuppri(&na->rx_rings[na->num_queues + 1].si, PI_NET);
 		IGB_CORE_UNLOCK(adapter);
