@@ -109,7 +109,7 @@ __FBSDID("$FreeBSD$");
 /*int netmap_verbose;*/
 int netmap_verbose = NM_VERB_HOST;
 
-static int no_timestamp; /* don't timestamp on rxsync */
+//static int no_timestamp; /* don't timestamp on rxsync */
 
 /*
  * Allocator for a pool of packet buffers.  For each buffer we have

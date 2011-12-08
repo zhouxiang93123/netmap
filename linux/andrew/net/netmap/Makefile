@@ -1,5 +1,5 @@
 CONFIG_NETMAP=m
-KVERSION=linux-2.6.33.3
+KVERSION=linux-source-2.6.38
 
 EXTRA_CFLAGS += -I$(PWD)/../../include
 

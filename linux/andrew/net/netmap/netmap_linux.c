@@ -74,8 +74,6 @@
 #include <net/netmap/netmap_kern.h>
 
 
-static int no_timestamp;
-
 #ifdef notyet
 SYSCTL_NODE(_dev, OID_AUTO, netmap, CTLFLAG_RW, 0, "Netmap args");
 SYSCTL_INT(_dev_netmap, OID_AUTO, verbose,
@@ -352,7 +350,7 @@ static int netmap_release(struct inode *, struct file *);
 
 static struct file_operations netmap_fops = {
     .mmap = netmap_mmap,
-    .ioctl = netmap_ioctl,
+    .compat_ioctl = netmap_ioctl,
     .poll = netmap_poll,
     .release = netmap_release,
 };
@@ -712,6 +710,8 @@ static unsigned int netmap_poll(struct file * file,
     struct netmap_adapter *na = NA(dev);
     struct netmap_kring *kring;
     u_int mask = 0, i;
+    enum {NO_CL, NEED_CL, LOCKED_CL } core_lock;
+
 
     if (na == 0 || (! na->nm_isactive(dev)) || NETMAP_DELETING(na)) {
         D("na=%p, active=%d, refcount=%d",
@@ -720,6 +720,7 @@ static unsigned int netmap_poll(struct file * file,
           
         return (POLLERR);
     }
+    core_lock = na->separate_locks ? NO_CL : NEED_CL;
 
     if (netmap_verbose & 0x8000)
         D("device %s", dev->name);
@@ -808,7 +809,7 @@ static unsigned int netmap_poll(struct file * file,
      *		to remember to release the lock once done.
      * LOCKED_CL	core lock is set, so we need to release it.
      */
-    enum {NO_CL, NEED_CL, LOCKED_CL } core_lock = na->separate_locks ? NO_CL : NEED_CL;
+    //enum {NO_CL, NEED_CL, LOCKED_CL } core_lock = na->separate_locks ? NO_CL : NEED_CL;
 
 #ifdef notyet
     /*
