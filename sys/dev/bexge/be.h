@@ -35,6 +35,31 @@
 #include <dev/bexge/be_hw.h>
 #endif
 
+/* linux compatibility stuff */
+typedef uint8_t         u8;
+typedef int8_t          s8;
+typedef uint16_t        u16;
+typedef uint32_t        u32;
+typedef int32_t         s32; 
+typedef uint64_t        u64;
+typedef uint64_t        ulong;
+typedef boolean_t       bool;
+typedef volatile int	atomic_t;
+#define	__iomem
+typedef	void *		dma_addr_t;
+
+#if defined(__i386__) || defined(__amd64__)
+static __inline
+void prefetch(void *x)
+{
+        __asm volatile("prefetcht0 %0" :: "m" (*(unsigned long *)x));
+}
+#else
+#define prefetch(x)
+#endif
+
+/* end linux compatibility stuff */
+
 #define DRV_VER			"4.0.100u"
 #define DRV_NAME		"be2net"
 #define BE_NAME			"ServerEngines BladeEngine2 10Gbps NIC"
@@ -97,7 +122,6 @@ static inline char *nic_name(struct pci_dev *pdev)
 
 #define BE_MAX_VF		32
 
-#if 0	// XXX UNUSED
 struct be_dma_mem {
 	void *va;
 	dma_addr_t dma;
@@ -114,6 +138,7 @@ struct be_queue_info {
 	atomic_t used;	/* Number of valid elements in the queue */
 };
 
+#if 0	// XXX UNUSED
 static inline u32 MODULO(u16 val, u16 limit)
 {
 	BUG_ON(limit & (limit - 1));
@@ -149,6 +174,7 @@ static inline void queue_tail_inc(struct be_queue_info *q)
 {
 	index_inc(&q->tail, q->len);
 }
+#endif // XXX unused
 
 struct be_eq_obj {
 	struct be_queue_info q;
@@ -161,7 +187,7 @@ struct be_eq_obj {
 	u16 cur_eqd;		/* in usecs */
 	u8  eq_idx;
 
-	struct napi_struct napi;
+	// struct napi_struct napi;
 };
 
 struct be_mcc_obj {
@@ -193,7 +219,7 @@ struct be_tx_obj {
 /* Struct to remember the pages posted for rx frags */
 struct be_rx_page_info {
 	struct page *page;
-	DEFINE_DMA_UNMAP_ADDR(bus);
+	// DEFINE_DMA_UNMAP_ADDR(bus);
 	u16 page_offset;
 	bool last_page_user;
 };
@@ -253,7 +279,7 @@ struct be_drv_stats {
 };
 
 struct be_vf_cfg {
-	unsigned char vf_mac_addr[ETH_ALEN];
+	unsigned char vf_mac_addr[ETHER_ADDR_LEN];
 	u32 vf_if_handle;
 	u32 vf_pmac_id;
 	u16 vf_vlan_tag;
@@ -270,17 +296,17 @@ struct be_adapter {
 	u8 __iomem *db;		/* Door Bell */
 	u8 __iomem *pcicfg;	/* PCI config space */
 
-	struct mutex mbox_lock; /* For serializing mbox cmds to BE card */
+	// struct mutex mbox_lock; /* For serializing mbox cmds to BE card */
 	struct be_dma_mem mbox_mem;
 	/* Mbox mem is adjusted to align to 16 bytes. The allocated addr
 	 * is stored for freeing purpose */
 	struct be_dma_mem mbox_mem_alloced;
 
-	struct be_mcc_obj mcc_obj;
-	spinlock_t mcc_lock;	/* For serializing mcc cmds to BE card */
-	spinlock_t mcc_cq_lock;
+	// struct be_mcc_obj mcc_obj;
+	// spinlock_t mcc_lock;	/* For serializing mcc cmds to BE card */
+	// spinlock_t mcc_cq_lock;
 
-	struct msix_entry msix_entries[BE_MAX_MSIX_VECTORS];
+	//struct msix_entry msix_entries[BE_MAX_MSIX_VECTORS];
 	bool msix_enabled;
 	bool isr_registered;
 
@@ -302,14 +328,14 @@ struct be_adapter {
 	struct vlan_group *vlan_grp;
 	u16 vlans_added;
 	u16 max_vlans;	/* Number of vlans supported */
-	u8 vlan_tag[VLAN_N_VID];
+	// u8 vlan_tag[VLAN_N_VID];
 	u8 vlan_prio_bmap;	/* Available Priority BitMap */
 	u16 recommended_prio;	/* Recommended Priority */
 	struct be_dma_mem mc_cmd_mem;
 
 	struct be_dma_mem stats_cmd;
 	/* Work queue used to perform periodic tasks like getting statistics */
-	struct delayed_work work;
+	// struct delayed_work work;
 	u16 work_counter;
 
 	/* Ethtool knobs and info */
@@ -335,7 +361,7 @@ struct be_adapter {
 	u8 autoneg;
 	u8 generation;		/* BladeEngine ASIC generation */
 	u32 flash_status;
-	struct completion flash_compl;
+	// struct completion flash_compl;
 
 	bool be3_native;
 	bool sriov_enabled;
@@ -345,6 +371,8 @@ struct be_adapter {
 	u8 hba_port_num;
 	u16 pvid;
 };
+
+#if 0 // XXX unused
 
 #define be_physfn(adapter) (!adapter->is_virtfn)
 

@@ -28,18 +28,23 @@
 
 // #include <dev/bexge/if_bexge.h>
 // #include <dev/bexge/xge-osdep.h>
-#include <dev/bexge/be.h>
-#include <sys/types.h>
+#include <sys/param.h>
+#include <sys/conf.h>
 #include <sys/bus.h>		// device_method_t
+#include <sys/kernel.h>
+#include <sys/module.h>		// declare_module
+#include <sys/types.h>
 #include <dev/pci/pcivar.h>
 #include <dev/pci/pcireg.h>
 #include <machine/pci_cfgreg.h>
 
 #include <sys/socket.h>	// ifru_addr
 #include <net/if.h>
+#include <net/ethernet.h>
 //#include <net/if_vlan_var.h>
 #include <net/if_arp.h>
 
+#include <dev/bexge/be.h>
 
 int       copyright_print       = 0;
 int       hal_driver_init_count = 0;
@@ -62,11 +67,6 @@ static struct pci_devtab bexge_dev_ids[] = {
 };
 
 /**
- * xge_probe
- * Probes for Xframe devices
- *
- * @dev Device handle
- *
  * Returns
  * BUS_PROBE_DEFAULT if device is supported
  * ENXIO if device is not supported
@@ -85,6 +85,35 @@ bexge_probe(device_t dev)
 	}
 
 	return ENXIO;
+}
+
+/**
+ * bexge_attach
+ * Connects driver to the system if probe was success
+ */
+int
+bexge_attach(device_t dev)
+{
+	return ENXIO;
+}
+
+/**
+ * bexge_detach
+ * Detaches driver from the Kernel subsystem
+ */
+int
+bexge_detach(device_t dev)
+{
+}
+
+/**
+ * bexge_shutdown
+ * To shutdown device before system shutdown
+ */
+int
+bexge_shutdown(device_t dev)
+{
+	return 0;
 }
 
 #if 0 // XXX UNUSED
@@ -3531,10 +3560,10 @@ static device_method_t bexge_methods[] = {
 static driver_t bexge_driver = {
 	"bexge",
 	bexge_methods,
-	sizeof(bexge_lldev_t),
+	sizeof(int), // XXX
 };
 
 
 static devclass_t bexge_devclass;
-DRIVER_MODULE(bexge, pci, xge_driver, bexge_devclass, 0, 0);
 
+DRIVER_MODULE(bexge, pci, bexge_driver, bexge_devclass, 0, 0);
