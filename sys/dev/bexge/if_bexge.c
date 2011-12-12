@@ -23,21 +23,43 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $FreeBSD: head/sys/dev/nxge/if_nxge.c 207554 2010-05-03 07:32:50Z sobomax $
+ * from: head/sys/dev/nxge/if_nxge.c 207554 2010-05-03 07:32:50Z sobomax
  */
 
-#include <dev/nxge/if_nxge.h>
-#include <dev/nxge/xge-osdep.h>
-#include <net/if_arp.h>
+// #include <dev/bexge/if_bexge.h>
+// #include <dev/bexge/xge-osdep.h>
+#include <dev/bexge/be.h>
 #include <sys/types.h>
+#include <sys/bus.h>		// device_method_t
+#include <dev/pci/pcivar.h>
+#include <dev/pci/pcireg.h>
+#include <machine/pci_cfgreg.h>
+
+#include <sys/socket.h>	// ifru_addr
 #include <net/if.h>
-#include <net/if_vlan_var.h>
+//#include <net/if_vlan_var.h>
+#include <net/if_arp.h>
+
 
 int       copyright_print       = 0;
 int       hal_driver_init_count = 0;
 size_t    size                  = sizeof(int);
 
-static void inline xge_flush_txds(xge_hal_channel_h);
+// static void inline xge_flush_txds(xge_hal_channel_h);
+
+struct pci_devtab {
+	int vendor;
+	int device;
+};
+
+static struct pci_devtab bexge_dev_ids[] = {
+	{ BE_VENDOR_ID, BE_DEVICE_ID1 },
+	{ BE_VENDOR_ID, BE_DEVICE_ID2 },
+	{ BE_VENDOR_ID, OC_DEVICE_ID1 },
+	{ BE_VENDOR_ID, OC_DEVICE_ID2 },
+	{ EMULEX_VENDOR_ID, OC_DEVICE_ID3 },
+	{ 0 }
+};
 
 /**
  * xge_probe
@@ -50,28 +72,22 @@ static void inline xge_flush_txds(xge_hal_channel_h);
  * ENXIO if device is not supported
  */
 int
-xge_probe(device_t dev)
+bexge_probe(device_t dev)
 {
 	int  devid    = pci_get_device(dev);
 	int  vendorid = pci_get_vendor(dev);
 	int  retValue = ENXIO;
+	struct pci_devtab *p;
 
-	if(vendorid == XGE_PCI_VENDOR_ID) {
-	    if((devid == XGE_PCI_DEVICE_ID_XENA_2) ||
-	        (devid == XGE_PCI_DEVICE_ID_HERC_2)) {
-	        if(!copyright_print) {
-	            xge_os_printf(XGE_COPYRIGHT);
-	            copyright_print = 1;
-	        }
-	        device_set_desc_copy(dev,
-	            "Neterion Xframe 10 Gigabit Ethernet Adapter");
-	        retValue = BUS_PROBE_DEFAULT;
-	    }
+	for (p = bexge_dev_ids; p->vendor || p->device; p++) {
+		if (p->vendor == vendorid && p->device == devid)
+	        	return BUS_PROBE_DEFAULT;
 	}
 
-	return retValue;
+	return ENXIO;
 }
 
+#if 0 // XXX UNUSED
 /**
  * xge_init_params
  * Sets HAL parameter values (from kenv).
@@ -3497,24 +3513,28 @@ xge_tx_term(xge_hal_channel_h channelh, xge_hal_dtr_h dtr,
 	bus_dmamap_destroy(lldev->dma_tag_tx, ll_tx_priv->dma_map);
 }
 
+#endif // XXX not used
+
 /**
- * xge_methods
+ * bexge_methods
  *
  * FreeBSD device interface entry points
  */
-static device_method_t xge_methods[] = {
-	DEVMETHOD(device_probe,     xge_probe),
-	DEVMETHOD(device_attach,    xge_attach),
-	DEVMETHOD(device_detach,    xge_detach),
-	DEVMETHOD(device_shutdown,  xge_shutdown),
+static device_method_t bexge_methods[] = {
+	DEVMETHOD(device_probe,     bexge_probe),
+	DEVMETHOD(device_attach,    bexge_attach),
+	DEVMETHOD(device_detach,    bexge_detach),
+	DEVMETHOD(device_shutdown,  bexge_shutdown),
 	{0, 0}
 };
 
-static driver_t xge_driver = {
-	"nxge",
-	xge_methods,
-	sizeof(xge_lldev_t),
+static driver_t bexge_driver = {
+	"bexge",
+	bexge_methods,
+	sizeof(bexge_lldev_t),
 };
-static devclass_t xge_devclass;
-DRIVER_MODULE(nxge, pci, xge_driver, xge_devclass, 0, 0);
+
+
+static devclass_t bexge_devclass;
+DRIVER_MODULE(bexge, pci, xge_driver, bexge_devclass, 0, 0);
 
