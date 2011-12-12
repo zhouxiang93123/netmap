@@ -37,10 +37,14 @@
 
 /* linux compatibility stuff */
 typedef uint8_t         u8;
+typedef uint8_t         __u8;
 typedef int8_t          s8;
 typedef uint16_t        u16;
+typedef uint16_t        __be16;
+typedef uint16_t        __sum16;
 typedef uint16_t        ushort;
 typedef uint32_t        u32;
+typedef uint32_t        __be32;
 typedef int32_t         s32; 
 typedef uint64_t        u64;
 typedef uint64_t        ulong;
@@ -52,6 +56,9 @@ typedef	void *		dma_addr_t;
 #define	true		1
 
 struct device {
+};
+
+struct net_device {
 };
 
 struct pci_dev {	//	include/linux/pci.h
@@ -81,10 +88,12 @@ struct pci_devtab {
 #define	PCI_DEVICE(v, d)	v, d
 #define	MODULE_DEVICE_TABLE(bus, ids)
 
-#define netdev_priv(dev)	((char *)(dev))
+#define netdev_priv(dev)	((void *)(dev))
 
 // /home/luigi/IMAGES/linux-2.6.39.4/include/linux/dma-mapping-broken.h
 typedef int gfp_t;
+#define BUG_ON(x)
+
 #define	GFP_KERNEL	0	// XXX
 #define ioread32(a)	(*(u32 *)(a))
 #define iowrite32(d, a)	*(u32 *)(a) = (d)
@@ -96,6 +105,60 @@ extern void
 dma_free_coherent(struct device *dev, size_t size, void *cpu_addr,
                     dma_addr_t dma_handle);
 
+// include/linux/etherdevice.h
+static inline int is_multicast_ether_addr(const u8 *addr)
+{
+        return 0x01 & addr[0];
+}
+static inline int is_zero_ether_addr(const u8 *addr)
+{ 
+        return !(addr[0] | addr[1] | addr[2] | addr[3] | addr[4] | addr[5]);
+}
+static inline int is_valid_ether_addr(const u8 *addr)
+{ 
+        /* FF:FF:FF:FF:FF:FF is a multicast address so we don't need to
+         * explicitly check for it here. */
+        return !is_multicast_ether_addr(addr) && !is_zero_ether_addr(addr);
+}
+
+struct sk_buff {
+};
+
+#include <netinet/in.h>
+// #include <netinet/ip.h>
+#include <netinet/ip6.h>
+// include/linux/ip.h
+struct iphdr {
+#if BYTE_ORDER == LITTLE_ENDIAN
+        __u8    ihl:4,
+                version:4;
+#elif BYTE_ORDER == BIG_ENDIAN
+        __u8    version:4,
+                ihl:4;
+#else
+#error  "Please fix <asm/byteorder.h>"
+#endif
+        __u8    tos;
+        __be16  tot_len;
+        __be16  id;
+        __be16  frag_off;
+        __u8    ttl;
+        __u8    protocol;
+        __sum16 check;  
+        __be32  saddr;
+        __be32  daddr;
+        /*The options start here. */
+};
+
+
+static inline struct iphdr *ip_hdr(const struct sk_buff *skb)
+{
+        return 0; // XXX (struct iphdr *)skb_network_header(skb);
+}
+static inline struct ip6hdr *ipv6_hdr(const struct sk_buff *skb)
+{
+        return 0; // XXX (struct iphdr *)skb_network_header(skb);
+}
 
 
 /* end linux compatibility stuff */
@@ -193,7 +256,6 @@ struct be_queue_info {
 	atomic_t used;	/* Number of valid elements in the queue */
 };
 
-#if 0	// XXX UNUSED
 static inline u32 MODULO(u16 val, u16 limit)
 {
 	BUG_ON(limit & (limit - 1));
@@ -229,7 +291,6 @@ static inline void queue_tail_inc(struct be_queue_info *q)
 {
 	index_inc(&q->tail, q->len);
 }
-#endif // XXX unused
 
 struct be_eq_obj {
 	struct be_queue_info q;
@@ -427,7 +488,6 @@ struct be_adapter {
 	u16 pvid;
 };
 
-#if 0 // XXX unused
 
 #define be_physfn(adapter) (!adapter->is_virtfn)
 
@@ -575,7 +635,6 @@ extern void be_cq_notify(struct be_adapter *adapter, u16 qid, bool arm,
 extern void be_link_status_update(struct be_adapter *adapter, bool link_up);
 extern void netdev_stats_update(struct be_adapter *adapter);
 extern int be_load_fw(struct be_adapter *adapter, u8 *func);
-#endif // XXX UNUSED
 
 #endif				/* BE_H */
 
