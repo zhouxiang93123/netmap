@@ -17,6 +17,8 @@
 
 #include "be.h"
 #include "be_cmds.h"
+
+#ifndef __FreeBSD__
 #include <asm/div64.h>
 
 MODULE_VERSION(DRV_VER);
@@ -24,6 +26,7 @@ MODULE_DEVICE_TABLE(pci, be_dev_ids);
 MODULE_DESCRIPTION(DRV_DESC " " DRV_VER);
 MODULE_AUTHOR("ServerEngines Corporation");
 MODULE_LICENSE("GPL");
+#endif
 
 static ushort rx_frag_size = 2048;
 static unsigned int num_vfs;

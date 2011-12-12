@@ -18,7 +18,89 @@
 #ifndef BE_H
 #define BE_H
 
-#if 0
+#ifdef __FreeBSD__
+#include <sys/param.h>
+#include <sys/conf.h>
+#include <sys/bus.h>            // device_method_t
+#include <sys/kernel.h>
+#include <sys/module.h>         // declare_module
+#include <sys/types.h>
+#include <dev/pci/pcivar.h>
+#include <dev/pci/pcireg.h>
+#include <machine/pci_cfgreg.h>
+
+#include <sys/socket.h> // ifru_addr
+#include <net/if.h>
+#include <net/ethernet.h>
+//#include <net/if_vlan_var.h>
+#include <net/if_arp.h>
+
+/* linux compatibility stuff */
+typedef uint8_t         u8;
+typedef int8_t          s8;
+typedef uint16_t        u16;
+typedef uint16_t        ushort;
+typedef uint32_t        u32;
+typedef int32_t         s32; 
+typedef uint64_t        u64;
+typedef uint64_t        ulong;
+typedef boolean_t       bool;
+typedef volatile int	atomic_t;
+#define	__iomem
+typedef	void *		dma_addr_t;
+#define	 ETH_ALEN	ETHER_ADDR_LEN
+#define	true		1
+
+struct device {
+};
+
+struct pci_dev {	//	include/linux/pci.h
+	// u16	vendor;
+	u16	device;
+	struct device dev;
+};
+
+#if defined(__i386__) || defined(__amd64__)
+static __inline
+void prefetch(void *x)
+{
+        __asm volatile("prefetcht0 %0" :: "m" (*(unsigned long *)x));
+}
+#else
+#define prefetch(x)
+#endif
+
+#define	module_param(a, b, c)
+#define	MODULE_PARM_DESC(a, b)
+struct pci_devtab {
+        u16 vendor;
+        u16 device;
+};
+
+#define	DEFINE_PCI_DEVICE_TABLE(x)	struct pci_devtab x[]
+#define	PCI_DEVICE(v, d)	v, d
+#define	MODULE_DEVICE_TABLE(bus, ids)
+
+#define netdev_priv(dev)	((char *)(dev))
+
+// /home/luigi/IMAGES/linux-2.6.39.4/include/linux/dma-mapping-broken.h
+typedef int gfp_t;
+#define	GFP_KERNEL	0	// XXX
+#define ioread32(a)	(*(u32 *)(a))
+#define iowrite32(d, a)	*(u32 *)(a) = (d)
+extern void *
+dma_alloc_coherent(struct device *dev, size_t size, dma_addr_t *dma_handle,
+                   gfp_t flag);
+
+extern void
+dma_free_coherent(struct device *dev, size_t size, void *cpu_addr,
+                    dma_addr_t dma_handle);
+
+
+
+/* end linux compatibility stuff */
+
+#else /* linux */
 #include <linux/pci.h>
 #include <linux/etherdevice.h>
 #include <linux/version.h>
@@ -31,34 +113,9 @@
 #include <linux/interrupt.h>
 #include <linux/firmware.h>
 #include <linux/slab.h>
-
-#include <dev/bexge/be_hw.h>
 #endif
 
-/* linux compatibility stuff */
-typedef uint8_t         u8;
-typedef int8_t          s8;
-typedef uint16_t        u16;
-typedef uint32_t        u32;
-typedef int32_t         s32; 
-typedef uint64_t        u64;
-typedef uint64_t        ulong;
-typedef boolean_t       bool;
-typedef volatile int	atomic_t;
-#define	__iomem
-typedef	void *		dma_addr_t;
-
-#if defined(__i386__) || defined(__amd64__)
-static __inline
-void prefetch(void *x)
-{
-        __asm volatile("prefetcht0 %0" :: "m" (*(unsigned long *)x));
-}
-#else
-#define prefetch(x)
-#endif
-
-/* end linux compatibility stuff */
+#include "be_hw.h"
 
 #define DRV_VER			"4.0.100u"
 #define DRV_NAME		"be2net"
@@ -77,7 +134,6 @@ void prefetch(void *x)
 #define OC_DEVICE_ID2		0x710	/* Device Id for BE3 cards */
 #define OC_DEVICE_ID3		0xe220	/* Device id for Lancer cards */
 
-#if 0
 static inline char *nic_name(struct pci_dev *pdev)
 {
 	switch (pdev->device) {
@@ -93,7 +149,6 @@ static inline char *nic_name(struct pci_dev *pdev)
 		return BE_NAME;
 	}
 }
-#endif
 
 /* Number of bytes of an RX frame that are copied to skb->data */
 #define BE_HDR_LEN		((u16) 64)
