@@ -57,6 +57,12 @@ typedef	void *		dma_addr_t;
 #define	typeof(x)	__typeof__(x)
 #define upper_32_bits(n) ((u32)(((n) >> 16) >> 16))
 
+#if BYTE_ORDER == LITTLE_ENDIAN
+#define	cpu_to_le16(x)	(x)
+#else
+#define	cpu_to_le16(x)	ntohs(x)
+#endif
+
 #define	BITS_PER_LONG __LONG_BIT
 #if BITS_PER_LONG == 64
 
