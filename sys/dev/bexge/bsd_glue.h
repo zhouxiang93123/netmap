@@ -30,6 +30,7 @@ typedef uint8_t         u8;
 typedef uint8_t         __u8;
 typedef int8_t          s8;
 typedef uint16_t        u16;
+typedef uint16_t        __u16;
 typedef uint16_t        __be16;
 typedef uint16_t        __sum16;
 typedef uint16_t        ushort;
@@ -48,7 +49,8 @@ typedef	void *		dma_addr_t;
 #define	ETH_FCS_LEN	4
 #define ETHTOOL_FLASH_MAX_FILENAME       128
 
-
+#define	likely(x)	(x)
+#define	unlikely(x)	(x)
 #define	true		1
 #define	false		0
 
@@ -141,12 +143,113 @@ struct net_device_stats {
         unsigned long   tx_compressed;
 };
 
+struct net_device;
+
+#define HAVE_NET_DEVICE_OPS
+struct net_device_ops {
+        int                     (*ndo_init)(struct net_device *dev);
+        void                    (*ndo_uninit)(struct net_device *dev);
+        int                     (*ndo_open)(struct net_device *dev);
+        int                     (*ndo_stop)(struct net_device *dev);
+        netdev_tx_t             (*ndo_start_xmit) (struct sk_buff *skb,
+                                                   struct net_device *dev);
+        u16                     (*ndo_select_queue)(struct net_device *dev,
+                                                    struct sk_buff *skb);
+        void                    (*ndo_change_rx_flags)(struct net_device *dev,
+                                                       int flags);
+        void                    (*ndo_set_rx_mode)(struct net_device *dev);
+        void                    (*ndo_set_multicast_list)(struct net_device *dev);
+        int                     (*ndo_set_mac_address)(struct net_device *dev,
+                                                       void *addr);
+        int                     (*ndo_validate_addr)(struct net_device *dev);
+        int                     (*ndo_do_ioctl)(struct net_device *dev,
+                                                struct ifreq *ifr, int cmd);
+        int                     (*ndo_set_config)(struct net_device *dev,
+                                                  struct ifmap *map);
+        int                     (*ndo_change_mtu)(struct net_device *dev,
+                                                  int new_mtu);
+        int                     (*ndo_neigh_setup)(struct net_device *dev,
+                                                   struct neigh_parms *);
+        void                    (*ndo_tx_timeout) (struct net_device *dev);
+
+        struct rtnl_link_stats64* (*ndo_get_stats64)(struct net_device *dev,
+                                                     struct rtnl_link_stats64 *storage);
+        struct net_device_stats* (*ndo_get_stats)(struct net_device *dev);
+
+        void                    (*ndo_vlan_rx_register)(struct net_device *dev,
+                                                        struct vlan_group *grp);
+        void                    (*ndo_vlan_rx_add_vid)(struct net_device *dev,
+                                                       unsigned short vid);
+        void                    (*ndo_vlan_rx_kill_vid)(struct net_device *dev,
+                                                        unsigned short vid);
+#ifdef CONFIG_NET_POLL_CONTROLLER
+        void                    (*ndo_poll_controller)(struct net_device *dev);
+        int                     (*ndo_netpoll_setup)(struct net_device *dev,
+                                                     struct netpoll_info *info);
+        void                    (*ndo_netpoll_cleanup)(struct net_device *dev);
+#endif
+        int                     (*ndo_set_vf_mac)(struct net_device *dev,
+                                                  int queue, u8 *mac);
+        int                     (*ndo_set_vf_vlan)(struct net_device *dev,
+                                                   int queue, u16 vlan, u8 qos);
+        int                     (*ndo_set_vf_tx_rate)(struct net_device *dev,
+                                                      int vf, int rate);
+        int                     (*ndo_get_vf_config)(struct net_device *dev,
+                                                     int vf,
+                                                     struct ifla_vf_info *ivf);
+        int                     (*ndo_set_vf_port)(struct net_device *dev,
+                                                   int vf,
+                                                   struct nlattr *port[]);
+        int                     (*ndo_get_vf_port)(struct net_device *dev,
+                                                   int vf, struct sk_buff *skb);
+        int                     (*ndo_setup_tc)(struct net_device *dev, u8 tc);
+#if defined(CONFIG_FCOE) || defined(CONFIG_FCOE_MODULE)
+        int                     (*ndo_fcoe_enable)(struct net_device *dev);
+        int                     (*ndo_fcoe_disable)(struct net_device *dev);
+        int                     (*ndo_fcoe_ddp_setup)(struct net_device *dev,
+                                                      u16 xid,
+                                                      struct scatterlist *sgl,
+                                                      unsigned int sgc);
+        int                     (*ndo_fcoe_ddp_done)(struct net_device *dev,
+                                                     u16 xid);
+        int                     (*ndo_fcoe_ddp_target)(struct net_device *dev,
+                                                       u16 xid,
+                                                       struct scatterlist *sgl,
+                                                       unsigned int sgc);
+#define NETDEV_FCOE_WWNN 0
+#define NETDEV_FCOE_WWPN 1
+        int                     (*ndo_fcoe_get_wwn)(struct net_device *dev,
+                                                    u64 *wwn, int type);
+#endif
+#ifdef CONFIG_RFS_ACCEL
+        int                     (*ndo_rx_flow_steer)(struct net_device *dev,
+                                                     const struct sk_buff *skb,
+                                                     u16 rxq_index,
+                                                     u32 flow_id);
+#endif
+        int                     (*ndo_add_slave)(struct net_device *dev,
+                                                 struct net_device *slave_dev);
+        int                     (*ndo_del_slave)(struct net_device *dev,
+                                                 struct net_device *slave_dev);
+        u32                     (*ndo_fix_features)(struct net_device *dev,
+                                                    u32 features);
+        int                     (*ndo_set_features)(struct net_device *dev,
+                                                    u32 features);
+};
+
 struct net_device {
 	char                    name[IFNAMSIZ];
 
 	unsigned char           *dev_addr;
 	unsigned char		addr_len;
 	struct net_device_stats stats;
+
+	unsigned int            flags;  /* interface flags (a la BSD)   */
+	unsigned int            mtu;    /* interface MTU value          */
+
+
+	unsigned int            irq;            /* device IRQ number    */
+
 };
 
 void netif_carrier_on(struct net_device *dev);
@@ -287,6 +390,8 @@ struct sk_buff {
 	unsigned int            data_len;
 	u8		ip_summed;
 
+	__u16                   vlan_tci;
+
         /* These elements must be at the end, see alloc_skb() for details.  */
         sk_buff_data_t          end;
 	unsigned char           *head,
@@ -308,6 +413,11 @@ static inline unsigned char *skb_end_pointer(const struct sk_buff *skb)
 
 #define skb_shinfo(SKB)   ((struct skb_shared_info *)(skb_end_pointer(SKB)))
 
+static inline unsigned int skb_headlen(const struct sk_buff *skb)
+{
+        return skb->len - skb->data_len;
+}
+
 static inline int skb_is_gso(const struct sk_buff *skb)
 {       
         return skb_shinfo(skb)->gso_size;
@@ -317,6 +427,15 @@ static inline int skb_is_gso_v6(const struct sk_buff *skb)
         return skb_shinfo(skb)->gso_type & SKB_GSO_TCPV6;
 }
 
+
+//---		include/linux/if_link.h
+struct ifla_vf_info {
+        __u32 vf;
+        __u8 mac[32];
+        __u32 vlan;
+        __u32 qos;
+        __u32 tx_rate;
+};
 
 //---------
 struct msix_entry {
@@ -394,13 +513,50 @@ struct ipv6hdr {
         struct  in6_addr        daddr;
 };
 
+struct rcu_head {
+};
 
-// include/linux/if_vlan.h
-#define VLAN_N_VID               4096
-#define VLAN_PRIO_SHIFT          13
-#define VLAN_PRIO_MASK           0xe000 /* Priority Code Point */
+//--	 include/linux/if_vlan.h
+#define VLAN_PRIO_MASK          0xe000 /* Priority Code Point */
+#define VLAN_PRIO_SHIFT         13
+#define VLAN_CFI_MASK           0x1000 /* Canonical Format Indicator */
+#define VLAN_TAG_PRESENT        VLAN_CFI_MASK
+#define VLAN_VID_MASK           0x0fff /* VLAN Identifier */
+#define VLAN_N_VID              4096
+#define VLAN_GROUP_ARRAY_SPLIT_PARTS  8
+#define VLAN_GROUP_ARRAY_PART_LEN     (VLAN_N_VID/VLAN_GROUP_ARRAY_SPLIT_PARTS)
 
-// include/net/ipv6.h:
+struct hlist_node {
+};
+
+struct vlan_group {
+        struct net_device       *real_dev; /* The ethernet(like) device
+                                            * the vlan is attached to.
+                                            */
+        unsigned int            nr_vlans;
+        int                     killall;
+        struct hlist_node       hlist;  /* linked list */
+        struct net_device **vlan_devices_arrays[VLAN_GROUP_ARRAY_SPLIT_PARTS];
+        struct rcu_head         rcu;
+};
+
+
+#define vlan_tx_tag_present(__skb)      ((__skb)->vlan_tci & VLAN_TAG_PRESENT)
+#define vlan_tx_tag_get(__skb)          ((__skb)->vlan_tci & ~VLAN_TAG_PRESENT)
+
+static inline void vlan_group_set_device(struct vlan_group *vg,
+                                         u16 vlan_id,
+                                         struct net_device *dev)
+{
+        struct net_device **array;
+        if (!vg)
+                return;
+        array = vg->vlan_devices_arrays[vlan_id / VLAN_GROUP_ARRAY_PART_LEN];
+        array[vlan_id % VLAN_GROUP_ARRAY_PART_LEN] = dev;
+}
+ 
+
+//--		 include/net/ipv6.h:
 #define NEXTHDR_TCP		6	// XXX
 #define NEXTHDR_UDP		17	// XXX
 
