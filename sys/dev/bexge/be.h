@@ -19,151 +19,7 @@
 #define BE_H
 
 #ifdef __FreeBSD__
-#include <sys/param.h>
-#include <sys/conf.h>
-#include <sys/bus.h>            // device_method_t
-#include <sys/kernel.h>
-#include <sys/module.h>         // declare_module
-#include <sys/types.h>
-#include <dev/pci/pcivar.h>
-#include <dev/pci/pcireg.h>
-#include <machine/pci_cfgreg.h>
-
-#include <sys/socket.h> // ifru_addr
-#include <net/if.h>
-#include <net/ethernet.h>
-//#include <net/if_vlan_var.h>
-#include <net/if_arp.h>
-
-/* linux compatibility stuff */
-typedef uint8_t         u8;
-typedef uint8_t         __u8;
-typedef int8_t          s8;
-typedef uint16_t        u16;
-typedef uint16_t        __be16;
-typedef uint16_t        __sum16;
-typedef uint16_t        ushort;
-typedef uint32_t        u32;
-typedef uint32_t        __be32;
-typedef int32_t         s32; 
-typedef uint64_t        u64;
-typedef uint64_t        ulong;
-typedef boolean_t       bool;
-typedef volatile int	atomic_t;
-#define	__iomem
-typedef	void *		dma_addr_t;
-#define	 ETH_ALEN	ETHER_ADDR_LEN
-#define	true		1
-
-struct device {
-};
-
-struct net_device {
-};
-
-struct pci_dev {	//	include/linux/pci.h
-	// u16	vendor;
-	u16	device;
-	struct device dev;
-};
-
-#if defined(__i386__) || defined(__amd64__)
-static __inline
-void prefetch(void *x)
-{
-        __asm volatile("prefetcht0 %0" :: "m" (*(unsigned long *)x));
-}
 #else
-#define prefetch(x)
-#endif
-
-#define	module_param(a, b, c)
-#define	MODULE_PARM_DESC(a, b)
-struct pci_devtab {
-        u16 vendor;
-        u16 device;
-};
-
-#define	DEFINE_PCI_DEVICE_TABLE(x)	struct pci_devtab x[]
-#define	PCI_DEVICE(v, d)	v, d
-#define	MODULE_DEVICE_TABLE(bus, ids)
-
-#define netdev_priv(dev)	((void *)(dev))
-
-// /home/luigi/IMAGES/linux-2.6.39.4/include/linux/dma-mapping-broken.h
-typedef int gfp_t;
-#define BUG_ON(x)
-
-#define	GFP_KERNEL	0	// XXX
-#define ioread32(a)	(*(u32 *)(a))
-#define iowrite32(d, a)	*(u32 *)(a) = (d)
-extern void *
-dma_alloc_coherent(struct device *dev, size_t size, dma_addr_t *dma_handle,
-                   gfp_t flag);
-
-extern void
-dma_free_coherent(struct device *dev, size_t size, void *cpu_addr,
-                    dma_addr_t dma_handle);
-
-// include/linux/etherdevice.h
-static inline int is_multicast_ether_addr(const u8 *addr)
-{
-        return 0x01 & addr[0];
-}
-static inline int is_zero_ether_addr(const u8 *addr)
-{ 
-        return !(addr[0] | addr[1] | addr[2] | addr[3] | addr[4] | addr[5]);
-}
-static inline int is_valid_ether_addr(const u8 *addr)
-{ 
-        /* FF:FF:FF:FF:FF:FF is a multicast address so we don't need to
-         * explicitly check for it here. */
-        return !is_multicast_ether_addr(addr) && !is_zero_ether_addr(addr);
-}
-
-struct sk_buff {
-};
-
-#include <netinet/in.h>
-// #include <netinet/ip.h>
-#include <netinet/ip6.h>
-// include/linux/ip.h
-struct iphdr {
-#if BYTE_ORDER == LITTLE_ENDIAN
-        __u8    ihl:4,
-                version:4;
-#elif BYTE_ORDER == BIG_ENDIAN
-        __u8    version:4,
-                ihl:4;
-#else
-#error  "Please fix <asm/byteorder.h>"
-#endif
-        __u8    tos;
-        __be16  tot_len;
-        __be16  id;
-        __be16  frag_off;
-        __u8    ttl;
-        __u8    protocol;
-        __sum16 check;  
-        __be32  saddr;
-        __be32  daddr;
-        /*The options start here. */
-};
-
-
-static inline struct iphdr *ip_hdr(const struct sk_buff *skb)
-{
-        return 0; // XXX (struct iphdr *)skb_network_header(skb);
-}
-static inline struct ip6hdr *ipv6_hdr(const struct sk_buff *skb)
-{
-        return 0; // XXX (struct iphdr *)skb_network_header(skb);
-}
-
-
-/* end linux compatibility stuff */
-
-#else /* linux */
 #include <linux/pci.h>
 #include <linux/etherdevice.h>
 #include <linux/version.h>
@@ -303,7 +159,7 @@ struct be_eq_obj {
 	u16 cur_eqd;		/* in usecs */
 	u8  eq_idx;
 
-	// struct napi_struct napi;
+	struct napi_struct napi;
 };
 
 struct be_mcc_obj {
@@ -335,7 +191,7 @@ struct be_tx_obj {
 /* Struct to remember the pages posted for rx frags */
 struct be_rx_page_info {
 	struct page *page;
-	// DEFINE_DMA_UNMAP_ADDR(bus);
+	DEFINE_DMA_UNMAP_ADDR(bus);
 	u16 page_offset;
 	bool last_page_user;
 };
@@ -395,7 +251,7 @@ struct be_drv_stats {
 };
 
 struct be_vf_cfg {
-	unsigned char vf_mac_addr[ETHER_ADDR_LEN];
+	unsigned char vf_mac_addr[ETH_ALEN];
 	u32 vf_if_handle;
 	u32 vf_pmac_id;
 	u16 vf_vlan_tag;
@@ -412,17 +268,17 @@ struct be_adapter {
 	u8 __iomem *db;		/* Door Bell */
 	u8 __iomem *pcicfg;	/* PCI config space */
 
-	// struct mutex mbox_lock; /* For serializing mbox cmds to BE card */
+	struct mutex mbox_lock; /* For serializing mbox cmds to BE card */
 	struct be_dma_mem mbox_mem;
 	/* Mbox mem is adjusted to align to 16 bytes. The allocated addr
 	 * is stored for freeing purpose */
 	struct be_dma_mem mbox_mem_alloced;
 
-	// struct be_mcc_obj mcc_obj;
-	// spinlock_t mcc_lock;	/* For serializing mcc cmds to BE card */
-	// spinlock_t mcc_cq_lock;
+	struct be_mcc_obj mcc_obj;
+	spinlock_t mcc_lock;	/* For serializing mcc cmds to BE card */
+	spinlock_t mcc_cq_lock;
 
-	//struct msix_entry msix_entries[BE_MAX_MSIX_VECTORS];
+	struct msix_entry msix_entries[BE_MAX_MSIX_VECTORS];
 	bool msix_enabled;
 	bool isr_registered;
 
@@ -444,14 +300,14 @@ struct be_adapter {
 	struct vlan_group *vlan_grp;
 	u16 vlans_added;
 	u16 max_vlans;	/* Number of vlans supported */
-	// u8 vlan_tag[VLAN_N_VID];
+	u8 vlan_tag[VLAN_N_VID];
 	u8 vlan_prio_bmap;	/* Available Priority BitMap */
 	u16 recommended_prio;	/* Recommended Priority */
 	struct be_dma_mem mc_cmd_mem;
 
 	struct be_dma_mem stats_cmd;
 	/* Work queue used to perform periodic tasks like getting statistics */
-	// struct delayed_work work;
+	struct delayed_work work;
 	u16 work_counter;
 
 	/* Ethtool knobs and info */
@@ -477,7 +333,7 @@ struct be_adapter {
 	u8 autoneg;
 	u8 generation;		/* BladeEngine ASIC generation */
 	u32 flash_status;
-	// struct completion flash_compl;
+	struct completion flash_compl;
 
 	bool be3_native;
 	bool sriov_enabled;
@@ -487,7 +343,6 @@ struct be_adapter {
 	u8 hba_port_num;
 	u16 pvid;
 };
-
 
 #define be_physfn(adapter) (!adapter->is_virtfn)
 
@@ -635,6 +490,4 @@ extern void be_cq_notify(struct be_adapter *adapter, u16 qid, bool arm,
 extern void be_link_status_update(struct be_adapter *adapter, bool link_up);
 extern void netdev_stats_update(struct be_adapter *adapter);
 extern int be_load_fw(struct be_adapter *adapter, u8 *func);
-
 #endif				/* BE_H */
-

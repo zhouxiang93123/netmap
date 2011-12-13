@@ -15,6 +15,7 @@
  * Costa Mesa, CA 92626
  */
 
+#include "bsd_glue.h"
 #include "be.h"
 #include "be_cmds.h"
 
