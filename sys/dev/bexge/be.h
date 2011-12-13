@@ -233,6 +233,7 @@ struct be_rx_compl_info {
 	u8 pkt_type;
 };
 
+struct be_adapter;
 struct be_rx_obj {
 	struct be_adapter *adapter;
 	struct be_queue_info q;
@@ -261,8 +262,8 @@ struct be_vf_cfg {
 #define BE_INVALID_PMAC_ID		0xffffffff
 
 struct be_adapter {
-	struct pci_dev *pdev;
-	struct net_device *netdev;
+	struct ifnet *netdev;
+	struct device *pdev;
 
 	u8 __iomem *csr;
 	u8 __iomem *db;		/* Door Bell */
@@ -350,7 +351,7 @@ struct be_adapter {
 #define BE_GEN2 2
 #define BE_GEN3 3
 
-#define lancer_chip(adapter)		(adapter->pdev->device == OC_DEVICE_ID3)
+#define lancer_chip(adapter)		1 // XXX (adapter->pdev->device == OC_DEVICE_ID3)
 
 extern const struct ethtool_ops be_ethtool_ops;
 
@@ -435,24 +436,24 @@ static inline void swap_dws(void *wrb, int len)
 static inline u8 is_tcp_pkt(struct sk_buff *skb)
 {
 	u8 val = 0;
-
+#if 0 // XXX
 	if (ip_hdr(skb)->version == 4)
 		val = (ip_hdr(skb)->protocol == IPPROTO_TCP);
 	else if (ip_hdr(skb)->version == 6)
 		val = (ipv6_hdr(skb)->nexthdr == NEXTHDR_TCP);
-
+#endif
 	return val;
 }
 
 static inline u8 is_udp_pkt(struct sk_buff *skb)
 {
 	u8 val = 0;
-
+#if 0 // XXX
 	if (ip_hdr(skb)->version == 4)
 		val = (ip_hdr(skb)->protocol == IPPROTO_UDP);
 	else if (ip_hdr(skb)->version == 6)
 		val = (ipv6_hdr(skb)->nexthdr == NEXTHDR_UDP);
-
+#endif
 	return val;
 }
 
@@ -476,13 +477,13 @@ static inline void be_vf_eth_addr_generate(struct be_adapter *adapter, u8 *mac)
 {
 	u32 addr;
 
-	addr = jhash(adapter->netdev->dev_addr, ETH_ALEN, 0);
+	addr = (uintptr_t) adapter; // jhash(adapter->netdev->dev_addr, ETH_ALEN, 0);
 
 	mac[5] = (u8)(addr & 0xFF);
 	mac[4] = (u8)((addr >> 8) & 0xFF);
 	mac[3] = (u8)((addr >> 16) & 0xFF);
 	/* Use the OUI from the current MAC address */
-	memcpy(mac, adapter->netdev->dev_addr, 3);
+	memcpy(mac, IF_LLADDR(adapter->netdev), 3);
 }
 
 extern void be_cq_notify(struct be_adapter *adapter, u16 qid, bool arm,
