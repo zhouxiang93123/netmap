@@ -54,17 +54,33 @@ typedef unsigned long	ulong;
 typedef volatile int	atomic_t;
 typedef	void *		dma_addr_t;
 
+typedef	int		netdev_tx_t;
+
+#define atomic_read(x)		(*(x))	// XXX
+#define atomic_dec(x)		(*(x))++	// XXX
+#define atomic_add(what, var)	*(var) += (what)	// XXX
+#define atomic_sub(what, var)	*(var) -= (what)	// XXX
+#define	HZ		hz
+#define	jiffies		ticks
+
 #define	true		1
 #define	false		0
 #define __iomem
 #define BUG_ON(x)
 #define	DEFINE_DMA_UNMAP_ADDR(x)
 
+#define printk(fmt , args...) printf(fmt , ##args)
+#define dev_err(d, fmt, args...)	printf(fmt, ##args)
+#define KERN_INFO       "<6>"   /* informational */
+
 #define	VLAN_N_VID	16	// XXX 4096
+#define ioread32(addr)		(*(uint32_t *)(addr))
+#define iowrite32(val, addr)	*(uint32_t *)(addr) = (val)
 #define pci_read_config_dword(d, r, x)	(*(x) = pci_read_config(d, r, 4))
 #define pci_read_config_word(d, r, x)	(*(x) = pci_read_config(d, r, 2))
 #define pci_read_config_byte(d, r, x)	(*(x) = pci_read_config(d, r, 1))
 #define pci_write_config_byte(d, r, x)	(pci_write_config(d, r, x, 1))
+#define pci_write_config_dword(d, r, x)	(pci_write_config(d, r, x, 4))
 
 #define module_param(var, ty, prot)
 #define MODULE_PARM_DESC(var, desc)
@@ -83,11 +99,16 @@ struct completion {
 struct napi_struct {
 };
 
+#define rtnl_lock()	// XXX mutex_lock(&rtnl_mutex)
+#define rtnl_unlock()	// XXX mutex_unlock(&rtnl_mutex)
 /* remap linux structures into FreeBSD ones */
 #define	net_device	ifnet
+#define netdev_priv(ifp)	((ifp)->if_softc)
 #define	sk_buf	mbuf
 
 #define	ETH_ALEN	ETHER_ADDR_LEN
+#define	ETH_HLEN	14
+#define	ETH_FCS_LEN	4
 struct pci_dev {
 	int vendor;
 	int device;
@@ -125,11 +146,7 @@ be_probe(device_t dev)
  * be_attach
  * Connects driver to the system if probe was success
  */
-int
-be_attach(device_t dev)
-{
-	return ENXIO;
-}
+int be_attach(device_t dev);
 
 /**
  * be_detach
@@ -165,9 +182,7 @@ static device_method_t be_methods[] = {
 };
 
 static driver_t be_driver = {
-	"be",
-	be_methods,
-	sizeof(int), // XXX
+	"be", be_methods, sizeof(struct adapter),
 };
 
 
@@ -274,7 +289,10 @@ static int be_dmaalloc(struct be_adapter *adapter, struct be_dma_mem *mem)
 {
 	mem->va = dma_alloc_coherent(&adapter->pdev->dev, mem->size, &mem->dma,
 				     GFP_KERNEL);
-	return (mem->va) ? 0 : -1
+	if (!mem->va)
+		return -1;
+	memset(mem->va, 0, mem->size);
+	return 0;
 }
 
 static void be_dmafree(struct be_adapter *adapter, struct be_dma_mem *mem)
@@ -291,8 +309,7 @@ static inline bool be_multi_rxq(struct be_adapter *adapter)
 
 static void be_queue_free(struct be_adapter *adapter, struct be_queue_info *q)
 {
-	struct be_dma_mem *mem = &q->dma_mem;
-	be_dmafree(adapter, mem);
+	be_dmafree(adapter, &q->dma_mem);
 }
 
 static int be_queue_alloc(struct be_adapter *adapter, struct be_queue_info *q,
@@ -304,11 +321,8 @@ static int be_queue_alloc(struct be_adapter *adapter, struct be_queue_info *q,
 	q->len = len;
 	q->entry_size = entry_size;
 	mem->size = len * entry_size;
-	mem->va = dma_alloc_coherent(&adapter->pdev->dev, mem->size, &mem->dma,
-				     GFP_KERNEL);
 	if (be_dmaalloc(adapter, mem))
 		return -1;
-	memset(mem->va, 0, mem->size);
 	return 0;
 }
 
@@ -418,6 +432,7 @@ netdev_addr:
 
 void netdev_stats_update(struct be_adapter *adapter)
 {
+#if 0 // XXX to complete
 	struct be_hw_stats *hw_stats = hw_stats_from_cmd(adapter->stats_cmd.va);
 	struct be_rxf_stats *rxf_stats = &hw_stats->rxf;
 	struct be_port_rxf_stats *port_stats =
@@ -470,6 +485,7 @@ void netdev_stats_update(struct be_adapter *adapter)
 	dev_stats->rx_fifo_errors = port_stats->rx_fifo_overflow +
 					port_stats->rx_input_fifo_overflow +
 					rxf_stats->rx_drops_no_pbuf;
+#endif // XXX to complete
 }
 
 void be_link_status_update(struct be_adapter *adapter, bool link_up)
@@ -481,10 +497,10 @@ void be_link_status_update(struct be_adapter *adapter, bool link_up)
 		adapter->link_speed = -1;
 		if (link_up) {
 			netif_carrier_on(netdev);
-			printk(KERN_INFO "%s: Link up\n", netdev->name);
+			printk(KERN_INFO "%s: Link up\n", netdev->if_xname);
 		} else {
 			netif_carrier_off(netdev);
-			printk(KERN_INFO "%s: Link down\n", netdev->name);
+			printk(KERN_INFO "%s: Link down\n", netdev->if_xname);
 		}
 		adapter->link_up = link_up;
 	}
@@ -789,8 +805,8 @@ static int be_change_mtu(struct net_device *netdev, int new_mtu)
 		return -EINVAL;
 	}
 	dev_info(&adapter->pdev->dev, "MTU changed from %d to %d bytes\n",
-			netdev->mtu, new_mtu);
-	netdev->mtu = new_mtu;
+			netdev->if_mtu, new_mtu);
+	netdev->if_mtu = new_mtu;
 	return 0;
 }
 
@@ -868,7 +884,7 @@ static void be_set_multicast_list(struct net_device *netdev)
 {
 	struct be_adapter *adapter = netdev_priv(netdev);
 
-	if (netdev->flags & IFF_PROMISC) {
+	if (netdev->if_flags & IFF_PROMISC) {
 		be_cmd_promiscuous_config(adapter, adapter->port_num, 1);
 		adapter->promiscuous = true;
 		goto done;
@@ -881,7 +897,7 @@ static void be_set_multicast_list(struct net_device *netdev)
 	}
 
 	/* Enable multicast promisc if num configured exceeds what we support */
-	if (netdev->flags & IFF_ALLMULTI ||
+	if (netdev->if_flags & IFF_ALLMULTI ||
 	    netdev_mc_count(netdev) > BE_MAX_MC) {
 		be_cmd_multicast_set(adapter, adapter->if_handle, NULL,
 				&adapter->mc_cmd_mem);
@@ -2134,7 +2150,7 @@ static int be_request_irq(struct be_adapter *adapter,
 	struct net_device *netdev = adapter->netdev;
 	int vec;
 
-	sprintf(eq_obj->desc, "%s-%s", netdev->name, desc);
+	sprintf(eq_obj->desc, "%s-%s", netdev->if_xname, desc);
 	vec = be_msix_vec_get(adapter, eq_obj);
 	return request_irq(vec, handler, 0, eq_obj->desc, context);
 }
@@ -2197,7 +2213,7 @@ static int be_irq_register(struct be_adapter *adapter)
 
 	/* INTx */
 	netdev->irq = adapter->pdev->irq;
-	status = request_irq(netdev->irq, be_intx, IRQF_SHARED, netdev->name,
+	status = request_irq(netdev->irq, be_intx, IRQF_SHARED, netdev->if_xname,
 			adapter);
 	if (status) {
 		dev_err(&adapter->pdev->dev,
@@ -2347,7 +2363,6 @@ static int be_setup_wol(struct be_adapter *adapter, bool enable)
 	cmd.size = sizeof(struct be_cmd_req_acpi_wol_magic_config);
 	if (be_dmaalloc(adapter, &cmd))
 		return -1;
-	memset(cmd.va, 0, cmd.size);
 
 	if (enable) {
 		status = pci_write_config_dword(adapter->pdev,
@@ -2531,7 +2546,7 @@ static int be_clear(struct be_adapter *adapter)
 	return 0;
 }
 
-
+#if 0 // XXX unsupported
 #define FW_FILE_HDR_SIGN 	"ServerEngines Corp. "
 static bool be_flash_redboot(struct be_adapter *adapter,
 			const u8 *p, u32 img_start, int image_size,
@@ -2759,6 +2774,7 @@ static struct net_device_ops be_netdev_ops = {
 	.ndo_set_vf_tx_rate	= be_set_vf_tx_rate,
 	.ndo_get_vf_config	= be_get_vf_config
 };
+#endif /* XXX unsupported */
 
 static void be_netdev_init(struct net_device *netdev)
 {
@@ -2777,7 +2793,7 @@ static void be_netdev_init(struct net_device *netdev)
 	if (lancer_chip(adapter))
 		netdev->vlan_features |= NETIF_F_TSO6;
 
-	netdev->flags |= IFF_MULTICAST;
+	netdev->if_flags |= IFF_MULTICAST;
 
 	adapter->rx_csum = true;
 
@@ -2903,7 +2919,6 @@ static int be_ctrl_init(struct be_adapter *adapter)
 		status = -ENOMEM;
 		goto free_mbox;
 	}
-	memset(mc_cmd_mem->va, 0, mc_cmd_mem->size);
 
 	mutex_init(&adapter->mbox_lock);
 	spin_lock_init(&adapter->mcc_lock);
@@ -2937,7 +2952,6 @@ static int be_stats_init(struct be_adapter *adapter)
 	cmd->size = sizeof(struct be_cmd_req_get_stats);
 	if (be_dmaalloc(adapter, cmd))
 		return -1;
-	memset(cmd->va, 0, cmd->size);
 	return 0;
 }
 
@@ -3098,12 +3112,15 @@ static int lancer_test_and_set_rdy_state(struct be_adapter *adapter)
 	return status;
 }
 
-static int __devinit be_probe(struct pci_dev *pdev,
-			const struct pci_device_id *pdev_id)
+/* on linux this is be_probe */
+static int __devinit be_attach(device_t dev)
 {
 	int status = 0;
 	struct be_adapter *adapter;
 	struct net_device *netdev;
+
+	adapter = device_get_softc(dev);
+	adapter->dev = dev;
 
 	status = pci_enable_device(pdev);
 	if (status)
@@ -3226,6 +3243,7 @@ do_none:
 	return status;
 }
 
+#if 0 // XXX unsupported
 static int be_suspend(struct pci_dev *pdev, pm_message_t state)
 {
 	struct be_adapter *adapter = pci_get_drvdata(pdev);
@@ -3286,6 +3304,7 @@ static int be_resume(struct pci_dev *pdev)
 	schedule_delayed_work(&adapter->work, msecs_to_jiffies(100));
 	return 0;
 }
+#endif // XXX unsupported
 
 /*
  * An FLR will stop BE from DMAing any data.
@@ -3391,6 +3410,7 @@ err:
 	dev_err(&adapter->pdev->dev, "EEH resume failed\n");
 }
 
+#if 0 // XXX unused
 static struct pci_error_handlers be_eeh_handlers = {
 	.error_detected = be_eeh_err_detected,
 	.slot_reset = be_eeh_reset,
@@ -3408,7 +3428,6 @@ static struct pci_driver be_driver = {
 	.err_handler = &be_eeh_handlers
 };
 
-#if 0 // XXX unused
 static int __init be_init_module(void)
 {
 	if (rx_frag_size != 8192 && rx_frag_size != 4096 &&

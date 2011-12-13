@@ -233,7 +233,6 @@ struct be_rx_compl_info {
 	u8 pkt_type;
 };
 
-struct be_adapter;
 struct be_rx_obj {
 	struct be_adapter *adapter;
 	struct be_queue_info q;
