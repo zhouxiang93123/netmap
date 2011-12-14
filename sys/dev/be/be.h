@@ -20,16 +20,17 @@
 
 #include <linux/pci.h>
 #include <linux/etherdevice.h>
-#include <linux/version.h>
+// #include <linux/version.h>
 #include <linux/delay.h>
 #include <net/tcp.h>
-#include <net/ip.h>
+#include <linux/ip.h>
 #include <net/ipv6.h>
 #include <linux/if_vlan.h>
 #include <linux/workqueue.h>
 #include <linux/interrupt.h>
-#include <linux/firmware.h>
+// #include <linux/firmware.h>
 #include <linux/slab.h>
+#include <linux/mutex.h>
 
 #include "be_hw.h"
 
@@ -156,7 +157,7 @@ struct be_eq_obj {
 	u16 cur_eqd;		/* in usecs */
 	u8  eq_idx;
 
-	struct napi_struct napi;
+	// struct napi_struct napi;
 };
 
 struct be_mcc_obj {

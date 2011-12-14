@@ -53,9 +53,10 @@
 #define OC_DEVICE_ID2		0x710	/* Device Id for BE3 cards */
 #define OC_DEVICE_ID3		0xe220	/* Device id for Lancer cards */
 
-static inline char *nic_name(struct pci_dev *pdev)
+/* XXX really a waste to make this inline */
+static inline char *nic_name(device_t dev)
 {
-	switch (pdev->device) {
+	switch (pci_get_device(dev)) {
 	case OC_DEVICE_ID1:
 		return OC_NAME;
 	case OC_DEVICE_ID2:
@@ -100,6 +101,15 @@ struct be_dma_mem {
 	void *va;
 	dma_addr_t dma;
 	u32 size;
+
+	// FreeBSD variables
+        bus_addr_t              dma_paddr;
+        caddr_t                 dma_vaddr;
+        bus_dma_tag_t           dma_tag;
+        bus_dmamap_t            dma_map;
+        bus_dma_segment_t       dma_seg;
+        bus_size_t              dma_size;
+        int                     dma_nseg;
 };
 
 struct be_queue_info {
@@ -262,7 +272,7 @@ struct be_vf_cfg {
 
 struct be_adapter {
 	struct ifnet *netdev;
-	struct device *pdev;
+	device_t pdev;
 
 	u8 __iomem *csr;
 	u8 __iomem *db;		/* Door Bell */
@@ -344,6 +354,7 @@ struct be_adapter {
 	u16 pvid;
 };
 
+/* is this a phisical device ? valid only after be_check_sriov_fn_type() */
 #define be_physfn(adapter) (!adapter->is_virtfn)
 
 /* BladeEngine Generation numbers */
