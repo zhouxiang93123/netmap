@@ -292,7 +292,7 @@ struct be_adapter {
 	bool msix_enabled;
 	bool isr_registered;
 
-	/* TX Rings */
+	/* TX Rings */ 		// XXX rings, but just one ?
 	struct be_eq_obj tx_eq;
 	struct be_tx_obj tx_obj;
 	struct be_tx_stats tx_stats;

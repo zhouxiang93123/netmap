@@ -286,6 +286,9 @@ static inline bool be_multi_rxq(struct be_adapter *adapter)
 	return (adapter->num_rx_qs > 1);
 }
 
+/*
+ * allocate and free the memory for a queue.
+ */
 static void be_queue_free(struct be_adapter *adapter, struct be_queue_info *q)
 {
 	be_dma_free(adapter, &q->dma_mem);
@@ -305,6 +308,7 @@ static int be_queue_alloc(struct be_adapter *adapter, struct be_queue_info *q,
 	return 0;
 }
 
+/* XXX what ? */
 static void be_intr_set(struct be_adapter *adapter, bool enable)
 {
 	u8 __iomem *addr = adapter->pcicfg + PCICFG_MEMBAR_CTRL_INT_CTRL_OFFSET;
@@ -324,6 +328,10 @@ static void be_intr_set(struct be_adapter *adapter, bool enable)
 	iowrite32(reg, addr);
 }
 
+/*
+ * the *_notify routines presumably acknowledge individual interrupts.
+ * For the queue, the command seems to be the number of slots processed.
+ */
 static void be_rxq_notify(struct be_adapter *adapter, u16 qid, u16 posted)
 {
 	u32 val = 0;
@@ -334,6 +342,11 @@ static void be_rxq_notify(struct be_adapter *adapter, u16 qid, u16 posted)
 	iowrite32(val, adapter->db + DB_RQ_OFFSET);
 }
 
+/*
+ * write the tail register for the queue.
+ * Apparently there is only one command register for the tx queue(s)
+ * so there is no point in having multiple ones ?
+ */
 static void be_txq_notify(struct be_adapter *adapter, u16 qid, u16 posted)
 {
 	u32 val = 0;
@@ -559,6 +572,10 @@ static void be_tx_rate_update(struct be_adapter *adapter)
 }
 #endif // XXX no stats support
 
+/*
+ * update tx statistics.
+ * XXX could be done inline.
+ */
 static void be_tx_stats_update(struct be_adapter *adapter,
 			u32 wrb_cnt, u32 copied, u32 gso_segs, bool stopped)
 {
@@ -733,7 +750,9 @@ dma_err:
 	return 0;
 }
 
-/* inject a packet on the device or queue ? */
+/*
+ * queue a packet into the (single) transmit queue.
+ */
 static netdev_tx_t be_xmit(struct sk_buff *skb,
 			struct net_device *netdev)
 {
@@ -1314,6 +1333,9 @@ static void be_parse_rx_compl_v0(struct be_adapter *adapter,
 					compl);
 }
 
+/*
+ * read the completion status of a slot (?)
+ */
 static struct be_rx_compl_info *be_rx_compl_get(struct be_rx_obj *rxo)
 {
 	struct be_eth_rx_compl *compl = queue_tail_node(&rxo->cq);
@@ -1364,6 +1386,8 @@ static inline struct page *be_alloc_pages(u32 size, gfp_t gfp)
 /*
  * Allocate a page, split it to fragments of size rx_frag_size and post as
  * receive buffers to BE
+ *
+ * XXX this routine replenishes the receive ring
  */
 static void be_post_rx_frags(struct be_rx_obj *rxo, gfp_t gfp)
 {
@@ -1440,6 +1464,9 @@ static struct be_eth_tx_compl *be_tx_compl_get(struct be_queue_info *tx_cq)
 	return txcp;
 }
 
+/*
+ * return the mbufs that have been completed.
+ */
 static void be_tx_compl_process(struct be_adapter *adapter, u16 last_index)
 {
 	struct be_queue_info *txq = &adapter->tx_obj.q;
@@ -1547,6 +1574,9 @@ static void be_rx_q_clean(struct be_adapter *adapter, struct be_rx_obj *rxo)
 	BUG_ON(atomic_read(&rxq->used));
 }
 
+/*
+ * flush the tx queue, sleeping for at most 200ms in total
+ */
 static void be_tx_compl_clean(struct be_adapter *adapter)
 {
 	struct be_queue_info *tx_cq = &adapter->tx_obj.cq;
@@ -1891,6 +1921,9 @@ static inline bool do_gro(struct be_rx_compl_info *rxcp)
 	return (rxcp->tcpf && !rxcp->err) ? true : false;
 }
 
+/*
+ * equivalent of the be_rxeof routine
+ */
 static int be_poll_rx(struct napi_struct *napi, int budget)
 {
 	struct be_eq_obj *rx_eq = container_of(napi, struct be_eq_obj, napi);
@@ -1933,6 +1966,8 @@ static int be_poll_rx(struct napi_struct *napi, int budget)
 
 /* As TX and MCC share the same EQ check for both TX and MCC completions.
  * For TX/MCC we don't honour budget; consume everything
+ *
+ * the be_txeof() routine...
  */
 static int be_poll_tx_mcc(struct napi_struct *napi, int budget)
 {
@@ -2299,6 +2334,9 @@ static int be_close(struct net_device *netdev)
 	return 0;
 }
 
+/*
+ * probably the if_init routine
+ */
 static int be_open(struct net_device *netdev)
 {
 	struct be_adapter *adapter = netdev_priv(netdev);

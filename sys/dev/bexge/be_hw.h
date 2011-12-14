@@ -300,7 +300,14 @@ struct be_eth_rx_d {
 };
 
 /* RX Compl Queue Descriptor */
-
+/*
+ * XXX Explanation of the trick below:
+ * we define the structs amap_eth_rx_compl_v* as an array of bytes,
+ * then the actual object is just a be_eth_rx_compl (4 words)
+ * and the fields in amap_eth_rx_compl_v* are only used to compute
+ * the correct byte. Actually, it seems only for 'valid'
+ * The check is also horrible (read the entire word not just 1 bit).
+ */
 /* Pseudo amap definition for BE2 and BE3 legacy mode eth_rx_compl in which
  * each bit of the actual structure is defined as a byte: used to calculate
  * offset/shift/mask of each field */
