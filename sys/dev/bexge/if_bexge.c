@@ -26,183 +26,9 @@
  * from: head/sys/dev/nxge/if_nxge.c 207554 2010-05-03 07:32:50Z sobomax
  */
 
-#include <sys/param.h>
-#include <sys/kernel.h>
-#include <sys/bus.h>		// device_method_t
-#include <sys/module.h>		// declare_module
-#include <sys/conf.h>
-#include <sys/types.h>
-#include <dev/pci/pcivar.h>
-#include <dev/pci/pcireg.h>
-#include <machine/resource.h>	// SYS_ *
-#include <sys/rman.h>	// RF_ACTIVE *
-#include <machine/pci_cfgreg.h>
-
-#include <sys/socket.h>	// ifru_addr
-#include <net/if.h>
-#include <net/if_dl.h>
-#include <net/if_var.h>
-#include <net/ethernet.h>
-#include <net/if_vlan_var.h>
-#include <net/if_arp.h>
-
-#include <sys/param.h>
-#include <sys/systm.h>
-#if __FreeBSD_version >= 800000
-#include <sys/buf_ring.h>
-#endif
-#include <sys/mbuf.h>
-#include <sys/protosw.h>
-#include <sys/socket.h>
-#include <sys/malloc.h>
-#include <sys/kernel.h>
-#include <sys/module.h>
-#include <sys/sockio.h>
-
-#include <net/if.h>
-#include <net/if_arp.h>
-#include <net/bpf.h>
-#include <net/ethernet.h>
-#include <net/if_dl.h>
-#include <net/if_media.h>
-
-#include <net/bpf.h>
-#include <net/if_types.h>
-#include <net/if_vlan_var.h>
-
-#include <netinet/in_systm.h>
-#include <netinet/in.h>
-#include <netinet/if_ether.h>
-#include <netinet/ip.h>
-#include <netinet/ip6.h>
-#include <netinet/tcp.h>
-#include <netinet/tcp_lro.h>
-#include <netinet/udp.h>
-
-#include <machine/in_cksum.h>
-
-#include <sys/bus.h>
-#include <machine/bus.h>
-#include <sys/rman.h>
-#include <machine/resource.h>
-#include <vm/vm.h>
-#include <vm/pmap.h>
-#include <machine/clock.h>
-#include <dev/pci/pcivar.h>
-#include <dev/pci/pcireg.h>
-#include <sys/proc.h>
-#include <sys/sysctl.h>
-#include <sys/endian.h>
-#include <sys/taskqueue.h>
-#include <sys/pcpu.h>
-#include <sys/smp.h>
-#include <machine/smp.h>
-
-#ifdef IXGBE_IEEE1588
-#include <sys/ieee1588.h>
-#endif
-
-
-typedef	uint8_t		bool;
-typedef	uint8_t		u8;
-typedef	uint16_t	u16;
-typedef	uint32_t	u32;
-typedef	uint64_t	u64;
-typedef unsigned short	ushort;
-typedef unsigned long	ulong;
-typedef volatile int	atomic_t;
-typedef	void *		dma_addr_t;
-
-typedef	int		netdev_tx_t;
-typedef	int		irqreturn_t;
-
-#define upper_32_bits(x)	(((x)>> 32) & 0xffffffff)
-
-#define atomic_read(x)		(*(x))	// XXX
-#define atomic_dec(x)		(*(x))++	// XXX
-#define atomic_add(what, var)	*(var) += (what)	// XXX
-#define atomic_sub(what, var)	*(var) -= (what)	// XXX
-#define	HZ		hz
-#define	jiffies		ticks
-
-#define	true		1
-#define	false		0
-#define __iomem
-#define BUG_ON(x)
-#define	DEFINE_DMA_UNMAP_ADDR(x)
-
-#define printk(fmt , args...) printf(fmt , ##args)
-#define dev_err(d, fmt, args...)	printf(fmt, ##args)
-#define KERN_INFO       "<6>"   /* informational */
-#define DBA_ALIGN	128	// dma memory alignment
-
-#define	VLAN_N_VID	16	// XXX 4096
-#define ioread32(addr)		(*(uint32_t *)(addr))
-#define iowrite32(val, addr)	*(uint32_t *)(addr) = (val)
-#define pci_read_config_dword(d, r, x)	(*(x) = pci_read_config(d, r, 4))
-#define pci_read_config_word(d, r, x)	(*(x) = pci_read_config(d, r, 2))
-#define pci_read_config_byte(d, r, x)	(*(x) = pci_read_config(d, r, 1))
-#define pci_write_config_byte(d, r, x)	(pci_write_config(d, r, x, 1))
-#define pci_write_config_dword(d, r, x)	(pci_write_config(d, r, x, 4))
-
-#define module_param(var, ty, prot)
-#define MODULE_PARM_DESC(var, desc)
-#define MODULE_DEVICE_TABLE(bus, var)
-
-struct mutex {
-};
-typedef struct mutex spinlock_t;
-
-struct msix_entry {
-};
-struct delayed_work {
-};
-struct completion {
-};
-struct napi_struct {
-};
-
-
-#define rtnl_lock()	// XXX mutex_lock(&rtnl_mutex)
-#define rtnl_unlock()	// XXX mutex_unlock(&rtnl_mutex)
-/* remap linux structures into FreeBSD ones */
-#define	net_device	ifnet
-#define netdev_priv(ifp)	((ifp)->if_softc)
-#define	sk_buf	mbuf
-
-#define	ETH_ALEN	ETHER_ADDR_LEN
-#define	ETH_HLEN	14
-#define	ETH_FCS_LEN	4
-struct pci_dev {
-	int vendor;
-	int device;
-};
-
-static int is_valid_ether_addr(u8 *d)
-{
-	/* non zero, non multicast ? */
-
-	if (d[0] & 1)
-		return 0;
-	return (d[0] | d[1] | d[2] | d[3] | d[4] | d[5]);
-}
-
-/*---- more PCI glue ---*/
-
-static void *ioremap_nocache(device_t dev, int bar)
-{
-	return bus_alloc_resource_any(dev, SYS_RES_MEMORY, &bar, RF_ACTIVE);
-}
-
-#define	pci_resource_start(d, ofs)	(d)
-#define	pci_resource_len(d, ofs)	PCI_BAR(ofs)
-
-/*---- PCI glue ---*/
+#include "be_bsd.h"
 
 #include <dev/bexge/be.h>
-
-#define DEFINE_PCI_DEVICE_TABLE(x) struct pci_dev x[]
-#define PCI_DEVICE(v, d)	.vendor = v, .device = d
 
 static struct pci_dev be_dev_ids[];
 
@@ -240,7 +66,7 @@ int be_attach(device_t dev);
 int
 be_detach(device_t dev)
 {
-	struct adapter *adapter = device_get_softc(dev);
+	struct be_adapter *adapter = device_get_softc(dev);
 	// BE_CORE_LOCK(adapter);
 	// be_stop(adapter);
 	// BE_CORE_UNLOCK(adapter);
@@ -371,6 +197,9 @@ static char *ue_status_hi_desc[] = {
 	"Unknown"
 };
 
+/*
+ * callback function for bus_dmamap_load
+ */
 static void
 be_dmamap_cb(void *arg, bus_dma_segment_t * segs, int nseg, int error)   
 {
@@ -380,6 +209,10 @@ be_dmamap_cb(void *arg, bus_dma_segment_t * segs, int nseg, int error)
         return;
 }
 
+/*
+ * allocation function that returns suiably aligned memory
+ * for the descriptors and other regions accessed by the card.
+ */
 static int      
 be_dma_malloc(struct be_adapter *adapter, struct be_dma_mem *dma)
 {
@@ -447,6 +280,7 @@ be_dma_free(struct be_adapter *adapter, struct be_dma_mem *dma)
 }
 
 
+/* true if the adapter has multiple rx queues */
 static inline bool be_multi_rxq(struct be_adapter *adapter)
 {
 	return (adapter->num_rx_qs > 1);
@@ -1884,6 +1718,10 @@ tx_eq_free:
 	return -1;
 }
 
+/*
+ * receive queues have 3 blocks: rxq, cq, eq for (i guess)
+ * data, control, events.
+ */
 static void be_rx_queues_destroy(struct be_adapter *adapter)
 {
 	struct be_queue_info *q;
@@ -3282,19 +3120,22 @@ static int __devinit be_attach(device_t dev)
 	struct be_adapter *adapter;
 	struct net_device *netdev;	// the 'ifp' in bsd drivers
 
-	adapter = device_get_softc(dev);	/* allocate a descriptor */
-	adapter->pdev = dev;			/* link to the device */
+	/* allocate a softc, and link to the device */
+	adapter = device_get_softc(dev);
+	adapter->pdev = dev;
 
-#if 0 // XXX to be completed
-	... init locks
-	... identify hardware
-	... Do base PCI setup - map BAR0
+	// XXX ... init locks
+	// XXX ... identify hardware
+	// XXX ... Do base PCI setup - map BAR0
+	pci_enable_busmaster(dev);
+
 	... map descriptors
 	... init shared code etc.
 	... setup phy
 	... setup interrupts
 	... setup OS-specific interface (be_netdev_init, if_alloc etc.)
 
+#if 0 // XXX to be completed
 	status = pci_enable_device(pdev);
 	if (status)
 		goto do_none;
@@ -3317,6 +3158,7 @@ static int __devinit be_attach(device_t dev)
 	adapter = netdev_priv(netdev);
 	adapter->pdev = pdev;
 	pci_set_drvdata(pdev, adapter);
+#endif
 
 	status = be_dev_family_check(adapter);
 	if (status)
@@ -3418,7 +3260,6 @@ disable_dev:
 	pci_disable_device(pdev);
 do_none:
 
-#endif // XXX to be completed
 	dev_err(&pdev->dev, "%s initialization failed\n", nic_name(dev));
 	return status;
 }
@@ -3491,7 +3332,7 @@ static int be_resume(struct pci_dev *pdev)
  */
 int be_shutdown(device_t dev)
 {
-	struct adapter *adapter = device_get_softc(dev);
+	struct be_adapter *adapter = device_get_softc(dev);
 
 	if (!adapter)
 		return 0;
