@@ -24,7 +24,7 @@
  */
 
 /*
- * $FreeBSD$
+ * $FreeBSD: head/sys/dev/netmap/netmap.c 228280 2011-12-05 15:21:21Z luigi $
  * $Id$
  *
  * This module supports memory mapped access to network devices,
@@ -56,7 +56,7 @@
  */
 
 #include <sys/cdefs.h> /* prerequisite */
-__FBSDID("$FreeBSD$");
+__FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 228280 2011-12-05 15:21:21Z luigi $");
 
 #include <sys/types.h>
 #include <sys/module.h>
@@ -1246,7 +1246,7 @@ netmap_attach(struct netmap_adapter *na, int num_queues)
 
 	buf = malloc(size, M_DEVBUF, M_NOWAIT | M_ZERO);
 	if (buf) {
-		ifp->if_pspare[0] = buf;
+		WNA(ifp) = buf;
 		na->tx_rings = (void *)((char *)buf + sizeof(*na));
 		na->rx_rings = na->tx_rings + n;
 		bcopy(na, buf, sizeof(*na));
@@ -1276,7 +1276,7 @@ netmap_detach(struct ifnet *ifp)
 		knlist_destroy(&na->rx_rings[i].si.si_note);
 	}
 	bzero(na, sizeof(*na));
-	ifp->if_pspare[0] = NULL;
+	WNA(ifp) = NULL;
 	free(na, M_DEVBUF);
 }
 

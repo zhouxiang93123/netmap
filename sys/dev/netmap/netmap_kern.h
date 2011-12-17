@@ -196,9 +196,11 @@ enum {                                  /* verbose flags */
 };
 
 /*
- * return a pointer to the struct netmap adapter from the ifp
+ * NA returns a pointer to the struct netmap adapter from the ifp.
+ * WNA is used to write it
  */
-#define	NA(_ifp)	((struct netmap_adapter *)(_ifp)->if_pspare[0])
+#define	WNA(_ifp)	(_ifp)->if_pspare[0]
+#define	NA(_ifp)	((struct netmap_adapter *)WNA(_ifp))
 
 
 /*
