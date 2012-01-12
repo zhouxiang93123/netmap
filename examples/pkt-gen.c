@@ -656,6 +656,7 @@ usage(void)
 		"\t-s src-ip		end with %%n to sweep n addresses\n"
 		"\t-D dst-mac		end with %%n to sweep n addresses\n"
 		"\t-S src-mac		end with %%n to sweep n addresses\n"
+		"\t-a			use setaffinity\n"
 		"\t-b burst size		testing, mostly\n"
 		"\t-c cores		cores to use\n"
 		"\t-p threads		processes/threads to use\n"
@@ -683,6 +684,7 @@ main(int arc, char **argv)
 	char *ifname = NULL;
 	int wait_link = 2;
 	int devqueues = 1;	/* how many device queues */
+	int affinity = 0;
 
 	bzero(&g, sizeof(g));
 
@@ -696,11 +698,14 @@ main(int arc, char **argv)
 	g.cpus = 1;
 
 	while ( (ch = getopt(arc, argv,
-			"i:t:r:l:d:s:D:S:b:c:p:T:w:v")) != -1) {
+			"ai:t:r:l:d:s:D:S:b:c:p:T:w:v")) != -1) {
 		switch(ch) {
 		default:
 			D("bad option %c %s", ch, optarg);
 			usage();
+			break;
+		case 'a':	/* force affinity */
+			affinity = 1;
 			break;
 		case 'i':	/* interface */
 			ifname = optarg;
@@ -932,7 +937,7 @@ main(int arc, char **argv)
 		targs[i].qfirst = (g.nthreads > 1) ? i : 0;
 		targs[i].qlast = (g.nthreads > 1) ? i+1 : tifreq.nr_numrings;
 		targs[i].me = i;
-		targs[i].affinity = g.cpus ? i % g.cpus : -1;
+		targs[i].affinity = affinity ? i % g.cpus : -1;
 		if (td_body == sender_body) {
 			/* initialize the packet to send. */
 			initialize_packet(&targs[i]);
