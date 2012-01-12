@@ -3,7 +3,7 @@
 # it should only contain variable definitions -- it is sourced
 # by the shell much like rc.conf* files
 
-fd_size="10240"
+fd_size="12000"
 
 # You can use it e.g. in a local configuration file by writing
 #
@@ -24,10 +24,10 @@ do_copyfiles_user() {
 
 	mkdir -p ${dst}/usr/lib
 
-#	find_progs -L / -P /usr/ports/security/dropbear/work/dropbear-0.52 \
-#		dbclient dropbear
-#	cp -p ${u_progs} ${dst}/bin
-#	cp -p ${u_libs} ${dst}/usr/lib
+	find_progs -L / -P /usr/ports/security/dropbear/work/dropbear-0.52 \
+		dbclient dropbear
+	cp -p ${u_progs} ${dst}/bin
+	cp -p ${u_libs} ${dst}/usr/lib
 
 	find_progs -L / /usr/bin/ssh /usr/bin/scp /usr/sbin/sshd
 	cp -p ${u_progs} ${dst}/bin
@@ -59,7 +59,7 @@ do_copyfiles_user() {
 #	cp -p ${u_progs} ${dst}/bin
 #	cp -p ${u_libs} ${dst}/usr/lib
 
-#	cp -p /usr/local/bin/e3 ${dst}/bin/vi
+	cp -p /usr/bin/vi ${dst}/bin/vi
 
 #	cp -p /tmp/tcpreplay ${dst}/root
 #	cp -p /tmp/netsend ${dst}/bin
