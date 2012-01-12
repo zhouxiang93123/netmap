@@ -312,7 +312,7 @@ main(int argc, char **argv)
 {
 	struct pollfd pollfd[2];
 	int i;
-	u_int burst = 1024;
+	u_int burst = 512;
 	struct my_ring me[2];
 
 	fprintf(stderr, "%s %s built %s %s\n",
