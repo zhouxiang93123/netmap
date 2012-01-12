@@ -1,7 +1,31 @@
-Index: conf/NOTES
+Index: sys/conf/files
 ===================================================================
---- conf/NOTES	(revision 227308)
-+++ conf/NOTES	(working copy)
+--- sys/conf/files	(revision 230008)
++++ sys/conf/files	(working copy)
+@@ -1513,6 +1513,7 @@
+ dev/my/if_my.c			optional my
+ dev/ncv/ncr53c500.c		optional ncv
+ dev/ncv/ncr53c500_pccard.c	optional ncv pccard
++dev/netmap/netmap.c		optional netmap
+ dev/nge/if_nge.c		optional nge
+ dev/nxge/if_nxge.c		optional nxge \
+ 	compile-with "${NORMAL_C} ${NO_WSELF_ASSIGN}"
+Index: sys/conf/options
+===================================================================
+--- sys/conf/options	(revision 230008)
++++ sys/conf/options	(working copy)
+@@ -687,6 +687,7 @@
+ 
+ # various 'device presence' options.
+ DEV_BPF			opt_bpf.h
++DEV_NETMAP		opt_global.h
+ DEV_MCA			opt_mca.h
+ DEV_CARP		opt_carp.h
+ DEV_SPLASH		opt_splash.h
+Index: sys/conf/NOTES
+===================================================================
+--- sys/conf/NOTES	(revision 230008)
++++ sys/conf/NOTES	(working copy)
 @@ -799,6 +799,12 @@
  #  option.  DHCP requires bpf.
  device		bpf
@@ -15,27 +39,15 @@ Index: conf/NOTES
  #  The `disc' device implements a minimal network interface,
  #  which throws away all packets sent and never receives any.  It is
  #  included for testing and benchmarking purposes.
-Index: conf/files
+Index: share/man/man4/Makefile
 ===================================================================
---- conf/files	(revision 227308)
-+++ conf/files	(working copy)
-@@ -1507,6 +1507,7 @@
- dev/my/if_my.c			optional my
- dev/ncv/ncr53c500.c		optional ncv
- dev/ncv/ncr53c500_pccard.c	optional ncv pccard
-+dev/netmap/netmap.c		optional netmap
- dev/nge/if_nge.c		optional nge
- dev/nxge/if_nxge.c		optional nxge
- dev/nxge/xgehal/xgehal-device.c	optional nxge
-Index: conf/options
-===================================================================
---- conf/options	(revision 227308)
-+++ conf/options	(working copy)
-@@ -688,6 +688,7 @@
- 
- # various 'device presence' options.
- DEV_BPF			opt_bpf.h
-+DEV_NETMAP		opt_global.h
- DEV_MCA			opt_mca.h
- DEV_CARP		opt_carp.h
- DEV_SPLASH		opt_splash.h
+--- share/man/man4/Makefile	(revision 230008)
++++ share/man/man4/Makefile	(working copy)
+@@ -257,6 +257,7 @@
+ 	net80211.4 \
+ 	netgraph.4 \
+ 	netintro.4 \
++	netmap.4 \
+ 	${_nfe.4} \
+ 	${_nfsmb.4} \
+ 	ng_async.4 \

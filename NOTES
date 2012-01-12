@@ -2,6 +2,28 @@
 
 # $Id$
 
+20120112 RELENG_8 and RELENG_9
+    Original code committed in HEAD r227614
+    svn diff -r 227613:227614 svn+ssh://svn.freebsd.org/base/head
+    New files:
+	share/man/man4/netmap.4
+	sys/dev/netmap/
+	sys/net/netmap.h
+	sys/net/netmap_user.h
+	tools/tools/netmap/
+    Patches: (sys/conf done in  227845) see netmap-conf.diff
+	share/man/man4/Makefile
+	sys/conf/NOTES
+	sys/conf/files
+	sys/conf/options
+
+    Driver changes (done later)
+	sys/dev/e1000/if_igb.c
+	sys/dev/e1000/if_lem.c
+	sys/dev/e1000/if_em.c
+	sys/dev/re/if_re.c
+	sys/dev/ixgbe/ixgbe.c
+
 20111207 lr performance tests
 
 	ixgbe, RELENG_8 picobsd, no IPFW, no INVARIANTS, no i586
