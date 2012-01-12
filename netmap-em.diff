@@ -11,13 +11,7 @@
  /*********************************************************************
   *  Device identification routine
   *
-@@ -710,10 +716,14 @@
- 		em_get_hw_control(adapter);
- 
- 	/* Tell the stack that the interface is not active */
--	adapter->ifp->if_drv_flags &= ~(IFF_DRV_RUNNING | IFF_DRV_OACTIVE);
-+	adapter->ifp->if_drv_flags &= ~IFF_DRV_RUNNING;
-+	adapter->ifp->if_drv_flags |= IFF_DRV_OACTIVE;
+@@ -710,6 +716,9 @@
  
  	adapter->led_dev = led_create(em_led_func, adapter,
  	    device_get_nameunit(dev));
@@ -98,26 +92,11 @@
  
  	/* No work, make sure watchdog is off */
          if (txr->tx_avail == adapter->num_tx_desc) {
-@@ -3969,20 +4062,76 @@
- 			rxbuf->m_head = NULL;
- 			goto fail;
- 		}
-+
- 		bus_dmamap_sync(rxr->rxtag,
- 		    rxbuf->map, BUS_DMASYNC_PREREAD);
- 
- 		/* Update descriptor */
--		rxr->rx_base[i].buffer_addr = htole64(seg[0].ds_addr);
--		i = j;
--		if (++j == adapter->num_rx_desc)
--			j = 0;
-+		rxr->rx_base[j].buffer_addr = htole64(seg[0].ds_addr);
+@@ -3969,9 +4062,67 @@
  	}
--
--fail:
--	rxr->next_to_refresh = i;
-+	rxr->next_to_check = 0;
-+	rxr->next_to_refresh = 0;
+ 
+ fail:
+ 	rxr->next_to_refresh = i;
  	bus_dmamap_sync(rxr->rxdma.dma_tag, rxr->rxdma.dma_map,
  	    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 +
@@ -178,18 +157,14 @@
 +    }
 +#endif /* DEV_NETMAP */
 +
-+fail:
  	EM_RX_UNLOCK(rxr);
  	return (error);
  }
-@@ -4169,18 +4313,35 @@
+@@ -4169,7 +4313,24 @@
  		E1000_WRITE_REG(hw, E1000_RDBAH(i), (u32)(bus_addr >> 32));
  		E1000_WRITE_REG(hw, E1000_RDBAL(i), (u32)bus_addr);
  		/* Setup the Head and Tail Descriptor Pointers */
--		E1000_WRITE_REG(hw, E1000_RDH(i), rxr->next_to_check);
--		E1000_WRITE_REG(hw, E1000_RDT(i), rxr->next_to_refresh);
-+		E1000_WRITE_REG(hw, E1000_RDH(i), 0);
-+		E1000_WRITE_REG(hw, E1000_RDT(i), adapter->num_rx_desc - 1);
+ 		E1000_WRITE_REG(hw, E1000_RDH(i), rxr->next_to_check);
 +#ifdef DEV_NETMAP
 +		/*
 +		 * an init() while a netmap client is active must
@@ -207,21 +182,9 @@
 +			E1000_WRITE_REG(hw, E1000_RDT(i), t);
 +		} else
 +#endif /* DEV_NETMAP */
-+		E1000_WRITE_REG(hw, E1000_RDT(i), adapter->num_rx_desc - 1);
+ 		E1000_WRITE_REG(hw, E1000_RDT(i), rxr->next_to_refresh);
  	}
  
--	/* Set early receive threshold on appropriate hw */
-+	/* Set PTHRESH for improved jumbo performance */
- 	if (((adapter->hw.mac.type == e1000_ich9lan) ||
- 	    (adapter->hw.mac.type == e1000_pch2lan) ||
- 	    (adapter->hw.mac.type == e1000_ich10lan)) &&
- 	    (ifp->if_mtu > ETHERMTU)) {
- 		u32 rxdctl = E1000_READ_REG(hw, E1000_RXDCTL(0));
- 		E1000_WRITE_REG(hw, E1000_RXDCTL(0), rxdctl | 3);
--		E1000_WRITE_REG(hw, E1000_ERT, 0x100 | (1 << 13));
- 	}
- 		
- 	if (adapter->hw.mac.type == e1000_pch2lan) {
 @@ -4247,6 +4408,19 @@
  
  	EM_RX_LOCK(rxr);
