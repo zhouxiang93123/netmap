@@ -28,6 +28,30 @@
  * $Id: cxgbe_netmap.h 9520 2011-10-24 14:11:01Z svn_landi $
  *
  * netmap modifications for cxgbe
+
+20120120
+t4_sge seems to be the main file for processing.
+
+the device has several queues
+	iq	ingress queue (messages posted ?)
+	fl	freelist queue
+
+buffers are in sd->cl
+
+interrupts are serviced by t4_intr*() which does a atomic_cmpset_int()
+to run only one instance of the driver (service_iq()) and
+then clears the flag at the end.
+The dispatches in there makes a list (iql) of postponed work.
+
+Handlers are cpl_handler[] per packet type.
+	received packets are t4_eth_rx()
+
+the main transmit routine is t4_main.c :: cxgbe_transmit()
+	which ends into t4_sge.c :: t4_eth_tx()
+	and eventually write_txpkt_wr()
+
+refill_fl() is called under lock
+X_RSPD_TYPE_FLBUF	is a data packet, perhaps
  */
 
 #include <net/netmap.h>
