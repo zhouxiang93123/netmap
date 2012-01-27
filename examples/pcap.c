@@ -133,7 +133,7 @@ struct eproto {
 };
 #endif /* !PCAP_ERRBUF_SIZE */
 
-#ifdef __PIC__
+#if 1 // def __PIC__
 /*
  * build as a shared library
  */

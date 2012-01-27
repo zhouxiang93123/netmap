@@ -300,7 +300,7 @@ checksum(const void *data, uint16_t len)
  * Fill a packet with some payload.
  */
 static void
-initialize_packet(struct targ *targ)
+initialize_packet(struct targ *targ, int src_port)
 {
 	struct pkt *pkt = &targ->pkt;
 	struct ether_header *eh;
@@ -318,8 +318,8 @@ initialize_packet(struct targ *targ)
 	pkt->body[i-1] = '\0';
 
 	udp = &pkt->udp;
-	udp->uh_sport = htons(1234);
-        udp->uh_dport = htons(4321);
+	udp->uh_sport = htons(4096 + (src_port & 0xfff));
+	udp->uh_dport = htons(8192 + ((src_port & 0xff)<<4) );
 	udp->uh_ulen = htons(paylen);
 	udp->uh_sum = 0; // checksum(udp, sizeof(*udp));
 
@@ -940,7 +940,7 @@ main(int arc, char **argv)
 		targs[i].affinity = affinity ? i % g.cpus : -1;
 		if (td_body == sender_body) {
 			/* initialize the packet to send. */
-			initialize_packet(&targs[i]);
+			initialize_packet(&targs[i], i);
 		}
 
 		if (pthread_create(&targs[i].thread, NULL, td_body,

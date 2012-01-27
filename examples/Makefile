@@ -17,7 +17,7 @@ LDFLAGS += -lpthread -lpcap
 all: $(PROGS)
 
 testpcap: pcap.c libnetmap.so
-	$(CC) $(CFLAGS) -L. -lnetmap -o ${.TARGET} pcap.c
+	$(CC) $(CFLAGS) -o ${.TARGET} pcap.c
 	
 libnetmap.so:	pcap.c
 	$(CC) $(CFLAGS) -fpic -c ${.ALLSRC}

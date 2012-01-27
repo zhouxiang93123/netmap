@@ -83,50 +83,15 @@ rdtsc(void)
 }
 #endif /* 1 */
 
-#if 0
-
-struct multi_ring {
-	uint32_t	prod_idx;
-	uint32_t	cons_idx;
-	uint32_t	release_idx_1;
-	uint32_t	release_idx_2;
-	uint32_t	ring_size;
-
-	/* other stuff */
-};
-
-/*
- * get_prod_idx()
- *	return the index of a free slot for the producer, can block
- * get_cons_idx()
- *	return the index of a full slot for the consumer, can block
- * release_data()
- *	releases an object, non blocking
- */
-uint32_t
-get_prod_idx(struct multi_ring *r, int blocking)
-{
-}
-
-uint32_t
-get_cons_idx(struct multi_ring *r)
-{
-}
-
-void
-release_obj(struct multi_ring *r)
-{
-}
-#endif /* acquire/release */
-
-/*
- * global arguments for all threads
- */
+/*** global arguments for all threads ***/
 struct glob_arg {
+	struct  {
+		uint32_t	ctr[1024];
+	} v __attribute__ ((aligned(256) ));
 	int m_cycles;	/* million cycles */
 	int nthreads;
 	int cpus;
-	u_int	ctr[1024];
+	int foo;
 };
 
 /*
@@ -247,12 +212,13 @@ usage(void)
 }
 
 
+struct glob_arg g;
 int
 main(int arc, char **argv)
 {
-	struct glob_arg g;
 	int i, ch, report_interval, affinity, align;
 
+	D("g has size %d", (int)sizeof(g));
 	report_interval = 500;	/* ms */
 	affinity = 0;		/* no affinity */
 	align = 0;		/* global variable */
@@ -305,7 +271,7 @@ main(int arc, char **argv)
 		D("bad nthreads %d, using 1", g.nthreads);
 		g.nthreads = 1;
 	}
-	i = sizeof(g.ctr) / g.nthreads*sizeof(g.ctr[0]);
+	i = sizeof(g.v.ctr) / g.nthreads*sizeof(g.v.ctr[0]);
 	if (align < 0 || align > i) {
 		D("bad align %d, max is %d", align, i);
 		align = i;
@@ -328,7 +294,7 @@ main(int arc, char **argv)
 		t->used = 1;
 		t->completed = 0;
 		t->me = i;
-		t->glob_ctr = &g.ctr[(i*align)/sizeof(g.ctr[0])];
+		t->glob_ctr = &g.v.ctr[(i*align)/sizeof(g.v.ctr[0])];
 		D("thread %d ptr %p", i, t->glob_ctr);
 		t->affinity = affinity ? (affinity*i) % g.cpus : -1;
 		if (pthread_create(&t->thread, NULL, td_body, t) == -1) {
