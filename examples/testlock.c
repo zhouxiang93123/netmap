@@ -30,7 +30,6 @@
  * Create multiple threads, possibly bind to cpus, and run a workload.
  */
 
-#include <errno.h>
 #include <pthread.h>	/* pthread_* */
 #include <pthread_np.h>	/* pthread w/ affinity */
 #include <signal.h>	/* signal */
@@ -38,14 +37,11 @@
 #include <stdio.h>
 #include <inttypes.h>	/* PRI* macros */
 #include <string.h>	/* strcmp */
-#include <fcntl.h>	/* open */
-#include <unistd.h>	/* close */
+#include <unistd.h>	/* getopt */
 
 #include <sys/types.h>
 #include <machine/atomic.h>
 
-#include <sys/poll.h>
-#include <sys/param.h>
 #include <sys/cpuset.h>	/* cpu_set */
 #include <sys/sysctl.h>	/* sysctl */
 #include <sys/time.h>	/* timersub */
@@ -131,7 +127,7 @@ struct glob_arg {
 	int nthreads;
 	int cpus;
 	struct {
-		uint64_t	ctr __attribute__ ((__aligned__(64) ));
+		u_int	ctr __attribute__ ((__aligned__(4) ));
 	} v[10];
 };
 
@@ -151,7 +147,7 @@ struct targ {
 };
 
 
-static struct targ *targs;
+static struct targ *ta;
 static int global_nthreads;
 
 /* control-C handler */
@@ -160,12 +156,12 @@ sigint_h(__unused int sig)
 {
 	for (int i = 0; i < global_nthreads; i++) {
 		/* cancel active threads. */
-		if (targs[i].used == 0)
+		if (ta[i].used == 0)
 			continue;
 
 		D("Cancelling thread #%d\n", i);
-		pthread_cancel(targs[i].thread);
-		targs[i].used = 0;
+		pthread_cancel(ta[i].thread);
+		ta[i].used = 0;
 	}
 
 	signal(SIGINT, SIG_DFL);
@@ -176,13 +172,10 @@ sigint_h(__unused int sig)
 static int
 system_ncpus(void)
 {
-	int mib[2], ncpus;
-	size_t len;
-
-	mib[0] = CTL_HW;
-	mib[1] = HW_NCPU;
-	len = sizeof(mib);
-	sysctl(mib, 2, &ncpus, &len, NULL, 0);
+	int mib[2] = { CTL_HW, HW_NCPU}, ncpus;
+	size_t len = sizeof(mib);
+	sysctl(mib, len / sizeof(mib[0]), &ncpus, &len, NULL, 0);
+	D("system had %d cpus", ncpus);
 
 	return (ncpus);
 }
@@ -221,7 +214,7 @@ td_body(void *data)
 		// struct timeval t = { 0, 1000};
 		// select(0, NULL, NULL, NULL, &t);// usleep(1500);
 		for (i = 0; i < 1000000; i++) {
-			atomic_add_64(&(targ->g->v[targ->me].ctr), 1);
+			atomic_add_int(&(targ->g->v[targ->me].ctr), 1);
 			targ->count ++;
 		}
 	}
@@ -258,22 +251,19 @@ usage(void)
 int
 main(int arc, char **argv)
 {
-	int i;
-
 	struct glob_arg g;
+	int i, ch, report_interval, affinity;
 
-	int ch;
-	int report_interval = 1000;	/* report interval */
-	int affinity = 0;
+	report_interval = 500;	/* ms */
+	affinity = 0;		/* no affinity */
 
 	bzero(&g, sizeof(g));
 
 	g.nthreads = 1;
 	g.cpus = 1;
-	g.m_cycles = 10;
+	g.m_cycles = 100;	/* millions */
 
-	while ( (ch = getopt(arc, argv,
-			"a:n:w:c:t:v")) != -1) {
+	while ( (ch = getopt(arc, argv, "a:n:w:c:t:v")) != -1) {
 		switch(ch) {
 		default:
 			D("bad option %c %s", ch, optarg);
@@ -301,47 +291,42 @@ main(int arc, char **argv)
 		}
 	}
 
-	{
-		int n = system_ncpus();
-		if (g.cpus < 0 || g.cpus > n) {
-			D("%d cpus is too high, have only %d cpus", g.cpus, n);
-			usage();
-		}
-		if (g.cpus == 0)
-			g.cpus = n;
+	i = system_ncpus();
+	if (g.cpus < 0 || g.cpus > i) {
+		D("%d cpus is too high, have only %d cpus", g.cpus, i);
+		usage();
 	}
-
-	/* validate provided nthreads. */
+	if (g.cpus == 0)
+		g.cpus = i;
 	if (g.nthreads < 1) {
-		D("bad nthreads %d", g.nthreads);
-		// continue, fail later
+		D("bad nthreads %d, using 1", g.nthreads);
+		g.nthreads = 1;
 	}
 
 	/* Install ^C handler. */
 	global_nthreads = g.nthreads;
 	signal(SIGINT, sigint_h);
 
-	targs = calloc(g.nthreads, sizeof(*targs));
+	ta = calloc(g.nthreads, sizeof(*ta));
 	/*
 	 * Now create the desired number of threads, each one
 	 * using a single descriptor.
  	 */
 	D("start %d threads on %d cores", g.nthreads, g.cpus);
 	for (i = 0; i < g.nthreads; i++) {
-
-		/* start threads. */
-		bzero(&targs[i], sizeof(targs[i]));
-		targs[i].g = &g;
-		targs[i].used = 1;
-		targs[i].completed = 0;
-		targs[i].me = i;
-		targs[i].affinity = affinity ? (affinity*i) % g.cpus : -1;
-		if (pthread_create(&targs[i].thread, NULL, td_body,
-				   &targs[i]) == -1) {
+		struct targ *t = &ta[i];
+		bzero(t, sizeof(*t));
+		t->g = &g;
+		t->used = 1;
+		t->completed = 0;
+		t->me = i;
+		t->affinity = affinity ? (affinity*i) % g.cpus : -1;
+		if (pthread_create(&t->thread, NULL, td_body, t) == -1) {
 			D("Unable to create thread %d", i);
-			targs[i].used = 0;
+			t->used = 0;
 		}
 	}
+	/* the main loop */
 
     {
 	uint64_t my_count = 0, prev = 0;
@@ -362,8 +347,8 @@ main(int arc, char **argv)
 		timersub(&now, &toc, &toc);
 		my_count = 0;
 		for (i = 0; i < g.nthreads; i++) {
-			my_count += targs[i].count;
-			if (targs[i].used == 0)
+			my_count += ta[i].count;
+			if (ta[i].used == 0)
 				done++;
 		}
 		pps = toc.tv_sec* 1000000 + toc.tv_usec;
@@ -380,29 +365,26 @@ main(int arc, char **argv)
 	timerclear(&tic);
 	timerclear(&toc);
 	for (i = 0; i < g.nthreads; i++) {
-		/*
-		 * Join active threads, unregister interfaces and close
-		 * file descriptors.
-		 */
-		pthread_join(targs[i].thread, NULL);
+		pthread_join(ta[i].thread, NULL);
 
-		if (targs[i].completed == 0)
+		if (ta[i].completed == 0)
 			continue;
 
 		/*
 		 * Collect threads o1utput and extract information about
 		 * how log it took to send all the packets.
 		 */
-		count += targs[i].count;
-		if (!timerisset(&tic) || timercmp(&targs[i].tic, &tic, <))
-			tic = targs[i].tic;
-		if (!timerisset(&toc) || timercmp(&targs[i].toc, &toc, >))
-			toc = targs[i].toc;
+		count += ta[i].count;
+		if (!timerisset(&tic) || timercmp(&ta[i].tic, &tic, <))
+			tic = ta[i].tic;
+		if (!timerisset(&toc) || timercmp(&ta[i].toc, &toc, >))
+			toc = ta[i].toc;
 	}
 
 	/* print output. */
 	timersub(&toc, &tic, &toc);
 	delta_t = toc.tv_sec + 1e-6* toc.tv_usec;
+	D("total %8.6f seconds", delta_t);
     }
 
 	return (0);
