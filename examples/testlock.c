@@ -126,9 +126,7 @@ struct glob_arg {
 	int m_cycles;	/* million cycles */
 	int nthreads;
 	int cpus;
-	struct {
-		u_int	ctr __attribute__ ((__aligned__(4) ));
-	} v[10];
+	u_int	ctr[1024];
 };
 
 /*
@@ -139,6 +137,7 @@ struct targ {
 	struct glob_arg *g;
 	int used;
 	int completed;
+	u_int	*glob_ctr;
 	uint64_t count;
 	struct timeval tic, toc;
 	int me;
@@ -214,7 +213,7 @@ td_body(void *data)
 		// struct timeval t = { 0, 1000};
 		// select(0, NULL, NULL, NULL, &t);// usleep(1500);
 		for (i = 0; i < 1000000; i++) {
-			atomic_add_int(&(targ->g->v[targ->me].ctr), 1);
+			atomic_add_int(targ->glob_ctr, 1);
 			targ->count ++;
 		}
 	}
@@ -252,22 +251,26 @@ int
 main(int arc, char **argv)
 {
 	struct glob_arg g;
-	int i, ch, report_interval, affinity;
+	int i, ch, report_interval, affinity, align;
 
 	report_interval = 500;	/* ms */
 	affinity = 0;		/* no affinity */
+	align = 0;		/* global variable */
 
 	bzero(&g, sizeof(g));
 
 	g.nthreads = 1;
 	g.cpus = 1;
-	g.m_cycles = 100;	/* millions */
+	g.m_cycles = 400;	/* millions */
 
-	while ( (ch = getopt(arc, argv, "a:n:w:c:t:v")) != -1) {
+	while ( (ch = getopt(arc, argv, "A:a:n:w:c:t:v")) != -1) {
 		switch(ch) {
 		default:
 			D("bad option %c %s", ch, optarg);
 			usage();
+			break;
+		case 'A':	/* align */
+			align = atoi(optarg);
 			break;
 		case 'a':	/* force affinity */
 			affinity = atoi(optarg);
@@ -302,6 +305,11 @@ main(int arc, char **argv)
 		D("bad nthreads %d, using 1", g.nthreads);
 		g.nthreads = 1;
 	}
+	i = sizeof(g.ctr) / g.nthreads*sizeof(g.ctr[0]);
+	if (align < 0 || align > i) {
+		D("bad align %d, max is %d", align, i);
+		align = i;
+	}
 
 	/* Install ^C handler. */
 	global_nthreads = g.nthreads;
@@ -320,6 +328,8 @@ main(int arc, char **argv)
 		t->used = 1;
 		t->completed = 0;
 		t->me = i;
+		t->glob_ctr = &g.ctr[(i*align)/sizeof(g.ctr[0])];
+		D("thread %d ptr %p", i, t->glob_ctr);
 		t->affinity = affinity ? (affinity*i) % g.cpus : -1;
 		if (pthread_create(&t->thread, NULL, td_body, t) == -1) {
 			D("Unable to create thread %d", i);
