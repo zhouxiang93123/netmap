@@ -31,7 +31,16 @@
  */
 
 #include <pthread.h>	/* pthread_* */
+#if defined(__APPLE__)
+#include <libkern/OSAtomic.h>
+#define atomic_add_int(p, n) OSAtomicAdd32(n, (int *)p)
+#else
+#define HAVE_AFFINITY
+#include <sys/types.h>
+#include <machine/atomic.h>
 #include <pthread_np.h>	/* pthread w/ affinity */
+#include <sys/cpuset.h>	/* cpu_set */
+#endif
 #include <signal.h>	/* signal */
 #include <stdlib.h>
 #include <stdio.h>
@@ -40,10 +49,7 @@
 #include <fcntl.h>	/* open */
 #include <unistd.h>	/* getopt */
 
-#include <sys/types.h>
-#include <machine/atomic.h>
 
-#include <sys/cpuset.h>	/* cpu_set */
 #include <sys/sysctl.h>	/* sysctl */
 #include <sys/time.h>	/* timersub */
 
@@ -159,9 +165,11 @@ getprivs(void)
 }
 
 /* set the thread affinity. */
+/* ARGSUSED */
 static int
-setaffinity(pthread_t me, int i)
+setaffinity(pthread_t __unused me, int __unused i)
 {
+#ifdef HAVE_AFFINITY
 	cpuset_t cpumask;
 
 	if (i == -1)
@@ -175,6 +183,7 @@ setaffinity(pthread_t me, int i)
 		D("Unable to set affinity");
 		return 1;
 	}
+#endif
 	return 0;
 }
 
