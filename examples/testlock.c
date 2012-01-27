@@ -37,6 +37,7 @@
 #include <stdio.h>
 #include <inttypes.h>	/* PRI* macros */
 #include <string.h>	/* strcmp */
+#include <fcntl.h>	/* open */
 #include <unistd.h>	/* getopt */
 
 #include <sys/types.h>
@@ -91,7 +92,7 @@ struct glob_arg {
 	int m_cycles;	/* million cycles */
 	int nthreads;
 	int cpus;
-	int foo;
+	int privs;	// 1 if has IO privileges
 };
 
 /*
@@ -103,7 +104,7 @@ struct targ {
 	int used;
 	int completed;
 	u_int	*glob_ctr;
-	uint64_t count;
+	uint64_t volatile count;
 	struct timeval tic, toc;
 	int me;
 	pthread_t thread;
@@ -118,7 +119,9 @@ static int global_nthreads;
 static void
 sigint_h(__unused int sig)
 {
-	for (int i = 0; i < global_nthreads; i++) {
+	int i;
+
+	for (i = 0; i < global_nthreads; i++) {
 		/* cancel active threads. */
 		if (ta[i].used == 0)
 			continue;
@@ -142,6 +145,17 @@ system_ncpus(void)
 	D("system had %d cpus", ncpus);
 
 	return (ncpus);
+}
+
+int
+getprivs(void)
+{
+	int fd = open("/dev/io", O_RDWR);
+	if (fd < 0) {
+		D("cannot open /dev/io");
+		return 0;
+	}
+	return 1;
 }
 
 /* set the thread affinity. */
@@ -168,7 +182,7 @@ static void *
 td_body(void *data)
 {
 	struct targ *targ = (struct targ *) data;
-	int m, i;
+	int m, i, io = targ->g->privs;
 
 	if (setaffinity(targ->thread, targ->affinity))
 		goto quit;
@@ -178,6 +192,8 @@ td_body(void *data)
 		// struct timeval t = { 0, 1000};
 		// select(0, NULL, NULL, NULL, &t);// usleep(1500);
 		for (i = 0; i < 1000000; i++) {
+			if (io)
+				__asm __volatile("cli; sti;");
 			atomic_add_int(targ->glob_ctr, 1);
 			targ->count ++;
 		}
@@ -225,6 +241,7 @@ main(int arc, char **argv)
 
 	bzero(&g, sizeof(g));
 
+	g.privs = getprivs();
 	g.nthreads = 1;
 	g.cpus = 1;
 	g.m_cycles = 400;	/* millions */
