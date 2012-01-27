@@ -87,6 +87,42 @@ rdtsc(void)
 }
 #endif /* 1 */
 
+#if 0
+
+struct multi_ring {
+	uint32_t	prod_idx;
+	uint32_t	cons_idx;
+	uint32_t	release_idx_1;
+	uint32_t	release_idx_2;
+	uint32_t	ring_size;
+
+	/* other stuff */
+};
+
+/*
+ * get_prod_idx()
+ *	return the index of a free slot for the producer, can block
+ * get_cons_idx()
+ *	return the index of a full slot for the consumer, can block
+ * release_data()
+ *	releases an object, non blocking
+ */
+uint32_t
+get_prod_idx(struct multi_ring *r, int blocking)
+{
+}
+
+uint32_t
+get_cons_idx(struct multi_ring *r)
+{
+}
+
+void
+release_obj(struct multi_ring *r)
+{
+}
+#endif /* acquire/release */
+
 /*
  * global arguments for all threads
  */
@@ -95,7 +131,7 @@ struct glob_arg {
 	int nthreads;
 	int cpus;
 	struct {
-		uint64_t	ctr __attribute__ ((__aligned__(16) ));
+		uint64_t	ctr __attribute__ ((__aligned__(64) ));
 	} v[10];
 };
 
@@ -107,7 +143,7 @@ struct targ {
 	struct glob_arg *g;
 	int used;
 	int completed;
-	volatile uint64_t count;
+	uint64_t count;
 	struct timeval tic, toc;
 	int me;
 	pthread_t thread;
@@ -182,8 +218,8 @@ td_body(void *data)
 	/* main loop.*/
 	gettimeofday(&targ->tic, NULL);
 	for (m = 0; m < targ->g->m_cycles; m++) {
-		struct timeval t = { 0, 1000};
-		select(0, NULL, NULL, NULL, &t);// usleep(1500);
+		// struct timeval t = { 0, 1000};
+		// select(0, NULL, NULL, NULL, &t);// usleep(1500);
 		for (i = 0; i < 1000000; i++) {
 			atomic_add_64(&(targ->g->v[targ->me].ctr), 1);
 			targ->count ++;
@@ -237,14 +273,14 @@ main(int arc, char **argv)
 	g.m_cycles = 10;
 
 	while ( (ch = getopt(arc, argv,
-			"an:w:c:t:v")) != -1) {
+			"a:n:w:c:t:v")) != -1) {
 		switch(ch) {
 		default:
 			D("bad option %c %s", ch, optarg);
 			usage();
 			break;
 		case 'a':	/* force affinity */
-			affinity = 1;
+			affinity = atoi(optarg);
 			break;
 		case 'n':	/* cycles */
 			g.m_cycles = atoi(optarg);
@@ -299,7 +335,7 @@ main(int arc, char **argv)
 		targs[i].used = 1;
 		targs[i].completed = 0;
 		targs[i].me = i;
-		targs[i].affinity = affinity ? i % g.cpus : -1;
+		targs[i].affinity = affinity ? (affinity*i) % g.cpus : -1;
 		if (pthread_create(&targs[i].thread, NULL, td_body,
 				   &targs[i]) == -1) {
 			D("Unable to create thread %d", i);
