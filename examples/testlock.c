@@ -119,6 +119,8 @@ struct glob_arg {
 	int nthreads;
 	int cpus;
 	int privs;	// 1 if has IO privileges
+	int sel_us;	// microseconds in select
+	int usleep_us;	// microseconds in usleep
 };
 
 /*
@@ -217,30 +219,36 @@ setaffinity(pthread_t me, int i)
 static void *
 td_body(void *data)
 {
-	struct targ *targ = (struct targ *) data;
-	int m, i, io = targ->g->privs;
+	struct targ *t = (struct targ *) data;
+	int m, i, io = t->g->privs;
+	int delta = (t->g->sel_us || t->g->usleep_us) ? 1000000 : 1;
 
-	if (setaffinity(targ->thread, targ->affinity))
+	if (setaffinity(t->thread, t->affinity))
 		goto quit;
 	/* main loop.*/
-	gettimeofday(&targ->tic, NULL);
-	for (m = 0; m < targ->g->m_cycles; m++) {
-		int delta = 1000000;
-		//struct timeval t = { 0, 1}; select(0, NULL, NULL, NULL, &t);
-		usleep(1000);
-		for (i = 0; i < 1000000; i+=delta) {
-			if (io)
-				__asm __volatile("cli; sti;");
-			atomic_add_int(targ->glob_ctr, 1);
-			targ->count += delta;
+	gettimeofday(&t->tic, NULL);
+	for (m = 0; m < t->g->m_cycles; m++) {
+		if (delta > 1) {
+			struct timeval to = { 0, t->g->sel_us};
+			if (t->g->sel_us)
+				select(0, NULL, NULL, NULL, &to);
+			if (t->g->usleep_us)
+				usleep(t->g->usleep_us);
+		} else {
+			for (i = 0; i < 1000000; i++) {
+				if (io)
+					__asm __volatile("cli; sti;");
+				atomic_add_int(t->glob_ctr, 1);
+				t->count++;
+			}
 		}
 	}
-	gettimeofday(&targ->toc, NULL);
-	targ->completed = 1;
+	gettimeofday(&t->toc, NULL);
+	t->completed = 1;
 	//targ->count = 0;
 quit:
 	/* reset the ``used`` flag. */
-	targ->used = 0;
+	t->used = 0;
 
 	return (NULL);
 }
@@ -285,7 +293,7 @@ main(int arc, char **argv)
 	g.cpus = 1;
 	g.m_cycles = 400;	/* millions */
 
-	while ( (ch = getopt(arc, argv, "A:a:n:w:c:t:v")) != -1) {
+	while ( (ch = getopt(arc, argv, "A:a:n:w:c:t:vS:U:")) != -1) {
 		switch(ch) {
 		default:
 			D("bad option %c %s", ch, optarg);
@@ -308,6 +316,12 @@ main(int arc, char **argv)
 			break;
 		case 't':
 			g.nthreads = atoi(optarg);
+			break;
+		case 'S':
+			g.sel_us = atoi(optarg);
+			break;
+		case 'U':
+			g.usleep_us = atoi(optarg);
 			break;
 
 		case 'v':
