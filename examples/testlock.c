@@ -234,6 +234,7 @@ td_body(void *data)
 				select(0, NULL, NULL, NULL, &to);
 			if (t->g->usleep_us)
 				usleep(t->g->usleep_us);
+			t->count += delta;
 		} else {
 			for (i = 0; i < 1000000; i++) {
 				if (io)
@@ -282,7 +283,7 @@ main(int arc, char **argv)
 	int i, ch, report_interval, affinity, align;
 
 	D("g has size %d", (int)sizeof(g));
-	report_interval = 500;	/* ms */
+	report_interval = 250;	/* ms */
 	affinity = 0;		/* no affinity */
 	align = 0;		/* global variable */
 
@@ -291,7 +292,7 @@ main(int arc, char **argv)
 	g.privs = getprivs();
 	g.nthreads = 1;
 	g.cpus = 1;
-	g.m_cycles = 400;	/* millions */
+	g.m_cycles = 1000;	/* millions */
 
 	while ( (ch = getopt(arc, argv, "A:a:n:w:c:t:vS:U:")) != -1) {
 		switch(ch) {
