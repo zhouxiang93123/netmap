@@ -34,6 +34,8 @@
 #if defined(__APPLE__)
 #include <libkern/OSAtomic.h>
 #define atomic_add_int(p, n) OSAtomicAdd32(n, (int *)p)
+#elif defined(linux)
+#include <asm-generic/atomic.h>
 #else
 #define HAVE_AFFINITY
 #include <sys/types.h>
@@ -123,7 +125,7 @@ static int global_nthreads;
 
 /* control-C handler */
 static void
-sigint_h(__unused int sig)
+sigint_h(int __attribute__ ((__unused__)) sig)
 {
 	int i;
 
@@ -198,13 +200,14 @@ td_body(void *data)
 	/* main loop.*/
 	gettimeofday(&targ->tic, NULL);
 	for (m = 0; m < targ->g->m_cycles; m++) {
-		// struct timeval t = { 0, 1000};
-		// select(0, NULL, NULL, NULL, &t);// usleep(1500);
-		for (i = 0; i < 1000000; i++) {
+		int delta = 1000000;
+		struct timeval t = { 0, 100}; select(0, NULL, NULL, NULL, &t);
+		usleep(1000);
+		for (i = 0; i < 1000000; i+=delta) {
 			if (io)
 				__asm __volatile("cli; sti;");
 			atomic_add_int(targ->glob_ctr, 1);
-			targ->count ++;
+			targ->count += delta;
 		}
 	}
 	gettimeofday(&targ->toc, NULL);
@@ -227,9 +230,11 @@ usage(void)
 		"%s arguments\n"
 		"\t-t threads		total threads\n"
 		"\t-c cores		cores to use\n"
-		"\t-a 			force affinity\n"
+		"\t-a n			force affinity every n cores\n"
+		"\t-A n			cache contention every n bytes\n"
 		"\t-n cycles		(millions) of cycles\n"
 		"\t-w report_ms		milliseconds between reports\n"
+		"\t-m name		test name\n"
 		"",
 		cmd);
 
