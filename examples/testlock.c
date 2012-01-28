@@ -35,8 +35,25 @@
 #include <libkern/OSAtomic.h>
 #define atomic_add_int(p, n) OSAtomicAdd32(n, (int *)p)
 #elif defined(linux)
-#include <asm-generic/atomic.h>
+
+#if defined(HAVE_GCC_ATOMICS)
+int atomic_add_int(volatile int *p, int v),
+{
+        return __sync_fetch_and_add(p, v);
+}
 #else
+uint32_t atomic_add_int(uint32_t *p, int v),
+{
+        __asm __volatile (
+        "       lock   xaddl   %0, %1 ;        "
+        : "+r" (v),                     /* 0 (result) */
+          "=m" (*p)                     /* 1 */
+        : "m" (*p));                    /* 2 */
+        return (v);
+}
+#endif
+
+#else /* FreeBSD */
 #define HAVE_AFFINITY
 #include <sys/types.h>
 #include <machine/atomic.h>
