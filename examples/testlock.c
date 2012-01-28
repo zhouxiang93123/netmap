@@ -30,6 +30,8 @@
  * Create multiple threads, possibly bind to cpus, and run a workload.
  */
 
+#include <inttypes.h>
+#include <sys/types.h>
 #include <pthread.h>	/* pthread_* */
 #if defined(__APPLE__)
 #include <libkern/OSAtomic.h>
@@ -37,12 +39,12 @@
 #elif defined(linux)
 
 #if defined(HAVE_GCC_ATOMICS)
-int atomic_add_int(volatile int *p, int v),
+int atomic_add_int(volatile int *p, int v)
 {
         return __sync_fetch_and_add(p, v);
 }
 #else
-uint32_t atomic_add_int(uint32_t *p, int v),
+uint32_t atomic_add_int(uint32_t *p, int v)
 {
         __asm __volatile (
         "       lock   xaddl   %0, %1 ;        "
@@ -55,7 +57,6 @@ uint32_t atomic_add_int(uint32_t *p, int v),
 
 #else /* FreeBSD */
 #define HAVE_AFFINITY
-#include <sys/types.h>
 #include <machine/atomic.h>
 #include <pthread_np.h>	/* pthread w/ affinity */
 #include <sys/cpuset.h>	/* cpu_set */
@@ -164,12 +165,16 @@ sigint_h(int __attribute__ ((__unused__)) sig)
 static int
 system_ncpus(void)
 {
+#ifdef linux
+	return 1;
+#else
 	int mib[2] = { CTL_HW, HW_NCPU}, ncpus;
 	size_t len = sizeof(mib);
 	sysctl(mib, len / sizeof(mib[0]), &ncpus, &len, NULL, 0);
 	D("system had %d cpus", ncpus);
 
 	return (ncpus);
+#endif
 }
 
 int
@@ -186,7 +191,7 @@ getprivs(void)
 /* set the thread affinity. */
 /* ARGSUSED */
 static int
-setaffinity(pthread_t __unused me, int __unused i)
+setaffinity(pthread_t me, int i)
 {
 #ifdef HAVE_AFFINITY
 	cpuset_t cpumask;
@@ -202,6 +207,9 @@ setaffinity(pthread_t __unused me, int __unused i)
 		D("Unable to set affinity");
 		return 1;
 	}
+#else
+	me;
+	i;	
 #endif
 	return 0;
 }
@@ -218,7 +226,7 @@ td_body(void *data)
 	gettimeofday(&targ->tic, NULL);
 	for (m = 0; m < targ->g->m_cycles; m++) {
 		int delta = 1000000;
-		struct timeval t = { 0, 100}; select(0, NULL, NULL, NULL, &t);
+		//struct timeval t = { 0, 1}; select(0, NULL, NULL, NULL, &t);
 		usleep(1000);
 		for (i = 0; i < 1000000; i+=delta) {
 			if (io)
