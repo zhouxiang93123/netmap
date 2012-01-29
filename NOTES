@@ -2,6 +2,22 @@
 
 # $Id$
 
+20120128 select/usleep comparison FreeBSD Linux OSX
+
+select	| Iterations/second
+timeout	| FBSD	| Linux	| OSX
+usec	| 9.0	| Vbox	| 10.6
+--------+-------+-------+----------
+    1	   500	  15.0k	  150k
+   10	   500	  12.9k	   65k
+   50	   500	   8.6k	   15k
+  100	   500	   6.0k	    7.5k
+  500	   500	  1744	  1620
+ 1000	   500	   922	   880
+ 1500	   331	   629	   613
+ 2000	   331     477	   470
+
+
 20120112 RELENG_8 and RELENG_9
     Original code committed in HEAD r227614
     svn diff -r 227613:227614 svn+ssh://svn.freebsd.org/base/head
