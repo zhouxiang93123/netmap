@@ -24,7 +24,7 @@
  */
 
 /*
- * $FreeBSD$
+ * $FreeBSD: head/sys/dev/netmap/if_re_netmap.h 230055 2012-01-13 11:01:23Z luigi $
  * $Id$
  *
  * netmap support for if_re
@@ -56,7 +56,6 @@ re_netmap_attach(struct rl_softc *sc)
 	na.nm_rxsync = re_netmap_rxsync;
 	na.nm_lock = re_netmap_lock_wrapper;
 	na.nm_register = re_netmap_reg;
-	na.buff_size = NETMAP_BUF_SIZE;
 	netmap_attach(&na, 1);
 }
 
@@ -183,7 +182,8 @@ re_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 			struct rl_desc *desc = &sc->rl_ldata.rl_tx_list[l];
 			int cmd = slot->len | RL_TDESC_CMD_EOF |
 				RL_TDESC_CMD_OWN | RL_TDESC_CMD_SOF ;
-			void *addr = NMB(slot);
+			uint64_t paddr;
+			void *addr = PNMB(slot, &paddr);
 			int len = slot->len;
 
 			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
@@ -197,12 +197,11 @@ re_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 				cmd |= RL_TDESC_CMD_EOR;
 
 			if (slot->flags & NS_BUF_CHANGED) {
-				uint64_t paddr = vtophys(addr);
 				desc->rl_bufaddr_lo = htole32(RL_ADDR_LO(paddr));
 				desc->rl_bufaddr_hi = htole32(RL_ADDR_HI(paddr));
 				/* buffer has changed, unload and reload map */
 				netmap_reload_map(sc->rl_ldata.rl_tx_mtag,
-					txd[l].tx_dmamap, addr, na->buff_size);
+					txd[l].tx_dmamap, addr);
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
 			slot->flags &= ~NS_REPORT;
@@ -304,7 +303,8 @@ re_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 			struct netmap_slot *slot = ring->slot + j;
 			struct rl_desc *desc = &sc->rl_ldata.rl_rx_list[l];
 			int cmd = na->buff_size | RL_RDESC_CMD_OWN;
-			void *addr = NMB(slot);
+			uint64_t paddr;
+			void *addr = PNMB(slot, &paddr);
 
 			if (addr == netmap_buffer_base) { /* bad buf */
 				if (do_lock)
@@ -318,11 +318,10 @@ re_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 			desc->rl_cmdstat = htole32(cmd);
 			slot->flags &= ~NS_REPORT;
 			if (slot->flags & NS_BUF_CHANGED) {
-				uint64_t paddr = vtophys(addr);
 				desc->rl_bufaddr_lo = htole32(RL_ADDR_LO(paddr));
 				desc->rl_bufaddr_hi = htole32(RL_ADDR_HI(paddr));
 				netmap_reload_map(sc->rl_ldata.rl_rx_mtag,
-					rxd[l].rx_dmamap, addr, na->buff_size);
+					rxd[l].rx_dmamap, addr);
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
 			bus_dmamap_sync(sc->rl_ldata.rl_rx_mtag,
@@ -377,12 +376,11 @@ re_netmap_tx_init(struct rl_softc *sc)
 		if (l >= n)
 			l -= n;
 
-		addr = NMB(slot + l);
-		paddr = vtophys(addr);
+		addr = PNMB(slot + l, &paddr);
 		desc[i].rl_bufaddr_lo = htole32(RL_ADDR_LO(paddr));
 		desc[i].rl_bufaddr_hi = htole32(RL_ADDR_HI(paddr));
 		netmap_load_map(sc->rl_ldata.rl_tx_mtag,
-			txd[i].tx_dmamap, addr, na->buff_size);
+			txd[i].tx_dmamap, addr);
 	}
 }
 
@@ -407,8 +405,12 @@ re_netmap_rx_init(struct rl_softc *sc)
 		if (l >= n)
 			l -= n;
 
-		addr = NMB(slot + l);
-		paddr = vtophys(addr);
+		addr = PNMB(slot + l, &paddr);
+
+		netmap_reload_map(sc->rl_ldata.rl_rx_mtag,
+		    sc->rl_ldata.rl_rx_desc[i].rx_dmamap, addr);
+		bus_dmamap_sync(sc->rl_ldata.rl_rx_mtag,
+		    sc->rl_ldata.rl_rx_desc[i].rx_dmamap, BUS_DMASYNC_PREREAD);
 		desc[i].rl_bufaddr_lo = htole32(RL_ADDR_LO(paddr));
 		desc[i].rl_bufaddr_hi = htole32(RL_ADDR_HI(paddr));
 		cmdstat = na->buff_size;
@@ -422,9 +424,5 @@ re_netmap_rx_init(struct rl_softc *sc)
 		if (i < n - 1 - kring->nr_hwavail) // XXX + 1 ?
 			cmdstat |= RL_RDESC_CMD_OWN;
 		desc[i].rl_cmdstat = htole32(cmdstat);
-
-		netmap_reload_map(sc->rl_ldata.rl_rx_mtag,
-			sc->rl_ldata.rl_rx_desc[i].rx_dmamap,
-			addr, na->buff_size);
 	}
 }
