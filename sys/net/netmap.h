@@ -31,7 +31,7 @@
  */
 
 /*
- * $FreeBSD$
+ * $FreeBSD: head/sys/net/netmap.h 228276 2011-12-05 12:06:53Z luigi $
  * $Id$
  *
  * This header contains the definitions of the constants and the
@@ -258,12 +258,6 @@ struct nmreq {
 #define NETMAP_RING_MASK 0xfff		/* the ring number */
 };
 
-/*
- * default buf size is 2048, but it may make sense to have
- * it shorter for better cache usage.
- */
-
-#define	NETMAP_BUF_SIZE	(2048)
 #define NIOCGINFO	_IOWR('i', 145, struct nmreq) /* return IF info */
 #define NIOCREGIF	_IOWR('i', 146, struct nmreq) /* interface register */
 #define NIOCUNREGIF	_IO('i', 147) /* interface unregister */
