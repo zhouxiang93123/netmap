@@ -24,7 +24,7 @@
  */
 
 /*
- * $FreeBSD: head/sys/dev/netmap/netmap_kern.h 230572 2012-01-26 09:55:16Z luigi $
+ * $FreeBSD: head/sys/dev/netmap/netmap_kern.h 231198 2012-02-08 11:43:29Z luigi $
  * $Id$
  *
  * The header contains the definitions of constants and function
@@ -238,11 +238,7 @@ NMB(struct netmap_slot *slot)
 {
 	uint32_t i = slot->buf_idx;
 	return (i >= netmap_total_buffers) ? netmap_buffer_base :
-#if NETMAP_BUF_SIZE == 2048
-		netmap_buffer_base + (i << 11);
-#else
 		netmap_buffer_base + (i *NETMAP_BUF_SIZE);
-#endif
 }
 
 static inline void *
@@ -250,11 +246,7 @@ PNMB(struct netmap_slot *slot, uint64_t *pp)
 {
 	uint32_t i = slot->buf_idx;
 	void *ret = (i >= netmap_total_buffers) ? netmap_buffer_base :
-#if NETMAP_BUF_SIZE == 2048
-		netmap_buffer_base + (i << 11);
-#else
 		netmap_buffer_base + (i *NETMAP_BUF_SIZE);
-#endif
 	*pp = vtophys(ret);
 	return ret;
 }
