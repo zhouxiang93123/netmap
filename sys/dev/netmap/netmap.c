@@ -1645,6 +1645,84 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, int n,
 
 
 /*
+ * default lock wrapper. On linux we use mostly netmap-specific locks.
+ */
+void
+netmap_lock_wrapper(struct ifnet *_a, int what, u_int queueid)
+{
+	struct netmap_adapter *na = NA(_a);
+
+	switch (what) {
+	case NETMAP_CORE_LOCK:
+		mtx_lock(&na->core_lock);
+		break;
+
+	case NETMAP_CORE_UNLOCK:
+		mtx_unlock(&na->core_lock);
+		break;
+
+	case NETMAP_TX_LOCK:
+		mtx_lock(&na->tx_rings[queueid].q_lock);
+		break;
+
+	case NETMAP_TX_UNLOCK:
+		mtx_unlock(&na->tx_rings[queueid].q_lock);
+		break;
+
+	case NETMAP_RX_LOCK:
+		mtx_lock(&na->rx_rings[queueid].q_lock);
+		break;
+
+	case NETMAP_RX_UNLOCK:
+		mtx_unlock(&na->rx_rings[queueid].q_lock);
+		break;
+	}
+}
+
+
+/*
+ * Default functions to handle rx/tx interrupts
+ * we have 4 cases:
+ * 1 ring, single lock:
+ *     lock(core); wake(i=0); unlock(core)
+ * N rings, single lock:
+ *     lock(core); wake(i); wake(N+1) unlock(core)
+ * 1 ring, separate locks: (i=0)
+ *     lock(i); wake(i); unlock(i)
+ * N rings, separate locks:
+ *     lock(i); wake(i); unlock(i); lock(core) wake(N+1) unlock(core)
+ */
+int netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
+{
+	struct netmap_adapter *na;
+	struct netmap_kring *r;
+
+	if (!(ifp->if_capabilities & IFCAP_NETMAP))
+		return 0;
+	na = NA(ifp);
+	r = work_done ? na->rx_rings : na->tx_rings;
+	if (na->separate_locks) {
+		mtx_lock(&r[q].q_lock);
+		selwakeuppri(&r[q].si, PI_NET);
+		mtx_unlock(&r[q].q_lock);
+		if (na->num_queues > 1) {
+			mtx_lock(&na->core_lock);
+			selwakeuppri(&r[na->num_queues + 1].si, PI_NET);
+			mtx_unlock(&na->core_lock);
+		}
+	} else {
+		mtx_lock(&na->core_lock);
+		selwakeuppri(&r[q].si, PI_NET);
+		if (na->num_queues > 1)
+			selwakeuppri(&r[na->num_queues + 1].si, PI_NET);
+		mtx_unlock(&na->core_lock);
+	}
+	if (work_done)
+		*work_done = 1; /* do not fire napi again */
+	return 1;
+}
+
+/*
  * Module loader.
  *
  * Create the /dev/netmap device and initialize all global

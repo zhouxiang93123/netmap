@@ -263,4 +263,11 @@ PNMB(struct netmap_slot *slot, uint64_t *pp)
 	return ret;
 }
 
+/* default functions to handle rx/tx interrupts */
+int netmap_rx_irq(struct ifnet *, int, int *);
+#define netmap_tx_irq(_n, _q) netmap_rx_irq(_n, _q, NULL)
+#ifdef __linux__
+#define bus_dmamap_sync(_a, _b, _c) // wmb() or rmb() ?
+netdev_tx_t netmap_start_linux(struct sk_buff *skb, struct net_device *dev);
+#endif
 #endif /* _NET_NETMAP_KERN_H_ */
