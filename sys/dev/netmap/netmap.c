@@ -1286,19 +1286,19 @@ netmap_poll(__unused struct cdev *dev, int events, struct thread *td)
 	 * routines.
 	 */
 	for (i = priv->np_qfirst; want_rx && i < lim_rx; i++) {
-			kring = &na->rx_rings[i];
-			if (kring->ring->avail > 0) {
-				revents |= want_rx;
-				want_rx = 0;	/* also breaks the loop */
-			}
+		kring = &na->rx_rings[i];
+		if (kring->ring->avail > 0) {
+			revents |= want_rx;
+			want_rx = 0;	/* also breaks the loop */
 		}
+	}
 	for (i = priv->np_qfirst; want_tx && i < lim_tx; i++) {
-			kring = &na->tx_rings[i];
-			if (kring->ring->avail > 0) {
-				revents |= want_tx;
-				want_tx = 0;	/* also breaks the loop */
-			}
+		kring = &na->tx_rings[i];
+		if (kring->ring->avail > 0) {
+			revents |= want_tx;
+			want_tx = 0;	/* also breaks the loop */
 		}
+	}
 
 	/*
 	 * If we to push packets out (priv->np_txpoll) or want_tx is
