@@ -1217,17 +1217,18 @@ netmap_poll(__unused struct cdev *dev, int events, struct thread *td)
 
 	na = NA(ifp); /* retrieve netmap adapter */
 
+	lim_tx = na->num_tx_queues;
+	lim_rx = na->num_rx_queues;
 	/* how many queues we are scanning */
-	i = priv->np_qfirst;	// XXX set high for host rings
-	if (i == NETMAP_SW_RING) {
+	if (priv->np_qfirst == NETMAP_SW_RING) {
 		if (priv->np_txpoll || want_tx) {
 			/* push any packets up, then we are always ready */
-			kring = &na->tx_rings[i];
+			kring = &na->tx_rings[lim_tx];
 			netmap_sync_to_host(na);
 			revents |= want_tx;
 		}
 		if (want_rx) {
-			kring = &na->rx_rings[i];
+			kring = &na->rx_rings[lim_rx];
 			if (kring->ring->avail == 0)
 				netmap_sync_from_host(na, td);
 			if (kring->ring->avail > 0) {
@@ -1258,7 +1259,7 @@ netmap_poll(__unused struct cdev *dev, int events, struct thread *td)
 	 * there are pending packets to send. The latter can be disabled
 	 * passing NETMAP_NO_TX_POLL in the NIOCREG call.
 	 */
-	check_all = (priv->np_qlast == NETMAP_HW_RING);
+	check_all = (priv->np_qlast == NETMAP_HW_RING) && (lim_tx > 1 || lim_rx > 1);
 
 	/*
 	 * core_lock indicates what to do with the core lock.
@@ -1275,16 +1276,15 @@ netmap_poll(__unused struct cdev *dev, int events, struct thread *td)
 	 * LOCKED_CL	core lock is set, so we need to release it.
 	 */
 	core_lock = (check_all || !na->separate_locks) ? NEED_CL : NO_CL;
+	if (priv->np_qlast != NETMAP_HW_RING) {
+		lim_tx = lim_rx = priv->np_qlast;
+	}
+
 	/*
 	 * We start with a lock free round which is good if we have
 	 * data available. If this fails, then lock and call the sync
 	 * routines.
 	 */
-	lim_tx = lim_rx = priv->np_qlast;
-	if (lim_tx == NETMAP_HW_RING) {
-		lim_tx = na->num_tx_queues;
-		lim_rx = na->num_rx_queues;
-	}
 	for (i = priv->np_qfirst; want_rx && i < lim_rx; i++) {
 			kring = &na->rx_rings[i];
 			if (kring->ring->avail > 0) {
