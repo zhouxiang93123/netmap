@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2011 Matteo Landi, Luigi Rizzo. All rights reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -9,7 +9,7 @@
  *   2. Redistributions in binary form must reproduce the above copyright
  *      notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -265,7 +265,7 @@ struct netmap_mem_d {
  * Request for a chunk of memory.
  *
  * Memory objects are arranged into a list, hence we need to walk this
- * list until we find an object with the needed amount of data free. 
+ * list until we find an object with the needed amount of data free.
  * This sounds like a completely inefficient implementation, but given
  * the fact that data allocation is done once, we can handle it
  * flawlessly.
@@ -530,7 +530,7 @@ netmap_memory_init(void)
 			    );
 		if (buf)
 			break;
-	} 
+	}
 	if (buf == NULL)
 		return (ENOMEM);
 	sz += extra_sz;
@@ -704,7 +704,7 @@ netmap_dtor(void *data)
 
 	na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
 	netmap_dtor_locked(data);
-	na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0); 
+	na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
 
 	if_rele(ifp);
 	bzero(priv, sizeof(*priv));	/* XXX for safety */
@@ -909,7 +909,7 @@ netmap_ring_reinit(struct netmap_kring *kring)
 		errors++;
 		D("%s %s[%d] reinit, cur %d -> %d avail %d -> %d",
 			kring->na->ifp->if_xname,
-			pos < n ?  "TX" : "RX", pos < n ? pos : pos - n, 
+			pos < n ?  "TX" : "RX", pos < n ? pos : pos - n,
 			ring->cur, kring->nr_hwcur,
 			ring->avail, kring->nr_hwavail);
 		ring->cur = kring->nr_hwcur;
