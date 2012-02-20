@@ -24,7 +24,7 @@
  */
 
 /*
- * $FreeBSD: head/sys/dev/netmap/netmap_kern.h 231198 2012-02-08 11:43:29Z luigi $
+ * $FreeBSD: head/sys/dev/netmap/netmap_kern.h 231796 2012-02-15 23:13:29Z luigi $
  * $Id$
  *
  * The header contains the definitions of constants and function
@@ -37,9 +37,13 @@
 #if defined(__FreeBSD__)
 #define	NM_LOCK_T	struct mtx
 #define	NM_SELINFO_T	struct selinfo
-#elif defined (__linux__)
+#define	MBUF_LEN(m)	((m)->m_pkthdr.len)
+#define	NM_SEND_UP(ifp, m)	((ifp)->if_input)(ifp, m)
+#elif defined (linux)
 #define	NM_LOCK_T	spinlock_t
 #define	NM_SELINFO_T	wait_queue_head_t
+#define	MBUF_LEN(m)	((m)->len)
+#define	NM_SEND_UP(ifp, m)	netif_rx(m)
 #else
 #error unsupported platform
 #endif
@@ -97,13 +101,14 @@ struct netmap_adapter {
 	int separate_locks; /* set if the interface suports different
 			       locks for rx, tx and core. */
 
-	u_int num_queues; /* number of tx/rx queue pairs: this is
+	u_int num_rx_queues; /* number of tx/rx queue pairs: this is
 			   a duplicate field needed to simplify the
 			   signature of ``netmap_detach``. */
+	u_int num_tx_queues;	// if nonzero, overrides num_queues XXX
 
 	u_int num_tx_desc; /* number of descriptor in each queue */
 	u_int num_rx_desc;
-	u_int buff_size;
+	u_int buff_size;	// XXX deprecate, use NETMAP_BUF_SIZE
 
 	//u_int	flags;	// XXX unused
 	/* tx_rings and rx_rings are private but allocated
@@ -112,6 +117,8 @@ struct netmap_adapter {
 	 */
 	struct netmap_kring *tx_rings; /* array of TX rings. */
 	struct netmap_kring *rx_rings; /* array of RX rings. */
+
+	NM_SELINFO_T tx_si, rx_si;	/* global wait queues */
 
 	/* copy of if_qflush and if_transmit pointers, to intercept
 	 * packets from the network stack when netmap is active.
@@ -128,9 +135,12 @@ struct netmap_adapter {
 	NM_LOCK_T core_lock;	/* used if no device lock available */
 
 	int (*nm_register)(struct ifnet *, int onoff);
-	void (*nm_lock)(void *, int what, u_int ringid);
-	int (*nm_txsync)(void *, u_int ring, int lock);
-	int (*nm_rxsync)(void *, u_int ring, int lock);
+	void (*nm_lock)(struct ifnet *, int what, u_int ringid);
+	int (*nm_txsync)(struct ifnet *, u_int ring, int lock);
+	int (*nm_rxsync)(struct ifnet *, u_int ring, int lock);
+#ifdef linux
+	struct net_device_ops nm_ndo;
+#endif /* linux */
 };
 
 /*
@@ -156,6 +166,12 @@ enum {
 	NETMAP_CORE_LOCK, NETMAP_CORE_UNLOCK,
 	NETMAP_TX_LOCK, NETMAP_TX_UNLOCK,
 	NETMAP_RX_LOCK, NETMAP_RX_UNLOCK,
+#ifdef __FreeBSD__
+#define	NETMAP_REG_LOCK		NETMAP_CORE_LOCK
+#define	NETMAP_REG_UNLOCK	NETMAP_CORE_UNLOCK
+#else
+	NETMAP_REG_LOCK, NETMAP_REG_UNLOCK
+#endif
 };
 
 /*
@@ -240,6 +256,59 @@ netmap_reload_map(bus_dma_tag_t tag, bus_dmamap_t map, void *buf)
 	}
 }
 
+/*
+ * functions to map NIC to KRING indexes (n2k) and vice versa (k2n)
+ */
+static inline int
+netmap_ridx_n2k(struct netmap_adapter *na, int ring, int nic_idx)
+{
+	int kring_idx = nic_idx + na->rx_rings[ring].nkr_hwofs;
+	if (kring_idx < 0)
+		return kring_idx + na->num_rx_desc;
+	else if (kring_idx < na->num_rx_desc)
+		return kring_idx;
+	else
+		return kring_idx - na->num_rx_desc;
+}
+
+
+static inline int
+netmap_tidx_n2k(struct netmap_adapter *na, int ring, int nic_idx)
+{
+	int kring_idx = nic_idx + na->tx_rings[ring].nkr_hwofs;
+	if (kring_idx < 0)
+		return kring_idx + na->num_tx_desc;
+	else if (kring_idx < na->num_tx_desc)
+		return kring_idx;
+	else
+		return kring_idx - na->num_tx_desc;
+}
+
+
+static inline int
+netmap_ridx_k2n(struct netmap_adapter *na, int ring, int kring_idx)
+{
+	int nic_idx = kring_idx - na->rx_rings[ring].nkr_hwofs;
+	if (nic_idx < 0)
+		return nic_idx + na->num_rx_desc;
+	else if (nic_idx < na->num_rx_desc)
+		return nic_idx;
+	else
+		return nic_idx - na->num_rx_desc;
+}
+
+
+static inline int
+netmap_tidx_k2n(struct netmap_adapter *na, int ring, int kring_idx)
+{
+	int nic_idx = kring_idx - na->tx_rings[ring].nkr_hwofs;
+	if (nic_idx < 0)
+		return nic_idx + na->num_tx_desc;
+	else if (nic_idx < na->num_tx_desc)
+		return nic_idx;
+	else
+		return nic_idx - na->num_tx_desc;
+}
 
 /*
  * NMB return the virtual address of a buffer (buffer 0 on bad index)

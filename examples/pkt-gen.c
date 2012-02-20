@@ -24,7 +24,7 @@
  */
 
 /*
- * $FreeBSD: head/tools/tools/netmap/pkt-gen.c 227614 2011-11-17 12:17:39Z luigi $
+ * $FreeBSD: head/tools/tools/netmap/pkt-gen.c 231198 2012-02-08 11:43:29Z luigi $
  * $Id$
  *
  * Example program to show how to build a multithreaded packet
@@ -300,7 +300,7 @@ checksum(const void *data, uint16_t len)
  * Fill a packet with some payload.
  */
 static void
-initialize_packet(struct targ *targ, int src_port)
+initialize_packet(struct targ *targ)
 {
 	struct pkt *pkt = &targ->pkt;
 	struct ether_header *eh;
@@ -318,8 +318,8 @@ initialize_packet(struct targ *targ, int src_port)
 	pkt->body[i-1] = '\0';
 
 	udp = &pkt->udp;
-	udp->uh_sport = htons(4096 + (src_port & 0xfff));
-	udp->uh_dport = htons(8192 + ((src_port & 0xff)<<4) );
+	udp->uh_sport = htons(1234);
+        udp->uh_dport = htons(4321);
 	udp->uh_ulen = htons(paylen);
 	udp->uh_sum = 0; // checksum(udp, sizeof(*udp));
 
@@ -656,7 +656,6 @@ usage(void)
 		"\t-s src-ip		end with %%n to sweep n addresses\n"
 		"\t-D dst-mac		end with %%n to sweep n addresses\n"
 		"\t-S src-mac		end with %%n to sweep n addresses\n"
-		"\t-a			use setaffinity\n"
 		"\t-b burst size		testing, mostly\n"
 		"\t-c cores		cores to use\n"
 		"\t-p threads		processes/threads to use\n"
@@ -684,7 +683,6 @@ main(int arc, char **argv)
 	char *ifname = NULL;
 	int wait_link = 2;
 	int devqueues = 1;	/* how many device queues */
-	int affinity = 0;
 
 	bzero(&g, sizeof(g));
 
@@ -698,14 +696,11 @@ main(int arc, char **argv)
 	g.cpus = 1;
 
 	while ( (ch = getopt(arc, argv,
-			"ai:t:r:l:d:s:D:S:b:c:p:T:w:v")) != -1) {
+			"i:t:r:l:d:s:D:S:b:c:p:T:w:v")) != -1) {
 		switch(ch) {
 		default:
 			D("bad option %c %s", ch, optarg);
 			usage();
-			break;
-		case 'a':	/* force affinity */
-			affinity = 1;
 			break;
 		case 'i':	/* interface */
 			ifname = optarg;
@@ -805,7 +800,7 @@ main(int arc, char **argv)
 		if ((ioctl(fd, NIOCGINFO, &nmr)) == -1) {
 			D("Unable to get if info for %s", ifname);
 		}
-		devqueues = nmr.nr_numrings;
+		devqueues = nmr.nr_rx_rings;
 	}
 
 	/* validate provided nthreads. */
@@ -935,12 +930,13 @@ main(int arc, char **argv)
 		targs[i].nmr = tifreq;
 		targs[i].nifp = tnifp;
 		targs[i].qfirst = (g.nthreads > 1) ? i : 0;
-		targs[i].qlast = (g.nthreads > 1) ? i+1 : tifreq.nr_numrings;
+		targs[i].qlast = (g.nthreads > 1) ? i+1 :
+			(td_body == receiver_body ? tifreq.nr_rx_rings : tifreq.nr_tx_rings);
 		targs[i].me = i;
-		targs[i].affinity = affinity ? i % g.cpus : -1;
+		targs[i].affinity = g.cpus ? i % g.cpus : -1;
 		if (td_body == sender_body) {
 			/* initialize the packet to send. */
-			initialize_packet(&targs[i], i);
+			initialize_packet(&targs[i]);
 		}
 
 		if (pthread_create(&targs[i].thread, NULL, td_body,

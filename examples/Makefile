@@ -1,6 +1,7 @@
 # For multiple programs using a single source file each,
 # we can just define 'progs' and create custom targets.
-PROGS	=	pkt-gen bridge pingd testpcap libnetmap.so
+PROGS	=	pkt-gen bridge testpcap libnetmap.so
+#PROGS += pingd
 PROGS	+= testlock
 
 CLEANFILES = $(PROGS) pcap.o
@@ -17,7 +18,7 @@ LDFLAGS += -lpthread -lpcap
 all: $(PROGS)
 
 testpcap: pcap.c libnetmap.so
-	$(CC) $(CFLAGS) -o ${.TARGET} pcap.c
+	$(CC) $(CFLAGS) -o ${.TARGET} pcap.c $(LDFLAGS)
 	
 libnetmap.so:	pcap.c
 	$(CC) $(CFLAGS) -fpic -c ${.ALLSRC}
