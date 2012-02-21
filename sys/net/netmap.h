@@ -162,12 +162,17 @@ struct netmap_slot {
  *
  * In RX rings:
  *	avail	is the number of packets available (possibly 0).
- *		It is decremented by the software when it consumes
- *		a packet, and set to nr_hwavail on a NIOCRXSYNC
- *	cur	indicates the first slot that contains a packet
- *		(the "head" of the queue).
- *		It is incremented by the software when it consumes
+ *		It MUST BE decremented by the application when it consumes
+ *		a packet, and it is updated to nr_hwavail on a NIOCRXSYNC
+ *	cur	indicates the first slot that contains a packet not
+ *		processed yet (the "head" of the queue).
+ *		It MUST BE incremented by the software when it consumes
  *		a packet.
+ *	reserved	indicates the number of buffers before 'cur'
+ *		that the application has still in use. Normally 0,
+ *		it MUST BE incremented by the application when it
+ *		does not return the buffer immediately, and decremented
+ *		when the buffer is finally freed.
  *
  *   The kernel side of netmap uses two additional fields in the kring:
  *	nr_hwcur is a copy of nr_cur on an NIOCRXSYNC
@@ -192,6 +197,7 @@ struct netmap_ring {
 	const uint32_t	num_slots;	/* number of slots in the ring. */
 	uint32_t	avail;		/* number of usable slots */
 	uint32_t        cur;		/* 'current' r/w position */
+	uint32_t	reserved;	/* not refilled before current */
 
 	const uint16_t	nr_buf_size;
 	uint16_t	flags;
