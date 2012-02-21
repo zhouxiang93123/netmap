@@ -263,7 +263,9 @@ igb_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(adapter->ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	int j, k, l, n, lim = kring->nkr_num_slots - 1;
+	int j, l, n, lim = kring->nkr_num_slots - 1;
+	int force_update = do_lock || kring->nr_kflags & NKR_PENDINTR;
+	u_int k = ring->cur, resvd = ring->reserved;
 
 	k = ring->cur;
 	if (k > lim)
@@ -276,35 +278,42 @@ igb_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	bus_dmamap_sync(rxr->rxdma.dma_tag, rxr->rxdma.dma_map,
 	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 
-	/* import newly received packets into the netmap ring.
-	 * j is an index in the netmap ring, l in the NIC ring, and
-	 *      j = (kring->nr_hwcur + kring->nr_hwavail) % ring_size
-	 *      l = rxr->next_to_check;
-	 * and
-	 *      j == (l + kring->nkr_hwofs) % ring_size
+	/*
+	 * import newly received packets into the netmap ring.
+	 * j is an index in the netmap ring, l in the NIC ring.
 	 */
 	l = rxr->next_to_check;
 	j = netmap_ridx_n2k(na, ring_nr, l);
-	for (n = 0; ; n++) {
-		union e1000_adv_rx_desc *curr = &rxr->rx_base[l];
-		uint32_t staterr = le32toh(curr->wb.upper.status_error);
+	if (netmap_no_pendintr || force_update) {
+		for (n = 0; ; n++) {
+			union e1000_adv_rx_desc *curr = &rxr->rx_base[l];
+			uint32_t staterr = le32toh(curr->wb.upper.status_error);
 
-		if ((staterr & E1000_RXD_STAT_DD) == 0)
-			break;
-		ring->slot[j].len = le16toh(curr->wb.upper.length);
-		bus_dmamap_sync(rxr->ptag,
-			rxr->rx_buffers[l].pmap, BUS_DMASYNC_POSTREAD);
-		j = (j == lim) ? 0 : j + 1;
-		l = (l == lim) ? 0 : l + 1;
-	}
-	if (n) {
-		rxr->next_to_check = l;
-		kring->nr_hwavail += n;
+			if ((staterr & E1000_RXD_STAT_DD) == 0)
+				break;
+			ring->slot[j].len = le16toh(curr->wb.upper.length);
+			bus_dmamap_sync(rxr->ptag,
+				rxr->rx_buffers[l].pmap, BUS_DMASYNC_POSTREAD);
+			j = (j == lim) ? 0 : j + 1;
+			l = (l == lim) ? 0 : l + 1;
+		}
+		if (n) {
+			rxr->next_to_check = l;
+			kring->nr_hwavail += n;
+		}
+		kring->nr_kflags &= ~NKR_PENDINTR;
 	}
 
-	/* skip past packets that userspace has already processed */
-	j = kring->nr_hwcur;
-	if (j != k) { /* userspace has read some packets. */
+	/* skip past packets that userspace has released */
+        j = kring->nr_hwcur;    /* netmap ring index */
+	if (resvd > 0) {
+		if (resvd + ring->avail >= lim + 1) {
+			D("XXX invalid reserve/avail %d %d", resvd, ring->avail);
+			ring->reserved = resvd = 0; // XXX panic...
+		}
+		k = (k >= resvd) ? k - resvd : k + lim + 1 - resvd;
+	}
+	if (j != k) { /* userspace has released some packets. */
 		l = netmap_ridx_k2n(na, ring_nr, j);
 		for (n = 0; j != k; n++) {
 			struct netmap_slot *slot = ring->slot + j;
@@ -344,7 +353,7 @@ igb_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		E1000_WRITE_REG(&adapter->hw, E1000_RDT(rxr->me), l);
 	}
 	/* tell userspace that there are new packets */
-	ring->avail = kring->nr_hwavail ;
+	ring->avail = kring->nr_hwavail - resvd;
 	if (do_lock)
 		IGB_RX_UNLOCK(rxr);
 	return 0;

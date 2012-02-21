@@ -416,20 +416,15 @@ ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(adapter->ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	int j, k, l, n, lim = kring->nkr_num_slots - 1;
+	int j, l, n, lim = kring->nkr_num_slots - 1;
 	int force_update = do_lock || kring->nr_kflags & NKR_PENDINTR;
+	u_int k = ring->cur, resvd = ring->reserved;
 
-	k = ring->cur;	/* cache and check value, same as in txsync */
-	n = k - kring->nr_hwcur;
-	if (n < 0)
-		n += lim + 1;
-	if (k > lim || n > kring->nr_hwavail) /* userspace is cheating */
+	if (k > lim)
 		return netmap_ring_reinit(kring);
 
 	if (do_lock)
 		IXGBE_RX_LOCK(rxr);
-	if (n < 0)
-		n += lim + 1;
 	/* XXX check sync modes */
 	bus_dmamap_sync(rxr->rxdma.dma_tag, rxr->rxdma.dma_map,
 			BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
@@ -473,14 +468,21 @@ ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	}
 
 	/*
-	 * Skip past packets that userspace has already processed
-	 * (from kring->nr_hwcur to ring->cur excluded), and make
-	 * the buffers available for reception.
+	 * Skip past packets that userspace has released
+	 * (from kring->nr_hwcur to ring->cur - ring->reserved excluded),
+	 * and make the buffers available for reception.
 	 * As usual j is the index in the netmap ring, l is the index
 	 * in the NIC ring, and j == (l + kring->nkr_hwofs) % ring_size
 	 */
 	j = kring->nr_hwcur;
-	if (j != k) {	/* userspace has read some packets. */
+	if (resvd > 0) {
+		if (resvd + ring->avail >= lim + 1) {
+			D("XXX invalid reserve/avail %d %d", resvd, ring->avail);
+			ring->reserved = resvd = 0; // XXX panic...
+		}
+		k = (k >= resvd) ? k - resvd : k + lim + 1 - resvd;
+	}
+	if (j != k) { /* userspace has released some packets. */
 		l = netmap_ridx_k2n(na, ring_nr, j);
 		for (n = 0; j != k; n++) {
 			/* collect per-slot info, with similar validations
@@ -522,7 +524,7 @@ ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		IXGBE_WRITE_REG(&adapter->hw, IXGBE_RDT(rxr->me), l);
 	}
 	/* tell userspace that there are new packets */
-	ring->avail = kring->nr_hwavail ;
+	ring->avail = kring->nr_hwavail - resvd;
 
 	if (do_lock)
 		IXGBE_RX_UNLOCK(rxr);
