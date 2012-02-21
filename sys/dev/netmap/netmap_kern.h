@@ -65,7 +65,14 @@ MALLOC_DECLARE(M_NETMAP);
 struct netmap_adapter;
 
 /*
- * private, kernel view of a ring.
+ * private, kernel view of a ring. Keeps track of the status of
+ * a ring across system calls.
+ *
+ *	nr_hwcur	index of the next buffer to refill.
+ *			It corresponds to ring->cur - ring->reserved
+ *
+ *	nr_hwavail	the number of slots "owned" by userspace.
+ *			nr_hwavail =:= ring->avail + ring->reserved
  *
  * The indexes in the NIC and netmap rings are offset by nkr_hwofs slots.
  * This is so that, on a reset, buffers owned by userspace are not

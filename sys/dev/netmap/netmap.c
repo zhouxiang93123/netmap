@@ -816,29 +816,35 @@ netmap_sync_from_host(struct netmap_adapter *na, struct thread *td)
 {
 	struct netmap_kring *kring = &na->rx_rings[na->num_rx_queues];
 	struct netmap_ring *ring = kring->ring;
-	int error = 1, delta;
-	u_int k = ring->cur, lim = kring->nkr_num_slots;
+	u_int j, n, lim = kring->nkr_num_slots;
+	u_int k = ring->cur, resvd = ring->reserved;
 
 	na->nm_lock(na->ifp, NETMAP_CORE_LOCK, 0);
-	if (k >= lim) /* bad value */
-		goto done;
-	delta = k - kring->nr_hwcur;
-	if (delta < 0)
-		delta += lim;
-	kring->nr_hwavail -= delta;
-	if (kring->nr_hwavail < 0)	/* error */
-		goto done;
+	if (k >= lim) {
+		netmap_ring_reinit(kring);
+		return;
+	}
+	/* new packets are already set in nr_hwavail */
+	/* skip past packets that userspace has released */
+	j = kring->nr_hwcur;
+	if (resvd > 0) {
+		if (resvd + ring->avail >= lim + 1) {
+			D("XXX invalid reserve/avail %d %d", resvd, ring->avail);
+			ring->reserved = resvd = 0; // XXX panic...
+		}
+		k = (k >= resvd) ? k - resvd : k + lim - resvd;
+        }
+	if (j != k) {
+		n = k >= j ? k - j : k + lim - j;
+		kring->nr_hwavail -= n;
 	kring->nr_hwcur = k;
-	error = 0;
-	k = ring->avail = kring->nr_hwavail;
+	}
+	k = ring->avail = kring->nr_hwavail - resvd;
 	if (k == 0 && td)
 		selrecord(td, &kring->si);
 	if (k && (netmap_verbose & NM_VERB_HOST))
 		D("%d pkts from stack", k);
-done:
 	na->nm_lock(na->ifp, NETMAP_CORE_UNLOCK, 0);
-	if (error)
-		netmap_ring_reinit(kring);
 }
 
 
@@ -1648,11 +1654,11 @@ netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
 	na = NA(ifp);
 	if (work_done) { /* RX path */
 		r = na->rx_rings + q;
+		r->nr_kflags |= NKR_PENDINTR;
 		main_wq = (na->num_rx_queues > 1) ? &na->tx_si : NULL;
 	} else { /* tx path */
 		r = na->tx_rings + q;
 		main_wq = (na->num_tx_queues > 1) ? &na->rx_si : NULL;
-		r->nr_kflags |= NKR_PENDINTR;
 		work_done = &q; /* dummy */
 	}
 	if (na->separate_locks) {
