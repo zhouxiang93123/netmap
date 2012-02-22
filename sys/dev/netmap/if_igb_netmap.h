@@ -27,38 +27,16 @@
  * $FreeBSD: head/sys/dev/netmap/if_igb_netmap.h 231881 2012-02-17 14:09:04Z luigi $
  * $Id$
  *
- * netmap modifications for igb contributed by Ahmed Kooli
+ * Netmap support for igb, partly contributed by Ahmed Kooli
+ * For details on netmap support please see ixgbe_netmap.h
  */
+
 
 #include <net/netmap.h>
 #include <sys/selinfo.h>
 #include <vm/vm.h>
 #include <vm/pmap.h>    /* vtophys ? */
 #include <dev/netmap/netmap_kern.h>
-
-static int	igb_netmap_reg(struct ifnet *, int onoff);
-static int	igb_netmap_txsync(struct ifnet *, u_int, int);
-static int	igb_netmap_rxsync(struct ifnet *, u_int, int);
-static void	igb_netmap_lock_wrapper(struct ifnet *, int, u_int);
-
-
-static void
-igb_netmap_attach(struct adapter *adapter)
-{
-	struct netmap_adapter na;
-
-	bzero(&na, sizeof(na));
-
-	na.ifp = adapter->ifp;
-	na.separate_locks = 1;
-	na.num_tx_desc = adapter->num_tx_desc;
-	na.num_rx_desc = adapter->num_rx_desc;
-	na.nm_txsync = igb_netmap_txsync;
-	na.nm_rxsync = igb_netmap_rxsync;
-	na.nm_lock = igb_netmap_lock_wrapper;
-	na.nm_register = igb_netmap_reg;
-	netmap_attach(&na, adapter->num_queues);
-}	
 
 
 /*
@@ -134,14 +112,14 @@ fail:
 
 
 /*
- * Reconcile hardware and user view of the transmit ring.
+ * Reconcile kernel and user view of the transmit ring.
  */
 static int
 igb_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 {
 	struct adapter *adapter = ifp->if_softc;
 	struct tx_ring *txr = &adapter->tx_rings[ring_nr];
-	struct netmap_adapter *na = NA(adapter->ifp);
+	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
@@ -164,7 +142,7 @@ igb_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 *      j == (l + kring->nkr_hwofs) % ring_size
 	 */
 	j = kring->nr_hwcur;
-	if (j != k) {	/* we have packets to send */
+	if (j != k) {	/* we have new packets to send */
 		/* 82575 needs the queue index added */
 		u32 olinfo_status =
 		    (adapter->hw.mac.type == e1000_82575) ? (txr->me << 4) : 0;
@@ -210,9 +188,7 @@ igb_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
 		}
-		kring->nr_hwcur = k;
-
-		/* decrease avail by number of sent packets */
+		kring->nr_hwcur = k; /* the saved ring->cur */
 		kring->nr_hwavail -= n;
 
 		/* Set the watchdog XXX ? */
@@ -243,7 +219,7 @@ igb_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			kring->nr_hwavail += delta;
 		}
 	}
-	/* update avail to what the hardware knows */
+	/* update avail to what the kernel knows */
 	ring->avail = kring->nr_hwavail;
 
 	if (do_lock)
@@ -260,7 +236,7 @@ igb_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 {
 	struct adapter *adapter = ifp->if_softc;
 	struct rx_ring *rxr = &adapter->rx_rings[ring_nr];
-	struct netmap_adapter *na = NA(adapter->ifp);
+	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	int j, l, n, lim = kring->nkr_num_slots - 1;
@@ -358,4 +334,23 @@ igb_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		IGB_RX_UNLOCK(rxr);
 	return 0;
 }
+
+
+static void
+igb_netmap_attach(struct adapter *adapter)
+{
+	struct netmap_adapter na;
+
+	bzero(&na, sizeof(na));
+
+	na.ifp = adapter->ifp;
+	na.separate_locks = 1;
+	na.num_tx_desc = adapter->num_tx_desc;
+	na.num_rx_desc = adapter->num_rx_desc;
+	na.nm_txsync = igb_netmap_txsync;
+	na.nm_rxsync = igb_netmap_rxsync;
+	na.nm_lock = igb_netmap_lock_wrapper;
+	na.nm_register = igb_netmap_reg;
+	netmap_attach(&na, adapter->num_queues);
+}	
 /* end of file */

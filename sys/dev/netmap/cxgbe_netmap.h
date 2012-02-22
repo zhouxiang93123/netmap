@@ -212,7 +212,7 @@ cxgbe_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 	bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
 			BUS_DMASYNC_POSTREAD);
 
-	/* update avail to what the hardware knows */
+	/* update avail to what the kernel knows */
 	ring->avail = kring->nr_hwavail;
 
 	j = kring->nr_hwcur;
@@ -253,10 +253,8 @@ cxgbe_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 			j = (j == lim) ? 0 : j + 1;
 			n++;
 		}
-		kring->nr_hwcur = k;
-
-		/* decrease avail by number of sent packets */
-		ring->avail -= n;
+		kring->nr_hwcur = k; /* the saved ring->cur */
+		ring->avail -= n; // XXX see others
 		kring->nr_hwavail = ring->avail;
 
 		bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,

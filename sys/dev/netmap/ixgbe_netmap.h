@@ -50,41 +50,6 @@
 
 #include <dev/netmap/netmap_kern.h>
 
-/*
- * prototypes for the new API calls that are used by the
- * *_netmap_attach() routine.
- */
-static int	ixgbe_netmap_reg(struct ifnet *, int onoff);
-static int	ixgbe_netmap_txsync(struct ifnet *, u_int, int);
-static int	ixgbe_netmap_rxsync(struct ifnet *, u_int, int);
-static void	ixgbe_netmap_lock_wrapper(struct ifnet *, int, u_int);
-
-
-/*
- * The attach routine, called near the end of ixgbe_attach(),
- * fills the parameters for netmap_attach() and calls it.
- * It cannot fail, in the worst case (such as no memory)
- * netmap mode will be disabled and the driver will only
- * operate in standard mode.
- */
-static void
-ixgbe_netmap_attach(struct adapter *adapter)
-{
-	struct netmap_adapter na;
-
-	bzero(&na, sizeof(na));
-
-	na.ifp = adapter->ifp;
-	na.separate_locks = 1;	/* this card has separate rx/tx locks */
-	na.num_tx_desc = adapter->num_tx_desc;
-	na.num_rx_desc = adapter->num_rx_desc;
-	na.nm_txsync = ixgbe_netmap_txsync;
-	na.nm_rxsync = ixgbe_netmap_rxsync;
-	na.nm_lock = ixgbe_netmap_lock_wrapper;
-	na.nm_register = ixgbe_netmap_reg;
-	netmap_attach(&na, adapter->num_queues);
-}	
-
 
 /*
  * wrapper to export locks to the generic netmap code.
@@ -535,4 +500,31 @@ ring_reset:
 		IXGBE_RX_UNLOCK(rxr);
 	return netmap_ring_reinit(kring);
 }
+
+
+/*
+ * The attach routine, called near the end of ixgbe_attach(),
+ * fills the parameters for netmap_attach() and calls it.
+ * It cannot fail, in the worst case (such as no memory)
+ * netmap mode will be disabled and the driver will only
+ * operate in standard mode.
+ */
+static void
+ixgbe_netmap_attach(struct adapter *adapter)
+{
+	struct netmap_adapter na;
+
+	bzero(&na, sizeof(na));
+
+	na.ifp = adapter->ifp;
+	na.separate_locks = 1;	/* this card has separate rx/tx locks */
+	na.num_tx_desc = adapter->num_tx_desc;
+	na.num_rx_desc = adapter->num_rx_desc;
+	na.nm_txsync = ixgbe_netmap_txsync;
+	na.nm_rxsync = ixgbe_netmap_rxsync;
+	na.nm_lock = ixgbe_netmap_lock_wrapper;
+	na.nm_register = ixgbe_netmap_reg;
+	netmap_attach(&na, adapter->num_queues);
+}	
+
 /* end of file */

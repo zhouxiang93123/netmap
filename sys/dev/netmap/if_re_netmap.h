@@ -27,37 +27,16 @@
  * $FreeBSD: head/sys/dev/netmap/if_re_netmap.h 231881 2012-02-17 14:09:04Z luigi $
  * $Id$
  *
- * netmap support for if_re
+ * netmap support for "re"
+ * For details on netmap support please see ixgbe_netmap.h
  */
+
 
 #include <net/netmap.h>
 #include <sys/selinfo.h>
 #include <vm/vm.h>
 #include <vm/pmap.h>    /* vtophys ? */
 #include <dev/netmap/netmap_kern.h>
-
-static int re_netmap_reg(struct ifnet *, int onoff);
-static int re_netmap_txsync(struct ifnet *, u_int, int);
-static int re_netmap_rxsync(struct ifnet *, u_int, int);
-static void re_netmap_lock_wrapper(struct ifnet *, int, u_int);
-
-static void
-re_netmap_attach(struct rl_softc *sc)
-{
-	struct netmap_adapter na;
-
-	bzero(&na, sizeof(na));
-
-	na.ifp = sc->rl_ifp;
-	na.separate_locks = 0;
-	na.num_tx_desc = sc->rl_ldata.rl_tx_desc_cnt;
-	na.num_rx_desc = sc->rl_ldata.rl_rx_desc_cnt;
-	na.nm_txsync = re_netmap_txsync;
-	na.nm_rxsync = re_netmap_rxsync;
-	na.nm_lock = re_netmap_lock_wrapper;
-	na.nm_register = re_netmap_reg;
-	netmap_attach(&na, 1);
-}
 
 
 /*
@@ -170,7 +149,7 @@ re_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		kring->nr_hwavail += n;
 	}
 
-	/* update avail to what the hardware knows */
+	/* update avail to what the kernel knows */
 	ring->avail = kring->nr_hwavail;
 	
 	j = kring->nr_hwcur;
@@ -211,10 +190,8 @@ re_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			l = (l == lim) ? 0 : l + 1;
 		}
 		sc->rl_ldata.rl_tx_prodidx = l;
-		kring->nr_hwcur = k;
-
-		/* decrease avail by number of sent packets */
-		ring->avail -= n;
+		kring->nr_hwcur = k; /* the saved ring->cur */
+		ring->avail -= n; // XXX see others
 		kring->nr_hwavail = ring->avail;
 
 		bus_dmamap_sync(sc->rl_ldata.rl_tx_list_tag,
@@ -422,3 +399,23 @@ re_netmap_rx_init(struct rl_softc *sc)
 		desc[i].rl_cmdstat = htole32(cmdstat);
 	}
 }
+
+
+static void
+re_netmap_attach(struct rl_softc *sc)
+{
+	struct netmap_adapter na;
+
+	bzero(&na, sizeof(na));
+
+	na.ifp = sc->rl_ifp;
+	na.separate_locks = 0;
+	na.num_tx_desc = sc->rl_ldata.rl_tx_desc_cnt;
+	na.num_rx_desc = sc->rl_ldata.rl_rx_desc_cnt;
+	na.nm_txsync = re_netmap_txsync;
+	na.nm_rxsync = re_netmap_rxsync;
+	na.nm_lock = re_netmap_lock_wrapper;
+	na.nm_register = re_netmap_reg;
+	netmap_attach(&na, 1);
+}
+/* end of file */

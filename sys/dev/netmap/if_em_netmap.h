@@ -27,11 +27,11 @@
  * $FreeBSD: head/sys/dev/netmap/if_em_netmap.h 231881 2012-02-17 14:09:04Z luigi $
  * $Id$
  *
- * netmap support for if_em.c
+ * netmap support for em.
  *
- * For structure and details on the individual functions please see
- * ixgbe_netmap.h
+ * For more details on netmap support please see ixgbe_netmap.h
  */
+
 
 #include <net/netmap.h>
 #include <sys/selinfo.h>
@@ -39,31 +39,9 @@
 #include <vm/pmap.h>    /* vtophys ? */
 #include <dev/netmap/netmap_kern.h>
 
+
 static void	em_netmap_block_tasks(struct adapter *);
 static void	em_netmap_unblock_tasks(struct adapter *);
-static int	em_netmap_reg(struct ifnet *, int onoff);
-static int	em_netmap_txsync(struct ifnet *, u_int, int);
-static int	em_netmap_rxsync(struct ifnet *, u_int, int);
-static void	em_netmap_lock_wrapper(struct ifnet *, int, u_int);
-
-
-static void
-em_netmap_attach(struct adapter *adapter)
-{
-	struct netmap_adapter na;
-
-	bzero(&na, sizeof(na));
-
-	na.ifp = adapter->ifp;
-	na.separate_locks = 1;
-	na.num_tx_desc = adapter->num_tx_desc;
-	na.num_rx_desc = adapter->num_rx_desc;
-	na.nm_txsync = em_netmap_txsync;
-	na.nm_rxsync = em_netmap_rxsync;
-	na.nm_lock = em_netmap_lock_wrapper;
-	na.nm_register = em_netmap_reg;
-	netmap_attach(&na, adapter->num_queues);
-}
 
 
 static void
@@ -137,7 +115,7 @@ em_netmap_unblock_tasks(struct adapter *adapter)
 
 
 /*
- * register-unregister routine
+ * Register/unregister routine
  */
 static int
 em_netmap_reg(struct ifnet *ifp, int onoff)
@@ -180,14 +158,14 @@ fail:
 
 
 /*
- * Reconcile hardware and user view of the transmit ring.
+ * Reconcile kernel and user view of the transmit ring.
  */
 static int
 em_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 {
 	struct adapter *adapter = ifp->if_softc;
 	struct tx_ring *txr = &adapter->tx_rings[ring_nr];
-	struct netmap_adapter *na = NA(adapter->ifp);
+	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
@@ -246,9 +224,7 @@ em_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
 		}
-		kring->nr_hwcur = k;
-
-		/* decrease avail by number of sent packets */
+		kring->nr_hwcur = k; /* the saved ring->cur */
 		kring->nr_hwavail -= n;
 
 		bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
@@ -275,7 +251,7 @@ em_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			kring->nr_hwavail += delta;
 		}
 	}
-	/* update avail to what the hardware knows */
+	/* update avail to what the kernel knows */
 	ring->avail = kring->nr_hwavail;
 
 	if (do_lock)
@@ -292,7 +268,7 @@ em_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 {
 	struct adapter *adapter = ifp->if_softc;
 	struct rx_ring *rxr = &adapter->rx_rings[ring_nr];
-	struct netmap_adapter *na = NA(adapter->ifp);
+	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	int j, l, n, lim = kring->nkr_num_slots - 1;
@@ -392,4 +368,24 @@ em_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		EM_RX_UNLOCK(rxr);
 	return 0;
 }
+
+
+static void
+em_netmap_attach(struct adapter *adapter)
+{
+	struct netmap_adapter na;
+
+	bzero(&na, sizeof(na));
+
+	na.ifp = adapter->ifp;
+	na.separate_locks = 1;
+	na.num_tx_desc = adapter->num_tx_desc;
+	na.num_rx_desc = adapter->num_rx_desc;
+	na.nm_txsync = em_netmap_txsync;
+	na.nm_rxsync = em_netmap_rxsync;
+	na.nm_lock = em_netmap_lock_wrapper;
+	na.nm_register = em_netmap_reg;
+	netmap_attach(&na, adapter->num_queues);
+}
+
 /* end of file */

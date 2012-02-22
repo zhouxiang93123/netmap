@@ -17,37 +17,6 @@
 #include <vm/pmap.h>    /* vtophys ? */
 #include <dev/netmap/netmap_kern.h>
 
-static int bge_netmap_reg(struct ifnet *, int onoff);
-static int bge_netmap_txsync(void *, u_int, int);
-static int bge_netmap_rxsync(void *, u_int, int);
-static void bge_netmap_lock_wrapper(void *, int, u_int);
-
-static int bge_netmap_verbose = 0;
-
-SYSCTL_NODE(_dev, OID_AUTO, bge, CTLFLAG_RW, 0, "bge card");
-
-SYSCTL_INT(_dev_bge, OID_AUTO, verbose,
-    CTLFLAG_RW, &bge_netmap_verbose, 0, "Verbose flag");
-
-static void
-bge_netmap_attach(struct bge_softc *sc)
-{
-	struct netmap_adapter na;
-
-	bzero(&na, sizeof(na));
-
-	na.ifp = sc->bge_ifp;
-	na.separate_locks = 0;
-	na.num_tx_desc = BGE_TX_RING_CNT;
-	na.num_rx_desc = BGE_STD_RX_RING_CNT;
-	na.nm_txsync = bge_netmap_txsync;
-	na.nm_rxsync = bge_netmap_rxsync;
-	na.nm_lock = bge_netmap_lock_wrapper;
-	na.nm_register = bge_netmap_reg;
-	na.buff_size = MCLBYTES; // XXX check
-	netmap_attach(&na, 1);
-}
-
 
 /*
  * wrapper to export locks to the generic code
@@ -158,7 +127,7 @@ bge_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 		kring->nr_hwavail += delta;
 	}
 
-	/* update avail to what the hardware knows */
+	/* update avail to what the kernel knows */
 	ring->avail = kring->nr_hwavail;
 
 	j = kring->nr_hwcur;
@@ -197,12 +166,10 @@ bge_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 			l = (l == lim) ? 0 : l + 1;
 			n++;
 		}
-		kring->nr_hwcur = k;
+		kring->nr_hwcur = k; /* the saved ring->cur */
 		sc->bge_tx_prodidx = l;
-
-		/* decrease avail by number of sent packets */
 		ring->avail -= n;
-		kring->nr_hwavail = ring->avail;
+		kring->nr_hwavail = ring->avail; // XXX see others
 
 		/* now repeat the last part of bge_start_locked() */
 		bus_dmamap_sync(sc->bge_cdata.bge_tx_ring_tag,
@@ -340,8 +307,8 @@ bge_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 			l = (l == lim) ? 0 : l + 1;
 			n++;
 		}
+		kring->nr_hwcur = k; /* the saved ring->cur */
 		kring->nr_hwavail -= n;
-		kring->nr_hwcur = k;
 		/* Flush the RX DMA ring */
 
 		bus_dmamap_sync(sc->bge_cdata.bge_rx_return_ring_tag,
@@ -354,6 +321,7 @@ bge_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 		BGE_UNLOCK(sc);
 	return 0;
 }
+
 
 static void
 bge_netmap_tx_init(struct bge_softc *sc)
@@ -391,6 +359,7 @@ bge_netmap_tx_init(struct bge_softc *sc)
 			addr, na->buff_size);
 	}
 }
+
 
 static void
 bge_netmap_rx_init(struct bge_softc *sc)
@@ -438,3 +407,22 @@ bge_netmap_rx_init(struct bge_softc *sc)
 			addr, na->buff_size);
 	}
 }
+
+static void
+bge_netmap_attach(struct bge_softc *sc)
+{
+	struct netmap_adapter na;
+
+	bzero(&na, sizeof(na));
+
+	na.ifp = sc->bge_ifp;
+	na.separate_locks = 0;
+	na.num_tx_desc = BGE_TX_RING_CNT;
+	na.num_rx_desc = BGE_STD_RX_RING_CNT;
+	na.nm_txsync = bge_netmap_txsync;
+	na.nm_rxsync = bge_netmap_rxsync;
+	na.nm_lock = bge_netmap_lock_wrapper;
+	na.nm_register = bge_netmap_reg;
+	netmap_attach(&na, 1);
+}
+/* end of file */
