@@ -87,10 +87,10 @@ MALLOC_DEFINE(M_NETMAP, "netmap", "Network memory map");
 /*
  * lock and unlock for the netmap memory allocator
  */
-#define NMA_LOCK()	mtx_lock(&netmap_mem_d->nm_mtx);
-#define NMA_UNLOCK()	mtx_unlock(&netmap_mem_d->nm_mtx);
+#define NMA_LOCK()	mtx_lock(&nm_mem->nm_mtx);
+#define NMA_UNLOCK()	mtx_unlock(&nm_mem->nm_mtx);
 struct netmap_mem_d;
-static struct netmap_mem_d *netmap_mem_d;	/* Our memory allocator. */
+static struct netmap_mem_d *nm_mem;	/* Our memory allocator. */
 
 u_int netmap_total_buffers;
 char *netmap_buffer_base;	/* address of an invalid buffer */
@@ -254,10 +254,10 @@ struct netmap_mem_d {
 
 /* Shorthand to compute a netmap interface offset. */
 #define netmap_if_offset(v)                                     \
-    ((char *) (v) - (char *) netmap_mem_d->nm_buffer)
+    ((char *) (v) - (char *) nm_mem->nm_buffer)
 /* .. and get a physical address given a memory offset */
 #define netmap_ofstophys(o)                                     \
-    (vtophys(netmap_mem_d->nm_buffer) + (o))
+    (vtophys(nm_mem->nm_buffer) + (o))
 
 
 /*------ netmap memory allocator -------*/
@@ -279,7 +279,7 @@ netmap_malloc(size_t size, __unused const char *msg)
 	void *ret = NULL;
 
 	NMA_LOCK();
-	TAILQ_FOREACH(mem_obj, &netmap_mem_d->nm_molist, nmo_next) {
+	TAILQ_FOREACH(mem_obj, &nm_mem->nm_molist, nmo_next) {
 		if (mem_obj->nmo_used != 0 || mem_obj->nmo_size < size)
 			continue;
 
@@ -295,7 +295,7 @@ netmap_malloc(size_t size, __unused const char *msg)
 		mem_obj->nmo_size -= size;
 		mem_obj->nmo_data = (char *) mem_obj->nmo_data + size;
 		if (mem_obj->nmo_size == 0) {
-			TAILQ_REMOVE(&netmap_mem_d->nm_molist, mem_obj,
+			TAILQ_REMOVE(&nm_mem->nm_molist, mem_obj,
 				     nmo_next);
 			free(mem_obj, M_NETMAP);
 		}
@@ -328,7 +328,7 @@ netmap_free(void *addr, const char *msg)
 	}
 
 	NMA_LOCK();
-	TAILQ_FOREACH(cur, &netmap_mem_d->nm_molist, nmo_next) {
+	TAILQ_FOREACH(cur, &nm_mem->nm_molist, nmo_next) {
 		if (cur->nmo_data == addr && cur->nmo_used)
 			break;
 	}
@@ -345,7 +345,7 @@ netmap_free(void *addr, const char *msg)
 	   if present. */
 	prev = TAILQ_PREV(cur, netmap_mem_obj_h, nmo_next);
 	if (prev && prev->nmo_used == 0) {
-		TAILQ_REMOVE(&netmap_mem_d->nm_molist, cur, nmo_next);
+		TAILQ_REMOVE(&nm_mem->nm_molist, cur, nmo_next);
 		prev->nmo_size += cur->nmo_size;
 		free(cur, M_NETMAP);
 		cur = prev;
@@ -354,7 +354,7 @@ netmap_free(void *addr, const char *msg)
 	/* merge with the next one */
 	next = TAILQ_NEXT(cur, nmo_next);
 	if (next && next->nmo_used == 0) {
-		TAILQ_REMOVE(&netmap_mem_d->nm_molist, next, nmo_next);
+		TAILQ_REMOVE(&nm_mem->nm_molist, next, nmo_next);
 		cur->nmo_size += next->nmo_size;
 		free(next, M_NETMAP);
 	}
@@ -534,13 +534,13 @@ netmap_memory_init(void)
 	if (buf == NULL)
 		return (ENOMEM);
 	sz += extra_sz;
-	netmap_mem_d = malloc(sizeof(struct netmap_mem_d), M_NETMAP,
+	nm_mem = malloc(sizeof(struct netmap_mem_d), M_NETMAP,
 			      M_WAITOK | M_ZERO);
-	mtx_init(&netmap_mem_d->nm_mtx, "netmap memory allocator lock", NULL,
+	mtx_init(&nm_mem->nm_mtx, "netmap memory allocator lock", NULL,
 		 MTX_DEF);
-	TAILQ_INIT(&netmap_mem_d->nm_molist);
-	netmap_mem_d->nm_buffer = buf;
-	netmap_mem_d->nm_totalsize = sz;
+	TAILQ_INIT(&nm_mem->nm_molist);
+	nm_mem->nm_buffer = buf;
+	nm_mem->nm_totalsize = sz;
 
 	/*
 	 * A buffer takes 2k, a slot takes 8 bytes + ring overhead,
@@ -548,24 +548,24 @@ netmap_memory_init(void)
 	 * the memory for the rings, and the rest for the buffers,
 	 * and be sure we never run out.
 	 */
-	netmap_mem_d->nm_size = sz/200;
-	netmap_mem_d->nm_buf_start =
-		(netmap_mem_d->nm_size + PAGE_SIZE - 1) & ~(PAGE_SIZE-1);
-	netmap_mem_d->nm_buf_len = sz - netmap_mem_d->nm_buf_start;
+	nm_mem->nm_size = sz/200;
+	nm_mem->nm_buf_start =
+		(nm_mem->nm_size + PAGE_SIZE - 1) & ~(PAGE_SIZE-1);
+	nm_mem->nm_buf_len = sz - nm_mem->nm_buf_start;
 
-	nm_buf_pool.base = netmap_mem_d->nm_buffer;
-	nm_buf_pool.base += netmap_mem_d->nm_buf_start;
+	nm_buf_pool.base = nm_mem->nm_buffer;
+	nm_buf_pool.base += nm_mem->nm_buf_start;
 	netmap_buffer_base = nm_buf_pool.base;
 	D("netmap_buffer_base %p (offset %d)",
-		netmap_buffer_base, (int)netmap_mem_d->nm_buf_start);
+		netmap_buffer_base, (int)nm_mem->nm_buf_start);
 	/* number of buffers, they all start as free */
 
 	netmap_total_buffers = nm_buf_pool.total_buffers =
-		netmap_mem_d->nm_buf_len / NETMAP_BUF_SIZE;
+		nm_mem->nm_buf_len / NETMAP_BUF_SIZE;
 	nm_buf_pool.bufsize = NETMAP_BUF_SIZE;
 
 	D("Have %d MB, use %dKB for rings, %d buffers at %p",
-		(sz >> 20), (int)(netmap_mem_d->nm_size >> 10),
+		(sz >> 20), (int)(nm_mem->nm_size >> 10),
 		nm_buf_pool.total_buffers, nm_buf_pool.base);
 
 	/* allocate and initialize the bitmap. Entry 0 is considered
@@ -581,10 +581,10 @@ netmap_memory_init(void)
 	
 	mem_obj = malloc(sizeof(struct netmap_mem_obj), M_NETMAP,
 			 M_WAITOK | M_ZERO);
-	TAILQ_INSERT_HEAD(&netmap_mem_d->nm_molist, mem_obj, nmo_next);
+	TAILQ_INSERT_HEAD(&nm_mem->nm_molist, mem_obj, nmo_next);
 	mem_obj->nmo_used = 0;
-	mem_obj->nmo_size = netmap_mem_d->nm_size;
-	mem_obj->nmo_data = netmap_mem_d->nm_buffer;
+	mem_obj->nmo_size = nm_mem->nm_size;
+	mem_obj->nmo_data = nm_mem->nm_buffer;
 
 	return (0);
 }
@@ -601,9 +601,9 @@ netmap_memory_fini(void)
 {
 	struct netmap_mem_obj *mem_obj;
 
-	while (!TAILQ_EMPTY(&netmap_mem_d->nm_molist)) {
-		mem_obj = TAILQ_FIRST(&netmap_mem_d->nm_molist);
-		TAILQ_REMOVE(&netmap_mem_d->nm_molist, mem_obj, nmo_next);
+	while (!TAILQ_EMPTY(&nm_mem->nm_molist)) {
+		mem_obj = TAILQ_FIRST(&nm_mem->nm_molist);
+		TAILQ_REMOVE(&nm_mem->nm_molist, mem_obj, nmo_next);
 		if (mem_obj->nmo_used == 1) {
 			printf("netmap: leaked %d bytes at %p\n",
 			       (int)mem_obj->nmo_size,
@@ -611,9 +611,9 @@ netmap_memory_fini(void)
 		}
 		free(mem_obj, M_NETMAP);
 	}
-	contigfree(netmap_mem_d->nm_buffer, netmap_mem_d->nm_totalsize, M_NETMAP);
+	contigfree(nm_mem->nm_buffer, nm_mem->nm_totalsize, M_NETMAP);
 	// XXX mutex_destroy(nm_mtx);
-	free(netmap_mem_d, M_NETMAP);
+	free(nm_mem, M_NETMAP);
 }
 /*------------- end of memory allocator -----------------*/
 
@@ -1008,7 +1008,7 @@ netmap_ioctl(__unused struct cdev *dev, u_long cmd, caddr_t data,
 	switch (cmd) {
 	case NIOCGINFO:		/* return capabilities etc */
 		/* memsize is always valid */
-		nmr->nr_memsize = netmap_mem_d->nm_totalsize;
+		nmr->nr_memsize = nm_mem->nm_totalsize;
 		nmr->nr_offset = 0;
 		nmr->nr_rx_rings = nmr->nr_tx_rings = 0;
 		nmr->nr_rx_slots = nmr->nr_tx_slots = 0;
@@ -1105,7 +1105,7 @@ error:
 		nmr->nr_tx_rings = na->num_tx_queues;
 		nmr->nr_rx_slots = na->num_rx_desc;
 		nmr->nr_tx_slots = na->num_tx_desc;
-		nmr->nr_memsize = netmap_mem_d->nm_totalsize;
+		nmr->nr_memsize = nm_mem->nm_totalsize;
 		nmr->nr_offset = netmap_if_offset(nifp);
 		break;
 
@@ -1713,7 +1713,7 @@ netmap_init(void)
 		return (error);
 	}
 	printf("netmap: loaded module with %d Mbytes\n",
-		(int)(netmap_mem_d->nm_totalsize >> 20));
+		(int)(nm_mem->nm_totalsize >> 20));
 	netmap_dev = make_dev(&netmap_cdevsw, 0, UID_ROOT, GID_WHEEL, 0660,
 			      "netmap");
 	return (error);
