@@ -122,7 +122,7 @@ igb_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
+	u_int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
 
 	/* generate an interrupt approximately every half ring */
 	int report_frequency = kring->nkr_num_slots >> 1;
@@ -149,7 +149,9 @@ igb_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 
 		l = netmap_tidx_k2n(na, ring_nr, j);
 		for (n = 0; j != k; n++) {
+			/* slot is the current slot in the netmap ring */
 			struct netmap_slot *slot = &ring->slot[j];
+			/* curr is the current slot in the nic ring */
 			union e1000_adv_tx_desc *curr =
 			    (union e1000_adv_tx_desc *)&txr->tx_base[l];
 			struct igb_tx_buffer *txbuf = &txr->tx_buffers[l];
@@ -158,7 +160,7 @@ igb_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 					E1000_ADVTXD_DCMD_RS : 0;
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
-			int len = slot->len;
+			u_int len = slot->len;
 
 			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
 				if (do_lock)
@@ -167,8 +169,13 @@ igb_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			}
 
 			slot->flags &= ~NS_REPORT;
-			// XXX set the address unconditionally
+			if (slot->flags & NS_BUF_CHANGED) {
+				/* buffer has changed, reload map */
+				netmap_reload_map(txr->txtag, txbuf->map, addr);
+				slot->flags &= ~NS_BUF_CHANGED;
+			}
 			curr->read.buffer_addr = htole64(paddr);
+			// XXX check olinfo and cmd_type_len
 			curr->read.olinfo_status =
 			    htole32(olinfo_status |
 				(len<< E1000_ADVTXD_PAYLEN_SHIFT));
@@ -177,11 +184,6 @@ igb_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 				    E1000_ADVTXD_DCMD_IFCS |
 				    E1000_ADVTXD_DCMD_DEXT |
 				    E1000_ADVTXD_DCMD_EOP | flags);
-			if (slot->flags & NS_BUF_CHANGED) {
-				/* buffer has changed, reload map */
-				netmap_reload_map(txr->txtag, txbuf->map, addr);
-				slot->flags &= ~NS_BUF_CHANGED;
-			}
 
 			bus_dmamap_sync(txr->txtag, txbuf->map,
 				BUS_DMASYNC_PREWRITE);
@@ -239,7 +241,7 @@ igb_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	int j, l, n, lim = kring->nkr_num_slots - 1;
+	u_int j, l, n, lim = kring->nkr_num_slots - 1;
 	int force_update = do_lock || kring->nr_kflags & NKR_PENDINTR;
 	u_int k = ring->cur, resvd = ring->reserved;
 
@@ -273,7 +275,7 @@ igb_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
 		}
-		if (n) {
+		if (n) { /* update the state variables */
 			rxr->next_to_check = l;
 			kring->nr_hwavail += n;
 		}
@@ -304,16 +306,14 @@ igb_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 				return netmap_ring_reinit(kring);
 			}
 
-			curr->wb.upper.status_error = 0;
-			curr->read.pkt_addr = htole64(paddr);
 			if (slot->flags & NS_BUF_CHANGED) {
 				netmap_reload_map(rxr->ptag, rxbuf->pmap, addr);
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
-
+			curr->read.pkt_addr = htole64(paddr);
+			curr->wb.upper.status_error = 0;
 			bus_dmamap_sync(rxr->ptag, rxbuf->pmap,
 				BUS_DMASYNC_PREREAD);
-
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
 		}

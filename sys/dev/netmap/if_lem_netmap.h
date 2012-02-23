@@ -23,6 +23,7 @@
  * SUCH DAMAGE.
  */
 
+
 /*
  * $FreeBSD: head/sys/dev/netmap/if_lem_netmap.h 231881 2012-02-17 14:09:04Z luigi $
  * $Id$
@@ -37,7 +38,6 @@
 #include <vm/vm.h>
 #include <vm/pmap.h>    /* vtophys ? */
 #include <dev/netmap/netmap_kern.h>
-
 
 
 static void
@@ -70,7 +70,7 @@ lem_netmap_lock_wrapper(struct ifnet *ifp, int what, u_int ringid)
 
 
 /*
- * register-unregister routine
+ * Register/unregister
  */
 static int
 lem_netmap_reg(struct ifnet *ifp, int onoff)
@@ -80,7 +80,7 @@ lem_netmap_reg(struct ifnet *ifp, int onoff)
 	int error = 0;
 
 	if (na == NULL)
-		return EINVAL;	/* no netmap support here */
+		return EINVAL;
 
 	lem_disable_intr(adapter);
 
@@ -129,7 +129,7 @@ lem_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
+	u_int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
 
 	/* generate an interrupt approximately every half ring */
 	int report_frequency = kring->nkr_num_slots >> 1;
@@ -143,7 +143,6 @@ lem_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		EM_TX_LOCK(adapter);
 	bus_dmamap_sync(adapter->txdma.dma_tag, adapter->txdma.dma_map,
 			BUS_DMASYNC_POSTREAD);
-
 	/*
 	 * Process new packets to send. j is the current index in the
 	 * netmap ring, l is the corresponding index in the NIC ring.
@@ -162,7 +161,7 @@ lem_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 					E1000_TXD_CMD_RS : 0;
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
-			int len = slot->len;
+			u_int len = slot->len;
 
 			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
 				if (do_lock)

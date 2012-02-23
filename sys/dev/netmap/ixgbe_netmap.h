@@ -47,7 +47,6 @@
 #include <vm/pmap.h>
 
  */
-
 #include <dev/netmap/netmap_kern.h>
 
 
@@ -84,7 +83,7 @@ ixgbe_netmap_lock_wrapper(struct ifnet *_a, int what, u_int queueid)
 
 
 /*
- * Netmap register/unregister. We are already under core lock.
+ * Register/unregister. We are already under core lock.
  * Only called on the first register or the last unregister.
  */
 static int
@@ -94,8 +93,8 @@ ixgbe_netmap_reg(struct ifnet *ifp, int onoff)
 	struct netmap_adapter *na = NA(ifp);
 	int error = 0;
 
-	if (!na) /* probably, netmap_attach() failed */
-		return EINVAL;
+	if (na == NULL)
+		return EINVAL; /* no netmap support here */
 
 	ixgbe_disable_intr(adapter);
 
@@ -162,7 +161,7 @@ ixgbe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(adapter->ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
+	u_int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
 
 	/*
 	 * ixgbe can generate an interrupt on every tx packet, but it
@@ -228,7 +227,7 @@ ixgbe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			int flags = ((slot->flags & NS_REPORT) ||
 				j == 0 || j == report_frequency) ?
 					IXGBE_TXD_CMD_RS : 0;
-			int len = slot->len;
+			u_int len = slot->len;
 
 			/*
 			 * Quick check for valid addr and len.
@@ -272,7 +271,7 @@ ring_reset:
 			l = (l == lim) ? 0 : l + 1;
 		}
 		kring->nr_hwcur = k; /* the saved ring->cur */
-		/* decrease avail by number of sent packets */
+		/* decrease avail by number of packets  sent */
 		kring->nr_hwavail -= n;
 
 		/* synchronize the NIC ring */
@@ -381,7 +380,7 @@ ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(adapter->ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	int j, l, n, lim = kring->nkr_num_slots - 1;
+	u_int j, l, n, lim = kring->nkr_num_slots - 1;
 	int force_update = do_lock || kring->nr_kflags & NKR_PENDINTR;
 	u_int k = ring->cur, resvd = ring->reserved;
 

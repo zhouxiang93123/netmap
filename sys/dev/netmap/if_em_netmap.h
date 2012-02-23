@@ -168,7 +168,7 @@ em_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
+	u_int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
 
 	/* generate an interrupt approximately every half ring */
 	int report_frequency = kring->nkr_num_slots >> 1;
@@ -182,16 +182,17 @@ em_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
 			BUS_DMASYNC_POSTREAD);
 
-	/* check for new packets to send.
-	 * j indexes the netmap ring, l indexes the nic ring, and
-	 *	j = kring->nr_hwcur, l = E1000_TDT (not tracked),
-	 *	j == (l + kring->nkr_hwofs) % ring_size
+	/*
+	 * Process new packets to send. j is the current index in the
+	 * netmap ring, l is the corresponding index in the NIC ring.
 	 */
 	j = kring->nr_hwcur;
-	if (j != k) {	/* we have packets to send */
+	if (j != k) {	/* we have new packets to send */
 		l = netmap_tidx_k2n(na, ring_nr, j);
 		for (n = 0; j != k; n++) {
+			/* slot is the current slot in the netmap ring */
 			struct netmap_slot *slot = &ring->slot[j];
+			/* curr is the current slot in the nic ring */
 			struct e1000_tx_desc *curr = &txr->tx_base[l];
 			struct em_buffer *txbuf = &txr->tx_buffers[l];
 			int flags = ((slot->flags & NS_REPORT) ||
@@ -199,7 +200,7 @@ em_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 					E1000_TXD_CMD_RS : 0;
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
-			int len = slot->len;
+			u_int len = slot->len;
 
 			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
 				if (do_lock)
@@ -208,17 +209,15 @@ em_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			}
 
 			slot->flags &= ~NS_REPORT;
-			curr->upper.data = 0;
-			curr->lower.data = 
-			    htole32(adapter->txd_cmd | len |
-				(E1000_TXD_CMD_EOP | flags) );
 			if (slot->flags & NS_BUF_CHANGED) {
 				curr->buffer_addr = htole64(paddr);
 				/* buffer has changed, reload map */
 				netmap_reload_map(txr->txtag, txbuf->map, addr);
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
-
+			curr->upper.data = 0;
+			curr->lower.data = htole32(adapter->txd_cmd | len |
+				(E1000_TXD_CMD_EOP | flags) );
 			bus_dmamap_sync(txr->txtag, txbuf->map,
 				BUS_DMASYNC_PREWRITE);
 			j = (j == lim) ? 0 : j + 1;
@@ -271,7 +270,7 @@ em_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	int j, l, n, lim = kring->nkr_num_slots - 1;
+	u_int j, l, n, lim = kring->nkr_num_slots - 1;
 	int force_update = do_lock || kring->nr_kflags & NKR_PENDINTR;
 	u_int k = ring->cur, resvd = ring->reserved;
 
@@ -295,8 +294,9 @@ em_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	if (netmap_no_pendintr || force_update) {
 		for (n = 0; ; n++) {
 			struct e1000_rx_desc *curr = &rxr->rx_base[l];
+			uint32_t staterr = le32toh(curr->status);
 
-			if ((curr->status & E1000_RXD_STAT_DD) == 0)
+			if ((staterr & E1000_RXD_STAT_DD) == 0)
 				break;
 			ring->slot[j].len = le16toh(curr->length);
 			bus_dmamap_sync(rxr->rxtag, rxr->rx_buffers[l].map,
@@ -306,7 +306,7 @@ em_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			rxr->next_to_refresh = l;	// XXX
 			l = (l == lim) ? 0 : l + 1;
 		}
-		if (n) {
+		if (n) { /* update the state variables */
 			rxr->next_to_check = l;
 			kring->nr_hwavail += n;
 		}
@@ -337,17 +337,15 @@ em_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 				return netmap_ring_reinit(kring);
 			}
 
-			curr->status = 0;
 			if (slot->flags & NS_BUF_CHANGED) {
 				curr->buffer_addr = htole64(paddr);
 				/* buffer has changed, reload map */
 				netmap_reload_map(rxr->rxtag, rxbuf->map, addr);
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
-
+			curr->status = 0;
 			bus_dmamap_sync(rxr->rxtag, rxbuf->map,
 			    BUS_DMASYNC_PREREAD);
-
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
 		}
