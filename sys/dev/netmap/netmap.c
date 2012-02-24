@@ -1012,6 +1012,13 @@ netmap_ioctl(__unused struct cdev *dev, u_long cmd, caddr_t data,
 		nmr->nr_offset = 0;
 		nmr->nr_rx_rings = nmr->nr_tx_rings = 0;
 		nmr->nr_rx_slots = nmr->nr_tx_slots = 0;
+		if (nmr->nr_version != NETMAP_API) {
+			D("API mismatch got %d have %d",
+				nmr->nr_version, NETMAP_API);
+			nmr->nr_version = NETMAP_API;
+			error = EINVAL;
+			break;
+		}
 		if (nmr->nr_name[0] == '\0')	/* just get memory info */
 			break;
 		error = get_ifp(nmr->nr_name, &ifp); /* get a refcount */
@@ -1026,6 +1033,11 @@ netmap_ioctl(__unused struct cdev *dev, u_long cmd, caddr_t data,
 		break;
 
 	case NIOCREGIF:
+		if (nmr->nr_version != NETMAP_API) {
+			nmr->nr_version = NETMAP_API;
+			error = EINVAL;
+			break;
+		}
 		if (priv != NULL) {	/* thread already registered */
 			error = netmap_set_ringid(priv, nmr->nr_ringid);
 			break;

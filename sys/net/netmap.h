@@ -261,6 +261,7 @@ struct netmap_if {
 struct nmreq {
 	char		nr_name[IFNAMSIZ];
 	uint32_t	nr_version;	/* API version */
+#define	NETMAP_API	2		/* current version */
 	uint32_t	nr_offset;	/* nifp offset in the shared region */
 	uint32_t	nr_memsize;	/* size of the shared region */
 	uint32_t	nr_tx_slots;	/* slots in tx rings */
@@ -269,11 +270,19 @@ struct nmreq {
 	uint16_t	nr_rx_rings;	/* number of tx rings */
 	uint16_t	nr_ringid;	/* ring(s) we care about */
 #define NETMAP_HW_RING	0x4000		/* low bits indicate one hw ring */
-#define NETMAP_SW_RING	0x2000		/* we process the sw ring */
-#define NETMAP_NO_TX_POLL	0x1000	/* no gratuitous txsync on poll */
+#define NETMAP_SW_RING	0x2000		/* process the sw ring */
+#define NETMAP_NO_TX_POLL	0x1000	/* no automatic txsync on poll */
 #define NETMAP_RING_MASK 0xfff		/* the ring number */
+	uint16_t	spare1;
+	uint32_t	spare2[4];
 };
 
+/*
+ * FreeBSD uses the size value embedded in the _IOWR to determine
+ * how much to copy in/out. So we need it to match the actual
+ * data structure we pass. We put some spares in the structure
+ * to ease compatibility with other versions
+ */
 #define NIOCGINFO	_IOWR('i', 145, struct nmreq) /* return IF info */
 #define NIOCREGIF	_IOWR('i', 146, struct nmreq) /* interface register */
 #define NIOCUNREGIF	_IO('i', 147) /* interface unregister */
