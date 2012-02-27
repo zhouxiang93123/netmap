@@ -243,7 +243,7 @@ re_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 * is to limit the amount of data reported up to 'lim'
 	 */
 	l = sc->rl_ldata.rl_rx_prodidx; /* next pkt to check */
-	j = netmap_ridx_n2k(na, ring_nr, l); /* the kring index */
+	j = netmap_idx_n2k(kring, l); /* the kring index */
 	if (netmap_no_pendintr || force_update) {
 		for (n = kring->nr_hwavail; n < lim ; n++) {
 			struct rl_desc *cur_rx = &sc->rl_ldata.rl_rx_list[l];
@@ -280,7 +280,7 @@ re_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		k = (k >= resvd) ? k - resvd : k + lim + 1 - resvd;
 	}
 	if (j != k) { /* userspace has released some packets. */
-		l = netmap_ridx_k2n(na, ring_nr, j); /* the NIC index */
+		l = netmap_idx_k2n(kring, j); /* the NIC index */
 		for (n = 0; j != k; n++) {
 			struct netmap_slot *slot = ring->slot + j;
 			struct rl_desc *desc = &sc->rl_ldata.rl_rx_list[l];
@@ -350,7 +350,7 @@ re_netmap_tx_init(struct rl_softc *sc)
 	/* l points in the netmap ring, i points in the NIC ring */
 	for (i = 0; i < n; i++) {
 		uint64_t paddr;
-		int l = netmap_tidx_n2k(na, 0, i);
+		int l = netmap_idx_n2k(&na->tx_rings[0], i);
 		void *addr = PNMB(slot + l, &paddr);
 
 		desc[i].rl_bufaddr_lo = htole32(RL_ADDR_LO(paddr));
@@ -381,7 +381,7 @@ re_netmap_rx_init(struct rl_softc *sc)
 	for (i = 0; i < n; i++) {
 		void *addr;
 		uint64_t paddr;
-		int l = netmap_ridx_n2k(na, 0, i);
+		int l = netmap_idx_n2k(&na->rx_rings[0], i);
 
 		addr = PNMB(slot + l, &paddr);
 

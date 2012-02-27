@@ -161,7 +161,7 @@ ixgbe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(adapter->ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	u_int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
+	u_int j, k = ring->cur, l, n = 0, lim = kring->nkr_num_slots - 1;
 
 	/*
 	 * ixgbe can generate an interrupt on every tx packet, but it
@@ -170,20 +170,10 @@ ixgbe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 */
 	int report_frequency = kring->nkr_num_slots >> 1;
 
+	if (k > lim)
+		return netmap_ring_reinit(kring);
 	if (do_lock)
 		IXGBE_TX_LOCK(txr);
-	/* take a copy of ring->cur now, and never read it again */
-	k = ring->cur;
-	/* do a sanity check on cur - hwcur XXX verify */
-	l = k - kring->nr_hwcur;
-	if (l < 0)
-		l += lim + 1;
-	/* if cur is invalid reinitialize the ring. */
-	if (k > lim || l > kring->nr_hwavail) {
-		if (do_lock)
-			IXGBE_TX_UNLOCK(txr);
-		return netmap_ring_reinit(kring);
-	}
 
 	bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
 			BUS_DMASYNC_POSTREAD);
@@ -205,7 +195,9 @@ ixgbe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 */
 	j = kring->nr_hwcur;
 	if (j != k) {	/* we have new packets to send */
-		l = netmap_tidx_k2n(na, ring_nr, j); /* NIC index */
+		prefetch(&ring->slot[j]);
+		l = netmap_idx_k2n(kring, j); /* NIC index */
+		prefetch(&txr->tx_buffers[l]);
 		for (n = 0; j != k; n++) {
 			/*
 			 * Collect per-slot info.
@@ -217,17 +209,25 @@ ixgbe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			 * Many other drivers preserve the address, so
 			 * we only need to access it if NS_BUF_CHANGED
 			 * is set.
+			 * XXX note, on this device the dmamap* calls are
+			 * not necessary because tag is 0, however just accessing
+			 * the per-packet tag kills 1Mpps at 900 MHz.
 			 */
 			struct netmap_slot *slot = &ring->slot[j];
-			struct ixgbe_tx_buf *txbuf = &txr->tx_buffers[l];
 			union ixgbe_adv_tx_desc *curr = &txr->tx_base[l];
+			struct ixgbe_tx_buf *txbuf = &txr->tx_buffers[l];
 			uint64_t paddr;
-			void *addr = PNMB(slot, &paddr);
 			// XXX type for flags and len ?
 			int flags = ((slot->flags & NS_REPORT) ||
 				j == 0 || j == report_frequency) ?
 					IXGBE_TXD_CMD_RS : 0;
 			u_int len = slot->len;
+			void *addr = PNMB(slot, &paddr);
+
+			j = (j == lim) ? 0 : j + 1;
+			l = (l == lim) ? 0 : l + 1;
+			prefetch(&ring->slot[j]);
+			prefetch(&txr->tx_buffers[l]);
 
 			/*
 			 * Quick check for valid addr and len.
@@ -243,32 +243,26 @@ ring_reset:
 				return netmap_ring_reinit(kring);
 			}
 
-			slot->flags &= ~NS_REPORT;
 			if (slot->flags & NS_BUF_CHANGED) {
 				/* buffer has changed, unload and reload map */
 				netmap_reload_map(txr->txtag, txbuf->map, addr);
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
+			slot->flags &= ~NS_REPORT;
 			/*
 			 * Fill the slot in the NIC ring.
 			 * In this driver we need to rewrite the buffer
 			 * address in the NIC ring. Other drivers do not
 			 * need this.
+			 * Use legacy descriptor, it is faster.
 			 */
 			curr->read.buffer_addr = htole64(paddr);
-			curr->read.olinfo_status = htole32(len << IXGBE_ADVTXD_PAYLEN_SHIFT);
-			curr->read.cmd_type_len =
-			    htole32(txr->txd_cmd | len |
-				(IXGBE_ADVTXD_DTYP_DATA |
-				    IXGBE_ADVTXD_DCMD_DEXT |
-				    IXGBE_ADVTXD_DCMD_IFCS |
-				    IXGBE_TXD_CMD_EOP | flags) );
+			curr->read.olinfo_status = 0;
+			curr->read.cmd_type_len = htole32(len | flags |
+				IXGBE_ADVTXD_DCMD_IFCS | IXGBE_TXD_CMD_EOP);
 
 			/* make sure changes to the buffer are synced */
-			bus_dmamap_sync(txr->txtag, txbuf->map,
-				BUS_DMASYNC_PREWRITE);
-			j = (j == lim) ? 0 : j + 1;
-			l = (l == lim) ? 0 : l + 1;
+			bus_dmamap_sync(txr->txtag, txbuf->map, BUS_DMASYNC_PREWRITE);
 		}
 		kring->nr_hwcur = k; /* the saved ring->cur */
 		/* decrease avail by number of packets  sent */
@@ -409,7 +403,7 @@ ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 * rxr->next_to_check is set to 0 on a ring reinit
 	 */
 	l = rxr->next_to_check;
-	j = netmap_ridx_n2k(na, ring_nr, l);
+	j = netmap_idx_n2k(kring, l);
 
 	if (netmap_no_pendintr || force_update) {
 		for (n = 0; ; n++) {
@@ -447,7 +441,7 @@ ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		k = (k >= resvd) ? k - resvd : k + lim + 1 - resvd;
 	}
 	if (j != k) { /* userspace has released some packets. */
-		l = netmap_ridx_k2n(na, ring_nr, j);
+		l = netmap_idx_k2n(kring, j);
 		for (n = 0; j != k; n++) {
 			/* collect per-slot info, with similar validations
 			 * and flag handling as in the txsync code.

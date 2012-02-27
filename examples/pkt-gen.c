@@ -776,7 +776,7 @@ main(int arc, char **argv)
 	}
 
 	bzero(&nmr, sizeof(nmr));
-	nmr.nm_version = NETMAP_API;
+	nmr.nr_version = NETMAP_API;
 	/*
 	 * Open the netmap device to fetch the number of queues of our
 	 * interface.
@@ -797,7 +797,7 @@ main(int arc, char **argv)
 			D("map size is %d Kb", nmr.nr_memsize >> 10);
 		}
 		bzero(&nmr, sizeof(nmr));
-		nmr.nm_version = NETMAP_API;
+		nmr.nr_version = NETMAP_API;
 		strncpy(nmr.nr_name, ifname, sizeof(nmr.nr_name));
 		if ((ioctl(fd, NIOCGINFO, &nmr)) == -1) {
 			D("Unable to get if info for %s", ifname);
@@ -843,7 +843,7 @@ main(int arc, char **argv)
 	 * We decide to put the first interface registration here to
 	 * give time to cards that take a long time to reset the PHY.
 	 */
-	nmr.nm_version = NETMAP_API;
+	nmr.nr_version = NETMAP_API;
 	if (ioctl(fd, NIOCREGIF, &nmr) == -1) {
 		D("Unable to register interface %s", ifname);
 		//continue, fail later

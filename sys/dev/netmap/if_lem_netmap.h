@@ -149,7 +149,7 @@ lem_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 */
 	j = kring->nr_hwcur;
 	if (j != k) {	/* we have new packets to send */
-		l = netmap_tidx_k2n(na, ring_nr, j);
+		l = netmap_idx_k2n(kring, j);
 		for (n = 0; j != k; n++) {
 			/* slot is the current slot in the netmap ring */
 			struct netmap_slot *slot = &ring->slot[j];
@@ -251,7 +251,7 @@ lem_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 * j is an index in the netmap ring, l in the NIC ring.
 	 */
 	l = adapter->next_rx_desc_to_check;
-	j = netmap_ridx_n2k(na, ring_nr, l);
+	j = netmap_idx_n2k(kring, l);
 	if (netmap_no_pendintr || force_update) {
 		for (n = 0; ; n++) {
 			struct e1000_rx_desc *curr = &adapter->rx_desc_base[l];
@@ -289,7 +289,7 @@ lem_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		k = (k >= resvd) ? k - resvd : k + lim + 1 - resvd;
 	}
 	if (j != k) { /* userspace has released some packets. */
-		l = netmap_ridx_k2n(na, ring_nr, j); /* NIC ring index */
+		l = netmap_idx_k2n(kring, j); /* NIC ring index */
 		for (n = 0; j != k; n++) {
 			struct netmap_slot *slot = &ring->slot[j];
 			struct e1000_rx_desc *curr = &adapter->rx_desc_base[l];
