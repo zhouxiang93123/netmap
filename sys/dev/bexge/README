@@ -1,6 +1,0 @@
-test driver for the HP/Emulex NC550 card.
-
-Take a skeleton from dev/nxge/if_nxge.c and
-
-	linux-2.6.39.4/drivers/net/benet
-
