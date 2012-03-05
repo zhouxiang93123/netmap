@@ -192,7 +192,7 @@ nfe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 * netmap ring, l is the corresponding index in the NIC ring.
 	 */
 	j = kring->nr_hwcur;
-D("hwcur %d cur %d", j, k);
+	ND("hwcur %d cur %d", j, k);
 	na->tx_rings[0].nr_kflags &= ~NKR_PENDINTR;
 	if (j != k) {	/* we have new packets to send */
 
@@ -247,7 +247,7 @@ D("hwcur %d cur %d", j, k);
 		NFE_WRITE(sc, NFE_RXTX_CTL, NFE_RXTX_KICKTX | sc->rxtxctl);
 	}
 
-D("send %d avail %d reclaim next %d cur %d", n, kring->nr_hwavail,
+	ND("send %d avail %d reclaim next %d cur %d", n, kring->nr_hwavail,
 		sc->txq.next, sc->txq.cur);
 	if (n == 0 || kring->nr_hwavail < 1) {
 		l = sc->txq.next;
@@ -264,14 +264,14 @@ D("send %d avail %d reclaim next %d cur %d", n, kring->nr_hwavail,
 			if (flags & NFE_TX_VALID)
 				break;
 		}
-D("reclaimed %d next %d cur %d", n,
-		sc->txq.next, sc->txq.cur);
+		ND("reclaimed %d next %d cur %d", n,
+			sc->txq.next, sc->txq.cur);
 		if (n > 0) {
 			sc->txq.next = l;
 			kring->nr_hwavail += n;
 		}
-D("reclaimed %d next %d cur %d", n,
-		sc->txq.next, sc->txq.cur);
+		ND("reclaimed %d next %d cur %d", n,
+			sc->txq.next, sc->txq.cur);
 	}
 	/* update avail to what the kernel knows */
 	ring->avail = kring->nr_hwavail;
