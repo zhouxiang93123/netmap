@@ -267,7 +267,7 @@ struct nmreq {
 	uint32_t	nr_tx_slots;	/* slots in tx rings */
 	uint32_t	nr_rx_slots;	/* slots in rx rings */
 	uint16_t	nr_tx_rings;	/* number of tx rings */
-	uint16_t	nr_rx_rings;	/* number of tx rings */
+	uint16_t	nr_rx_rings;	/* number of rx rings */
 	uint16_t	nr_ringid;	/* ring(s) we care about */
 #define NETMAP_HW_RING	0x4000		/* low bits indicate one hw ring */
 #define NETMAP_SW_RING	0x2000		/* process the sw ring */
