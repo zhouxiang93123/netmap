@@ -67,12 +67,12 @@ nfe_netmap_init_buffers(struct nfe_softc *sc)
 			desc64->physaddr[1] = htole32(NFE_ADDR_LO(paddr));
 			desc64->vtag = 0;
 			desc64->length = htole16(0);
-			desc64->flags = htole16(0); // XXX or NFE_TX_VALID
+			desc64->flags = htole16(0);
 		} else {
 			desc32 = &sc->txq.desc32[l];
 			desc32->physaddr = htole32(NFE_ADDR_LO(paddr));
 			desc32->length = htole16(0);
-			desc32->flags = htole16(0); // XXX or NFE_TX_VALID
+			desc32->flags = htole16(0);
 		}
 	}
 
@@ -192,6 +192,8 @@ nfe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 * netmap ring, l is the corresponding index in the NIC ring.
 	 */
 	j = kring->nr_hwcur;
+D("hwcur %d cur %d", j, k);
+	na->tx_rings[0].nr_kflags &= ~NKR_PENDINTR;
 	if (j != k) {	/* we have new packets to send */
 
 		l = netmap_idx_k2n(kring, j);
@@ -220,12 +222,14 @@ nfe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			    desc64->physaddr[1] = htole32(NFE_ADDR_LO(paddr));
 			    desc64->vtag = 0;
 			    desc64->length = htole16(len - 1);
-			    desc64->flags = htole16(0);
+			    desc64->flags =
+				htole16(NFE_TX_VALID | NFE_TX_LASTFRAG_V2);
 			} else {
 			    desc32 = &sc->txq.desc32[l];
 			    desc32->physaddr = htole32(NFE_ADDR_LO(paddr));
 			    desc32->length = htole16(len - 1);
-			    desc32->flags = htole16(0);
+			    desc32->flags =
+				htole16(NFE_TX_VALID | NFE_TX_LASTFRAG_V1);
 			}
 
 			bus_dmamap_sync(sc->txq.tx_data_tag,
@@ -235,8 +239,7 @@ nfe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		}
 		kring->nr_hwcur = k; /* the saved ring->cur */
 		kring->nr_hwavail -= n;
-		l = (l == lim) ? 0 : l + 1;
-		sc->txq.cur = l; /* the next ? */
+		sc->txq.cur = l;
 
 		bus_dmamap_sync(sc->txq.tx_desc_tag, sc->txq.tx_desc_map,
 		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
@@ -244,6 +247,8 @@ nfe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		NFE_WRITE(sc, NFE_RXTX_CTL, NFE_RXTX_KICKTX | sc->rxtxctl);
 	}
 
+D("send %d avail %d reclaim next %d cur %d", n, kring->nr_hwavail,
+		sc->txq.next, sc->txq.cur);
 	if (n == 0 || kring->nr_hwavail < 1) {
 		l = sc->txq.next;
 		k = sc->txq.cur;
@@ -259,10 +264,14 @@ nfe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			if (flags & NFE_TX_VALID)
 				break;
 		}
+D("reclaimed %d next %d cur %d", n,
+		sc->txq.next, sc->txq.cur);
 		if (n > 0) {
 			sc->txq.next = l;
 			kring->nr_hwavail += n;
 		}
+D("reclaimed %d next %d cur %d", n,
+		sc->txq.next, sc->txq.cur);
 	}
 	/* update avail to what the kernel knows */
 	ring->avail = kring->nr_hwavail;
