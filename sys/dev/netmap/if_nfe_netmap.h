@@ -27,7 +27,7 @@
  * $FreeBSD: head/sys/dev/netmap/if_em_netmap.h 231881 2012-02-17 14:09:04Z luigi $
  * $Id: if_nfe_netmap.h 10669 2012-02-27 18:55:05Z luigi $
  *
- * netmap support for nfe.
+ * netmap support for nfe. XXX not yet tested.
  *
  * For more details on netmap support please see ixgbe_netmap.h
  */
@@ -40,18 +40,90 @@
 #include <dev/netmap/netmap_kern.h>
 
 
+static int
+nfe_netmap_init_buffers(struct nfe_softc *sc)
+{
+	struct netmap_adapter *na = NA(sc->nfe_ifp);
+	struct netmap_slot *slot = netmap_reset(na, NR_TX, 0, 0);
+	int i, l, n, max_avail;
+        struct nfe_desc32 *desc32 = NULL;
+        struct nfe_desc64 *desc64 = NULL;
+	void *addr;
+	uint64_t paddr;
+
+	if (!slot)
+		return 0;
+	// XXX init the tx ring
+	n = NFE_TX_RING_COUNT;
+	for (i = 0; i < n; i++) {
+                l = netmap_idx_n2k(&na->tx_rings[0], i);
+                addr = PNMB(slot + l, &paddr);
+		netmap_reload_map(sc->txq.tx_data_tag,
+		    sc->txq.data[l].tx_data_map, addr);
+		slot[l].flags = 0;
+		if (sc->nfe_flags & NFE_40BIT_ADDR) {
+			desc64 = &sc->txq.desc64[l];
+			desc64->physaddr[0] = htole32(NFE_ADDR_HI(paddr));
+			desc64->physaddr[1] = htole32(NFE_ADDR_LO(paddr));
+			desc64->vtag = 0;
+			desc64->length = htole16(0);
+			desc64->flags = htole16(0); // XXX or NFE_TX_VALID
+		} else {
+			desc32 = &sc->txq.desc32[l];
+			desc32->physaddr = htole32(NFE_ADDR_LO(paddr));
+			desc32->length = htole16(0);
+			desc32->flags = htole16(0); // XXX or NFE_TX_VALID
+		}
+	}
+
+	slot = netmap_reset(na, NR_RX, 0, 0);
+	// XXX init the rx ring
+        /*
+         * Userspace owned hwavail packets before the reset,
+         * so the NIC that last hwavail descriptors of the ring
+         * are still owned by the driver (and keep one empty).
+         */
+	n = NFE_RX_RING_COUNT;
+        max_avail = n - 1 - na->rx_rings[0].nr_hwavail;
+        for (i = 0; i < n; i++) {
+		uint16_t flags;
+                l = netmap_idx_n2k(&na->rx_rings[0], i);
+                addr = PNMB(slot + l, &paddr);
+                flags = (i < max_avail) ? NFE_RX_READY : 0;
+		if (sc->nfe_flags & NFE_40BIT_ADDR) {
+			desc64 = &sc->rxq.desc64[l];
+			desc64->physaddr[0] = htole32(NFE_ADDR_HI(paddr));
+			desc64->physaddr[1] = htole32(NFE_ADDR_LO(paddr));
+			desc64->vtag = 0;
+			desc64->length = htole16(NETMAP_BUF_SIZE);
+			desc64->flags = htole16(NFE_RX_READY);
+		} else {
+			desc32 = &sc->rxq.desc32[l];
+			desc32->physaddr = htole32(NFE_ADDR_LO(paddr));
+			desc32->length = htole16(NETMAP_BUF_SIZE);
+			desc32->flags = htole16(NFE_RX_READY);
+		}
+  
+		netmap_reload_map(sc->rxq.rx_data_tag,
+		    sc->rxq.data[l].rx_data_map, addr);
+                bus_dmamap_sync(sc->rxq.rx_data_tag,
+		    sc->rxq.data[l].rx_data_map, BUS_DMASYNC_PREREAD);
+        }
+
+	return 1;
+}
+
 static void
 nfe_netmap_lock_wrapper(struct ifnet *ifp, int what, u_int queueid)
 {
-	struct adapter *adapter = ifp->if_softc;
+	struct nfe_softc *sc = ifp->if_softc;
 
-	ASSERT(queueid < adapter->num_queues);
 	switch (what) {
 	case NETMAP_CORE_LOCK:
-		NFE_LOCK(adapter);
+		NFE_LOCK(sc);
 		break;
 	case NETMAP_CORE_UNLOCK:
-		NFE_UNLOCK(adapter);
+		NFE_UNLOCK(sc);
 		break;
 	}
 }
@@ -95,11 +167,13 @@ nfe_netmap_reg(struct ifnet *ifp, int onoff)
 static int
 nfe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 {
-	struct adapter *nfe_softc = ifp->if_softc;
+	struct nfe_softc *sc = ifp->if_softc;
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
+	struct nfe_desc32 *desc32 = NULL;
+	struct nfe_desc64 *desc64 = NULL;
 
 	/* generate an interrupt approximately every half ring */
 	int report_frequency = kring->nkr_num_slots >> 1;
@@ -109,7 +183,7 @@ nfe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		return netmap_ring_reinit(kring);
 
 	if (do_lock)
-		NFE_LOCK(txr);
+		NFE_LOCK(sc);
 	bus_dmamap_sync(sc->txq.tx_desc_tag, sc->txq.tx_desc_map,
 			BUS_DMASYNC_POSTREAD);
 
@@ -119,8 +193,6 @@ nfe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 */
 	j = kring->nr_hwcur;
 	if (j != k) {	/* we have new packets to send */
-		struct nfe_desc32 *desc32 = NULL;
-		struct nfe_desc64 *desc64 = NULL;
 
 		l = netmap_idx_k2n(kring, j);
 		for (n = 0; j != k; n++) {
@@ -132,7 +204,7 @@ nfe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 
 			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
 				if (do_lock)
-					NFE_UNLOCK(txr);
+					NFE_UNLOCK(sc);
 				return netmap_ring_reinit(kring);
 			}
 			slot->flags &= ~NS_REPORT;
@@ -164,7 +236,7 @@ nfe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		kring->nr_hwcur = k; /* the saved ring->cur */
 		kring->nr_hwavail -= n;
 		l = (l == lim) ? 0 : l + 1;
-		sc->txq_cur = l; /* the next ? */
+		sc->txq.cur = l; /* the next ? */
 
 		bus_dmamap_sync(sc->txq.tx_desc_tag, sc->txq.tx_desc_map,
 		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
@@ -196,7 +268,7 @@ nfe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	ring->avail = kring->nr_hwavail;
 
 	if (do_lock)
-		NFE_UNLOCK(txr);
+		NFE_UNLOCK(sc);
 	return 0;
 }
 
@@ -214,8 +286,9 @@ nfe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;
 	int force_update = do_lock || kring->nr_kflags & NKR_PENDINTR;
 	u_int k = ring->cur, resvd = ring->reserved;
+	struct nfe_desc32 *desc32;
+	struct nfe_desc64 *desc64;
 
-	k = ring->cur;
 	if (k > lim)
 		return netmap_ring_reinit(kring);
  
@@ -233,13 +306,9 @@ nfe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	l = sc->rxq.cur;
 	j = netmap_idx_n2k(kring, l);
 	if (netmap_no_pendintr || force_update) {
-		struct nfe_desc32 *desc32;
-		struct nfe_desc64 *desc64;
-		struct nfe_rx_data *data;
-		uint16_t flags;
+		uint16_t flags, len;
 
 		for (n = 0; ; n++) {
-			data = &sc->rxq.data[l];
 			if (sc->nfe_flags & NFE_40BIT_ADDR) {
 			    desc64 = &sc->rxq.desc64[sc->rxq.cur];
 			    flags = le16toh(desc64->flags);
@@ -254,11 +323,10 @@ nfe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 				break;
 
 			ring->slot[j].len = len;
-			bus_dmamap_sync(rxr->rxtag, rxr->rx_buffers[l].map,
+			bus_dmamap_sync(sc->rxq.rx_data_tag,
+				sc->rxq.data[l].rx_data_map,
 				BUS_DMASYNC_POSTREAD);
 			j = (j == lim) ? 0 : j + 1;
-			/* make sure next_to_refresh follows next_to_check */
-			rxr->next_to_refresh = l;	// XXX
 			l = (l == lim) ? 0 : l + 1;
 		}
 		if (n) { /* update the state variables */
@@ -286,14 +354,14 @@ nfe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 
 			if (addr == netmap_buffer_base) { /* bad buf */
 				if (do_lock)
-					NFE_UNLOCK(rxr);
+					NFE_UNLOCK(sc);
 				return netmap_ring_reinit(kring);
 			}
 
 			if (slot->flags & NS_BUF_CHANGED) {
 				/* buffer has changed, reload map */
 				netmap_reload_map(sc->rxq.rx_data_tag,
-				    &sc->rxq.data[l].rx_data_map, addr);
+				    sc->rxq.data[l].rx_data_map, addr);
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
 			if (sc->nfe_flags & NFE_40BIT_ADDR) {
@@ -312,32 +380,33 @@ nfe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 				desc32->flags = htole16(NFE_RX_READY);
 			}
 
-			bus_dmamap_sync(rxr->rxtag, rxbuf->map,
+			bus_dmamap_sync(sc->rxq.rx_data_tag,
+			    sc->rxq.data[l].rx_data_map,
 			    BUS_DMASYNC_PREREAD);
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
 		}
 		kring->nr_hwavail -= n;
 		kring->nr_hwcur = k;
-		bus_dmamap_sync(rxr->rxdma.dma_tag, rxr->rxdma.dma_map,
+		bus_dmamap_sync(sc->rxq.rx_desc_tag, sc->rxq.rx_desc_map,
 		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 	}
 	/* tell userspace that there are new packets */
 	ring->avail = kring->nr_hwavail - resvd;
 	if (do_lock)
-		NFE_UNLOCK(rxr);
+		NFE_UNLOCK(sc);
 	return 0;
 }
 
 
 static void
-nfe_netmap_attach(struct adapter *adapter)
+nfe_netmap_attach(struct nfe_softc *sc)
 {
 	struct netmap_adapter na;
 
 	bzero(&na, sizeof(na));
 
-	na.ifp = adapter->ifp;
+	na.ifp = sc->nfe_ifp;
 	na.separate_locks = 0;
 	na.num_tx_desc = NFE_TX_RING_COUNT;
 	na.num_rx_desc = NFE_RX_RING_COUNT;
