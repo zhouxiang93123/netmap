@@ -45,12 +45,14 @@ interrupt:
 			efx_ev_drv_gen		7
 			efx_ev_mcdi		0xc
 
-The receive ring seems to be circular,
+The receive ring seems to be circular, SFXGE_NDESCS in both rx and tx.
 	struct sfxge_rxq *rxq;
 	struct sfxge_rx_sw_desc *rx_desc;
 
 	id = rxq->pending modulo SFXGE_NDESCS
 	the descriptor is rxq->queue[id]
+
+each slot has size efx_qword_t (8 bytes with all overlays)
 
 The card is reset through sfxge_schedule_reset()
 
@@ -71,16 +73,32 @@ Global lock:
  */
 #include <dev/netmap/netmap_kern.h>
 
+static void sfxge_stop(struct sfxge_softc *sc);
+static int sfxge_start(struct sfxge_softc *sc);
+
+
+static int
+sfxge_netmap_init_buffers(struct sfxge_softc *sc)
+{
+	struct netmap_adapter *na = NA(sc->ifnet);
+	struct netmap_slot *slot = netmap_reset(na, NR_TX, 0, 0);
+	int i, l, n, max_avail;
+	void *addr;
+	uint64_t paddr;
+
+	// tx rings, see
+	//	sfxge_tx_qinit()
+	return 0;
+}
 
 /*
  * wrapper to export locks to the generic netmap code.
  */
 static void
-sfxge_netmap_lock_wrapper(struct ifnet *_a, int what, u_int queueid)
+sfxge_netmap_lock_wrapper(struct ifnet *ifp, int what, u_int queueid)
 {
-	struct sfxge_softc *sc = _a->if_softc;
+	struct sfxge_softc *sc = ifp->if_softc;
 
-	ASSERT(queueid < adapter->num_queues);
 	switch (what) {
 	case NETMAP_CORE_LOCK:
 		sx_xlock(&sc->softc_lock);
@@ -89,16 +107,16 @@ sfxge_netmap_lock_wrapper(struct ifnet *_a, int what, u_int queueid)
 		sx_xunlock(&sc->softc_lock);
 		break;
 	case NETMAP_TX_LOCK:
-		IXGBE_TX_LOCK(&adapter->tx_rings[queueid]);
+		mtx_lock(SFXGE_TXQ_LOCK(sc->txq[queueid]));
 		break;
 	case NETMAP_TX_UNLOCK:
-		IXGBE_TX_UNLOCK(&adapter->tx_rings[queueid]);
+		mtx_unlock(SFXGE_TXQ_LOCK(sc->txq[queueid]));
 		break;
 	case NETMAP_RX_LOCK:
-		IXGBE_RX_LOCK(&adapter->rx_rings[queueid]);
+		mtx_lock(&sc->evq[queueid]->lock);
 		break;
 	case NETMAP_RX_UNLOCK:
-		IXGBE_RX_UNLOCK(&adapter->rx_rings[queueid]);
+		mtx_unlock(&sc->evq[queueid]->lock);
 		break;
 	}
 }
@@ -109,16 +127,16 @@ sfxge_netmap_lock_wrapper(struct ifnet *_a, int what, u_int queueid)
  * Only called on the first register or the last unregister.
  */
 static int
-ixgbe_netmap_reg(struct ifnet *ifp, int onoff)
+sfxge_netmap_reg(struct ifnet *ifp, int onoff)
 {
-	struct adapter *adapter = ifp->if_softc;
+	struct sfxge_softc *sc = ifp->if_softc;
 	struct netmap_adapter *na = NA(ifp);
 	int error = 0;
 
 	if (na == NULL)
 		return EINVAL; /* no netmap support here */
 
-	ixgbe_disable_intr(adapter);
+	sfxge_stop(sc);
 
 	/* Tell the stack that the interface is no longer active */
 	ifp->if_drv_flags &= ~(IFF_DRV_RUNNING | IFF_DRV_OACTIVE);
@@ -134,7 +152,7 @@ ixgbe_netmap_reg(struct ifnet *ifp, int onoff)
 		 * reinitialize the adapter, now with netmap flag set,
 		 * so the rings will be set accordingly.
 		 */
-		ixgbe_init_locked(adapter);
+		sfxge_start(sc);
 		if ((ifp->if_drv_flags & (IFF_DRV_RUNNING | IFF_DRV_OACTIVE)) == 0) {
 			error = ENOMEM;
 			goto fail;
@@ -145,7 +163,7 @@ fail:
 		ifp->if_transmit = na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
 		/* initialize the card, this time in standard mode */
-		ixgbe_init_locked(adapter);	/* also enables intr */
+		sfxge_start(sc);	/* also enables intr */
 	}
 	return (error);
 }
@@ -176,11 +194,12 @@ fail:
  * buffers irrespective of interrupt mitigation.
  */
 static int
-ixgbe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+sfxge_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 {
-	struct adapter *adapter = ifp->if_softc;
-	struct tx_ring *txr = &adapter->tx_rings[ring_nr];
-	struct netmap_adapter *na = NA(adapter->ifp);
+	struct sfxge_softc *sc = ifp->if_softc;
+	struct sfxge_txq *txr = sc->txq[ring_nr];
+
+	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k = ring->cur, l, n = 0, lim = kring->nkr_num_slots - 1;
@@ -195,10 +214,10 @@ ixgbe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	if (k > lim)
 		return netmap_ring_reinit(kring);
 	if (do_lock)
-		IXGBE_TX_LOCK(txr);
+		mtx_lock(SFXGE_TXQ_LOCK(txr));
 
-	bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
-			BUS_DMASYNC_POSTREAD);
+//	bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
+//			BUS_DMASYNC_POSTREAD);
 
 	/*
 	 * Process new packets to send. j is the current index in the
@@ -217,9 +236,7 @@ ixgbe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 */
 	j = kring->nr_hwcur;
 	if (j != k) {	/* we have new packets to send */
-		prefetch(&ring->slot[j]);
 		l = netmap_idx_k2n(kring, j); /* NIC index */
-		prefetch(&txr->tx_buffers[l]);
 		for (n = 0; j != k; n++) {
 			/*
 			 * Collect per-slot info.
@@ -244,12 +261,11 @@ ixgbe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 				j == 0 || j == report_frequency) ?
 					IXGBE_TXD_CMD_RS : 0;
 			u_int len = slot->len;
+			efx_buffer_t *desc;
 			void *addr = PNMB(slot, &paddr);
 
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
-			prefetch(&ring->slot[j]);
-			prefetch(&txr->tx_buffers[l]);
 
 			/*
 			 * Quick check for valid addr and len.
@@ -261,13 +277,16 @@ ixgbe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
 ring_reset:
 				if (do_lock)
-					IXGBE_TX_UNLOCK(txr);
+					mtx_unlock(SFXGE_TXQ_LOCK(txr));
+mtx_unlock(SFXGE_TXQ_LOCK(sc->txq[queueid]));
+
 				return netmap_ring_reinit(kring);
 			}
 
 			if (slot->flags & NS_BUF_CHANGED) {
 				/* buffer has changed, unload and reload map */
-				netmap_reload_map(txr->txtag, txbuf->map, addr);
+				netmap_reload_map(txr->packet_dma_tag,
+				    txr->stmp[l].map, addr);
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
 			slot->flags &= ~NS_REPORT;
@@ -278,13 +297,15 @@ ring_reset:
 			 * need this.
 			 * Use legacy descriptor, it is faster.
 			 */
-			curr->read.buffer_addr = htole64(paddr);
-			curr->read.olinfo_status = 0;
-			curr->read.cmd_type_len = htole32(len | flags |
-				IXGBE_ADVTXD_DCMD_IFCS | IXGBE_TXD_CMD_EOP);
+			desc->eb_addr = paddr;
+			desc->eb_size = len;
+			desc->eb_eop = 1;
+			txr->n_pend_desc = 1;
+			sfxge_tx_qlist_post(txq);
 
 			/* make sure changes to the buffer are synced */
-			bus_dmamap_sync(txr->txtag, txbuf->map, BUS_DMASYNC_PREWRITE);
+			bus_dmamap_sync(txr->packet_dma_tag,
+			    txq->stmp[l].map, BUS_DMASYNC_PREWRITE);
 		}
 		kring->nr_hwcur = k; /* the saved ring->cur */
 		/* decrease avail by number of packets  sent */
@@ -367,7 +388,7 @@ ring_reset:
 	ring->avail = kring->nr_hwavail;
 
 	if (do_lock)
-		IXGBE_TX_UNLOCK(txr);
+		mtx_unlock(SFXGE_TXQ_LOCK(txr));
 	return 0;
 }
 
@@ -389,11 +410,12 @@ ring_reset:
  * do_lock has a special meaning: please refer to txsync.
  */
 static int
-ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+sfxge_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 {
-	struct adapter *adapter = ifp->if_softc;
-	struct rx_ring *rxr = &adapter->rx_rings[ring_nr];
-	struct netmap_adapter *na = NA(adapter->ifp);
+	struct sfxge_softc *sc = ifp->if_softc;
+	struct sfxge_rxq *rxq = &sc->rxq[ring_nr];
+	struct sfxge_evq *evq = &sc->evq[ring_nr];
+	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;
@@ -404,9 +426,9 @@ ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		return netmap_ring_reinit(kring);
 
 	if (do_lock)
-		IXGBE_RX_LOCK(rxr);
+		mtx_lock(&evq->lock);
 	/* XXX check sync modes */
-	bus_dmamap_sync(rxr->rxdma.dma_tag, rxr->rxdma.dma_map,
+	bus_dmamap_sync(rxq->rxdma.dma_tag, rxq->rxdma.dma_map,
 			BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 
 	/*
@@ -424,24 +446,23 @@ ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 *
 	 * rxr->next_to_check is set to 0 on a ring reinit
 	 */
-	l = rxr->next_to_check;
+	l = rxq->completed;
 	j = netmap_idx_n2k(kring, l);
 
 	if (netmap_no_pendintr || force_update) {
-		for (n = 0; ; n++) {
-			union ixgbe_adv_rx_desc *curr = &rxr->rx_base[l];
-			uint32_t staterr = le32toh(curr->wb.upper.status_error);
-
-			if ((staterr & IXGBE_RXD_STAT_DD) == 0)
-				break;
-			ring->slot[j].len = le16toh(curr->wb.upper.length);
-			bus_dmamap_sync(rxr->ptag,
-			    rxr->rx_buffers[l].pmap, BUS_DMASYNC_POSTREAD);
+		// see sfxge_rx_qcomplete()
+	
+		for (n = 0; l != rxq->pending ; n++) {
+			struct sfxge_rx_sw_desc *rx_desc = rxq->queue[l];
+			ring->slot[j].len =
+				rx_desc->size - sc->rx_prefix_size;
+			bus_dmamap_sync(rxq->ptag,
+			    rxq->rx_buffers[l].pmap, BUS_DMASYNC_POSTREAD);
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
 		}
 		if (n) { /* update the state variables */
-			rxr->next_to_check = l;
+			rxq->next_to_check = l;
 			kring->nr_hwavail += n;
 		}
 		kring->nr_kflags &= ~NKR_PENDINTR;
@@ -474,8 +495,8 @@ ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			 * may not have this requirement.
 			 */
 			struct netmap_slot *slot = &ring->slot[j];
-			union ixgbe_adv_rx_desc *curr = &rxr->rx_base[l];
-			struct ixgbe_rx_buf *rxbuf = &rxr->rx_buffers[l];
+			union ixgbe_adv_rx_desc *curr = &rxq->rx_base[l];
+			struct ixgbe_rx_buf *rxbuf = &rxq->rx_buffers[l];
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
 
@@ -483,36 +504,36 @@ ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 				goto ring_reset;
 
 			if (slot->flags & NS_BUF_CHANGED) {
-				netmap_reload_map(rxr->ptag, rxbuf->pmap, addr);
+				netmap_reload_map(rxq->ptag, rxbuf->pmap, addr);
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
 			curr->wb.upper.status_error = 0;
 			curr->read.pkt_addr = htole64(paddr);
-			bus_dmamap_sync(rxr->ptag, rxbuf->pmap,
+			bus_dmamap_sync(rxq->ptag, rxbuf->pmap,
 			    BUS_DMASYNC_PREREAD);
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
 		}
 		kring->nr_hwavail -= n;
 		kring->nr_hwcur = k;
-		bus_dmamap_sync(rxr->rxdma.dma_tag, rxr->rxdma.dma_map,
-		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
+//		bus_dmamap_sync(rxq->rxdma.dma_tag, rxq->rxdma.dma_map,
+//		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 		/* IMPORTANT: we must leave one free slot in the ring,
 		 * so move l back by one unit
 		 */
 		l = (l == 0) ? lim : l - 1;
-		IXGBE_WRITE_REG(&adapter->hw, IXGBE_RDT(rxr->me), l);
+		//IXGBE_WRITE_REG(&adapter->hw, IXGBE_RDT(rxr->me), l);
 	}
 	/* tell userspace that there are new packets */
 	ring->avail = kring->nr_hwavail - resvd;
 
 	if (do_lock)
-		IXGBE_RX_UNLOCK(rxr);
+		mtx_unlock(&evq->lock);
 	return 0;
 
 ring_reset:
 	if (do_lock)
-		IXGBE_RX_UNLOCK(rxr);
+		mtx_unlock(&evq->lock);
 	return netmap_ring_reinit(kring);
 }
 
@@ -525,21 +546,22 @@ ring_reset:
  * operate in standard mode.
  */
 static void
-ixgbe_netmap_attach(struct adapter *adapter)
+sfxge_netmap_attach(struct sfxge_softc *sc)
 {
 	struct netmap_adapter na;
 
 	bzero(&na, sizeof(na));
 
-	na.ifp = adapter->ifp;
+	na.ifp = sc->ifnet;
 	na.separate_locks = 1;	/* this card has separate rx/tx locks */
-	na.num_tx_desc = adapter->num_tx_desc;
-	na.num_rx_desc = adapter->num_rx_desc;
-	na.nm_txsync = ixgbe_netmap_txsync;
-	na.nm_rxsync = ixgbe_netmap_rxsync;
-	na.nm_lock = ixgbe_netmap_lock_wrapper;
-	na.nm_register = ixgbe_netmap_reg;
-	netmap_attach(&na, adapter->num_queues);
+	na.num_tx_desc = SFXGE_NDESCS;
+	na.num_rx_desc = SFXGE_NDESCS;
+	na.nm_txsync = sfxge_netmap_txsync;
+	na.nm_rxsync = sfxge_netmap_rxsync;
+	na.nm_lock = sfxge_netmap_lock_wrapper;
+	na.nm_register = sfxge_netmap_reg;
+	na.num_tx_queues = SFXGE_TXQ_NTYPES + SFXGE_RX_SCALE_MAX;
+	netmap_attach(&na, SFXGE_RX_SCALE_MAX);
 }	
 
 /* end of file */
