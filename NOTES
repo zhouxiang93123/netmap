@@ -1,4 +1,34 @@
 --- status and other development notes ---
+20120306 receive speed
+
+    ixgbe seems to have some rx losses when used with receive
+    interrupt mitigation. Symptoms are the card is missing ~0.2%
+    of the incoming traffic.
+    As a workaround, set  by setting dev.netmap.netmap_no_pendintr=1
+    makes the receiver not lose packets.
+
+20120306 behaviour with one tx queue
+	report:
+	0		 5.678
+	1		11.13
+	3		11.53
+	7		11.85
+	15		12.10
+	255		12.40
+   Increasing the interrupt rate marginally improves the
+   behaviour but never better than 12.48Mpps.
+   Increasing the report frequency does not seem to help
+   (actually, it harms)
+
+Setting TXDCTL.PTHRESH and HTHRESH improves the rate.
+
+   Using dd for the status reporting does not seem to work - it
+   requires the use of RS on every descriptor, which slows down
+   the card.
+	TXDCTL.WTHRESH
+
+   Options: a) TDH is updated late, check the bits
+	b) the descriptor read is delayed.
 
 # $Id$
 
