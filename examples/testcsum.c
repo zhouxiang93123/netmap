@@ -48,6 +48,11 @@ bufs    size    ns/cy
 #include <inttypes.h>
 #include <sys/time.h>
 
+inline void prefetch (const void *x)
+{
+	__asm volatile("prefetcht0 %0" :: "m" (*(const unsigned long *)x));
+}
+
 volatile uint16_t res;
 
 #define REDUCE16(_x)	({ uint32_t x = _x;	\
@@ -211,7 +216,7 @@ main(int argc, char *argv[])
 	int len = argc > 2 ? atoi(argv[2]) : 1024;
 	char *fn = argc > 3 ? argv[3] : "sum16";
 	int ring_size = argc > 4 ? atoi(argv[4]) : 0;
-	char *buf0, *buf;
+	unsigned char *buf0, *buf;
 #define	MAXLEN 2048
 #define NBUFS	65536	/* 128MB */
 	uint32_t (*fnp)(const unsigned char *, int) = NULL;
@@ -246,7 +251,10 @@ main(int argc, char *argv[])
 	gettimeofday(&ta, NULL);
 	for (n = 0; n < lim; n++) {
 		for (i = j = 0; i < 1000000; i++) {
-			res = fnp((unsigned char *)buf0 + j*MAXLEN, len);
+			const unsigned char *x = buf0 + j*MAXLEN;
+			prefetch(x + MAXLEN);
+			prefetch(x + MAXLEN + 64);
+			res = fnp(x, len);
 			if (++j == ring_size)
 				j = 0;
 		}
