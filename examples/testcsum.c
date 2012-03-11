@@ -1,12 +1,45 @@
 /*
  * test checksum
  *
- * In summary:
+ * General
  * - on new cpus (AMD X2, i5, i7) alignment is not very important.
  * - on old P4, the unrolling is not very useful
  * - the assembly version is uniformly slower
  *
  * In summary the 32-bit version with unrolling is quite fast.
+
+Data on i7-2600
+
+checksums for 1518 bytes on i7-2600 at 3400
+
+bufs    ns/cycle
+
+1       80
+128     85
+1024    90
+2048    91
+3000    90
+3500    92
+3800    95
+3900    100
+4096    119
+8192    141
+
+freq    bufs    ns/cy
+200     1       1658
+200     2048    1923
+200     8192    2331
+3400    1       78
+3400    8192    141
+
+For short packets
+
+bufs    size    ns/cy
+1       64      7
+3900    64      16
+8192    64      33
+
+
  */
 
 #include <stdio.h>
