@@ -18,9 +18,9 @@ int
 main(int argc, char *argv[])
 {
 	struct timeval ta, tb, prev;
-	int usec = 1, total = 0, method = M_SELECT, count = 0;
+	int usec = 1, total = 0, method = M_SELECT;
 	uint32_t *vals = NULL;
-	uint32_t i;
+	uint32_t i, count = 0;
 #define LIM 1000000
 
 	if (argc > 1)
