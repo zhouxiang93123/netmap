@@ -77,7 +77,7 @@
 
 #define NETMAP_BUF_IDX(ring, buf)			\
 	( ((char *)(buf) - ((char *)(ring) + (ring)->buf_ofs) ) / \
-		(ring)->nr_buf_size) ) 
+		(ring)->nr_buf_size ) 
 
 #define	NETMAP_RING_NEXT(r, i)				\
 	((i)+1 == (r)->num_slots ? 0 : (i) + 1 )
