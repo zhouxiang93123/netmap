@@ -1,5 +1,12 @@
 /*
  * test checksum
+ *
+ * In summary:
+ * - on new cpus (AMD X2, i5, i7) alignment is not very important.
+ * - on old P4, the unrolling is not very useful
+ * - the assembly version is uniformly slower
+ *
+ * In summary the 32-bit version with unrolling is quite fast.
  */
 
 #include <stdio.h>
