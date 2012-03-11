@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
+#include <sys/time.h>
 
 volatile uint16_t res;
 
@@ -172,12 +173,23 @@ struct ftab f[] = {
 int
 main(int argc, char *argv[])
 {
-	int i, n;
+	int i, j, n;
 	int lim = argc > 1 ? atoi(argv[1]) : 100;
 	int len = argc > 2 ? atoi(argv[2]) : 1024;
 	char *fn = argc > 3 ? argv[3] : "sum16";
-	char buf0[2048], *buf = buf0;
+	int ring_size = argc > 4 ? atoi(argv[4]) : 0;
+	char *buf0, *buf;
+#define	MAXLEN 2048
+#define NBUFS	65536	/* 128MB */
 	uint32_t (*fnp)(const unsigned char *, int) = NULL;
+	struct timeval ta, tb;
+
+	if (ring_size < 1 || ring_size > NBUFS)
+		ring_size = 1;
+
+	buf0 = calloc(1, MAXLEN * NBUFS);
+	if (!buf0)
+		return 1;
 
 	for (i = 0; f[i].name; i++) {
 		if (!strcmp(f[i].name, fn)) {
@@ -189,22 +201,37 @@ main(int argc, char *argv[])
 		fnp = sum16;
 		fn = "sum16-default";
 	}
-	if (len > (int)sizeof(buf0))
-		len = sizeof(buf0);
-	buf = buf0;
-	for (i = 0; i < len; i++)
-		buf[i] = i *i - i + 5;
-	fprintf(stderr, "function %s len %d count %dM\n",
-		fn, len, lim);
+	if (len > MAXLEN)
+		len = MAXLEN;
+	for (n = 0; n < NBUFS; n++) {
+		buf = buf0 + n*MAXLEN;
+		for (i = 0; i < len; i++)
+			buf[i] = i *i - i + 5;
+	}
+	fprintf(stderr, "function %s len %d count %dM ring_size %d\n",
+		fn, len, lim, ring_size);
+	gettimeofday(&ta, NULL);
 	for (n = 0; n < lim; n++) {
-		for (i = 0; i < 1000000; i++) {
-			res = fnp((unsigned char *)buf, len);
+		for (i = j = 0; i < 1000000; i++) {
+			res = fnp((unsigned char *)buf0 + j*MAXLEN, len);
+			if (++j == ring_size)
+				j = 0;
 		}
 	}
+	gettimeofday(&tb, NULL);
+	tb.tv_sec -= ta.tv_sec;
+	tb.tv_usec -= ta.tv_usec;
+	if (tb.tv_usec < 0) {
+		tb.tv_sec--;
+		tb.tv_usec += 1000000;
+	}
+	n = tb.tv_sec * 1000000 +  tb.tv_usec;
+	fprintf(stderr, "%dM cycles in %d.%06ds, %dns/cycle\n",
+		lim, (int)tb.tv_sec, (int)tb.tv_usec, n/(lim*1000) );
 	fprintf(stderr, "%s %u sum16 %u sum32 %d sum32u %u\n",
 		fn, res,
-		sum16((unsigned char *)buf, len),
-		sum32((unsigned char *)buf, len),
-		sum32u((unsigned char *)buf, len));
+		sum16((unsigned char *)buf0, len),
+		sum32((unsigned char *)buf0, len),
+		sum32u((unsigned char *)buf0, len));
 	return 0;
 }
