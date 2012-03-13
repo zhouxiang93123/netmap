@@ -10,6 +10,29 @@ typedef	int32_t		__s32;
 typedef	int16_t		__s16;
 typedef	int8_t		__s8;
 
+#define __NETCHANNEL_H
+
+#define NETCHANNEL_ADDR_SIZE            16
+
+struct netchannel_addr {
+        uint8_t proto;
+        uint8_t size;
+        uint16_t port;
+        uint8_t addr[NETCHANNEL_ADDR_SIZE];
+};
+
+/*
+ * Destination and source addresses/ports are from receiving point ov view,
+ * i.e. when packet is being received, destination is local address.
+ */
+
+struct netchannel_control
+{
+        struct netchannel_addr          saddr, daddr;
+        unsigned int                    packet_limit;
+};
+
+
 #define _NETINET_UDP_H_	/* disable system header */
 #define _NETINET_TCP_H_	/* disable system header */
 #include <netinet/in.h>
