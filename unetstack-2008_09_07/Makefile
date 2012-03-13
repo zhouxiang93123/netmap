@@ -8,6 +8,8 @@ LDFLAGS := -lc
 
 OBJS := atcp.o udp.o ip.o packet.o stat.o
 
+NETMAP=1
+
 ifdef NETMAP
 CFLAGS += -DNETMAP
 CFLAGS += -include glue.h
@@ -36,6 +38,7 @@ atcp.o:		atcp.c sys.h Makefile
 udp.o:		udp.c sys.h Makefile
 ip.o:		ip.c sys.h Makefile
 netchannel.o:	netchannel.c sys.h Makefile
+netmap_unet.o: netmap_unet.c sys.h Makefile
 ncbuff.o:	ncbuff.c sys.h Makefile
 packet.o:	packet.c sys.h Makefile
 stat.o:		stat.c stat.h sys.h Makefile

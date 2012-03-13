@@ -9,6 +9,9 @@
 #include <string.h>
 
 #include "sys.h"
+#include <errno.h>
+#include <sys/poll.h>
+
 
 struct nc_buff *
 ncb_alloc(unsigned int size)
@@ -21,36 +24,10 @@ void ncb_free(struct nc_buff *ncb)
 }
 
 
-#include <sys/resource.h>
-#include <sys/syscall.h>
-#include <sys/types.h>
-#include <sys/time.h>
-#include <sys/socket.h>
-#include <sys/poll.h>
-
-#include <unistd.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <errno.h>
-#include <string.h>
-#include <netdb.h>
-#include <signal.h>
-
-#include <netinet/in.h>
-#include <netinet/ip.h>
-#include <arpa/inet.h>
-
-#include <linux/if_ether.h>
-
-#include "sys.h"
 
 int packet_index = 1;
 unsigned char packet_edst[ETH_ALEN] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
-#include <linux/if_ether.h>
-
-#include <unistd.h>
-#include <fcntl.h>
 
 int netchannel_send_raw(struct nc_buff *ncb)
 {
