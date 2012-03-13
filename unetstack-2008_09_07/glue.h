@@ -14,6 +14,8 @@ typedef	int8_t		__s8;
 #define _NETINET_TCP_H_	/* disable system header */
 #include <netinet/in.h>
 
+#define	ETH_ALEN	6
+
 struct iphdr
   {
 #if __BYTE_ORDER == __LITTLE_ENDIAN

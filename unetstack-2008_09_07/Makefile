@@ -12,6 +12,7 @@ ifdef NETMAP
 CFLAGS += -DNETMAP
 CFLAGS += -include glue.h
 CFLAGS += -I../sys -Imy_inc
+OBJS += netmap_unet.o
 endif
 
 ifdef NETCHANNEL
