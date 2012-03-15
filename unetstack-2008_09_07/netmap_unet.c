@@ -162,20 +162,22 @@ int netchannel_recv_raw(struct netchannel *nc, unsigned int tm)
 	int err;
 	struct pollfd pfd;
 
+D("prepare to poll on fd %d for %d ms", pfd.fd, tm);
+/* note itimers will wake us up */
 again:
+	bzero(&pfd, sizeof(pfd));
 	pfd.fd = nc->fd;
 	pfd.events = POLLIN;
 	pfd.revents = 0;
 
 	syscall_recv += 1;
-D("prepare to poll on fd %d for %d ms", pfd.fd, tm);
 	err = poll(&pfd, 1, tm);
 	if (err < 0) {
+		if ((errno == EINTR || errno == EAGAIN))
+			goto again;
 		D("failed to poll");
 		perror("error");
-		if (0 && (errno == EINTR || errno == EAGAIN))
-			goto again;
-		//return err;
+		return err;
 	}
 	if (!(pfd.revents & POLLIN) || !err) {
 		ulog("%s: no data, revents: %x.\n", __func__, pfd.revents);
@@ -201,10 +203,30 @@ static int netchannel_create_raw(struct netchannel *nc __unused)
 	int ret;
 	D("device %s start", ifname);
 	my_pcap = pcap_open_live(ifname, 0, 1, 1000, errbuff);
-	ret = (my_pcap ? pcap_fileno(my_pcap) : -1);
-	if (my_pcap)
-		D("activate gives %d", pcap_activate(my_pcap));
+	if (my_pcap == NULL)
+		return -1;
+
+	ret = pcap_fileno(my_pcap);
+	D("activate gives %d", pcap_activate(my_pcap));
 	D("device %s fileno %d", ifname, ret);
+    {
+        int err, tm = 100;
+        struct pollfd pfd;
+	int i;
+
+	bzero(&pfd, sizeof(pfd));
+        pfd.fd = ret;
+        pfd.events = POLLIN;
+        pfd.revents = 0;
+for (i = 0; i < 10 ; i++) { 
+D("prepare to poll on fd %d for %d ms", pfd.fd, tm);
+        err = poll(&pfd, 1, tm);
+        if (err < 0) {
+                D("failed to poll");
+                perror("error");
+        }
+}
+    }
 	return ret;
 #endif
 #ifdef NETMAP
@@ -283,7 +305,7 @@ void netchannel_remove(struct netchannel *nc)
 
 struct netchannel *netchannel_create(struct netchannel_control *ctl, unsigned int state)
 {
-	int err;
+	int err = 0;
 	struct common_protocol *proto;
 	struct netchannel *nc;
 
