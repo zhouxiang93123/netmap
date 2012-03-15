@@ -294,9 +294,9 @@ static inline int atcp_ncb_data_size(struct nc_buff *ncb)
 
 static int atcp_start_itimer(struct atcp_protocol *tp)
 {
-	tp->timer.it_interval.tv_sec = 0;
+	tp->timer.it_interval.tv_sec = 1;
 	tp->timer.it_interval.tv_usec = 1000;
-	tp->timer.it_value.tv_sec = 0;
+	tp->timer.it_value.tv_sec = 1;
 	tp->timer.it_value.tv_usec = 1000;
 
 	return setitimer(ITIMER_REAL, &tp->timer, NULL);
@@ -1440,8 +1440,10 @@ static struct nc_buff *atcp_process_in_ncb(struct netchannel *nc, unsigned int *
 		return NULL;
 	ncb->nc = nc;
 
+	D("process tcp header");
 	th = ncb->h.raw = ncb_pull(ncb, sizeof(struct tcphdr));
 	if (!ncb->h.raw) {
+		D("no tcp header");
 		ncb_put(ncb);
 		return NULL;
 	}

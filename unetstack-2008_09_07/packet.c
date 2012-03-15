@@ -171,7 +171,7 @@ int main(int argc, char *argv[])
 
 	src = "10.21.1.1";
 	dst = "10.21.1.2";
-	sport = dport = 8000;
+	sport = dport = 8888;
 	proto = IPPROTO_TCP;
 	state = NETCHANNEL_ATCP_CONNECT;
 	size = sizeof(str);

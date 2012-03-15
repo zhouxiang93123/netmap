@@ -153,8 +153,8 @@ static inline void *ncb_trim(struct nc_buff *ncb, unsigned int size)
 {
 	D("%p trim to %d from %d", ncb, size, ncb->len);
 	if (size > ncb->len) {
-		ulog("%s: head: %p, data: %p, size: %u, req_size: %u.\n",
-				__func__, ncb->head, ncb->data, ncb->len, size);
+		D("**** fail, size>len head: %p, data: %p, size: %u, req_size: %u.\n",
+				ncb->head, ncb->data, ncb->len, size);
 		return NULL;
 	}
 	ncb->tail = ncb->head + size;

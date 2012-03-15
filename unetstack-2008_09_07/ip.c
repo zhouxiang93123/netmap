@@ -90,6 +90,7 @@ int packet_ip_process(struct nc_buff *ncb)
 		return -ENOMEM;
 
 	ncb_pull(ncb, iph->ihl * 4 - sizeof(struct iphdr));
+	D("remove ip header");
 	ncb_trim(ncb, ntohs(iph->tot_len) - iph->ihl * 4);
 
 	if (memcmp(&iph->saddr, dst->addr, 4))

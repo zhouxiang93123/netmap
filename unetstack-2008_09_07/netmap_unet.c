@@ -150,20 +150,25 @@ int netchannel_send_raw(struct nc_buff *ncb)
 static void
 my_pcap_cb(u_char *d, const  struct  pcap_pkthdr *hdr, const u_char *snap)
 {
-	struct nc_buff *ncb = (struct nc_buff *)d;
-D("got len %d", hdr->caplen);
-	bcopy(snap, ncb->head, hdr->caplen);
-	ncb_trim(ncb, hdr->caplen);
+	int len = hdr->caplen; // remove header
+	struct nc_buff *ncb = ncb_alloc(4096);
+	if (!ncb)
+		return;
+	ncb->nc = (struct netchannel *)d;
+	bcopy(snap, ncb->head, len);
+D("got len %d and trim", len);
+	ncb_trim(ncb, len);
+	ncb_pull(ncb, 14); /* remove MAC header */
 	packet_ip_process(ncb);
+	ncb_put(ncb);
 }
 #endif
 int netchannel_recv_raw(struct netchannel *nc, unsigned int tm)
 {
-	struct nc_buff *ncb;
 	int err;
 	struct pollfd pfd;
 
-D("prepare to poll on fd %d for %d ms", pfd.fd, tm);
+D("prepare to poll on fd %d for %d ms", nc->fd, tm);
 /* note itimers will wake us up */
 again:
 	bzero(&pfd, sizeof(pfd));
@@ -189,12 +194,7 @@ D("poll gets %d", err);
 D("packet received ");
 	syscall_recv += 1;
 
-	ncb = ncb_alloc(4096);
-	if (!ncb)
-		return -ENOMEM;
-	ncb->nc = nc;
-	pcap_dispatch(my_pcap, 50, my_pcap_cb, (u_char *)ncb);
-	ncb_put(ncb);
+	pcap_dispatch(my_pcap, -1, my_pcap_cb, (u_char *)nc);
 	return 0;
 
 }
@@ -205,7 +205,7 @@ static int netchannel_create_raw(struct netchannel *nc __unused)
 	char errbuff[PCAP_ERRBUF_SIZE];
 	int ret;
 	D("device %s start", ifname);
-	my_pcap = pcap_open_live(ifname, 0, 1, 1000, errbuff);
+	my_pcap = pcap_open_live(ifname, 2000, 0, 1000, errbuff);
 	if (my_pcap == NULL)
 		return -1;
 
