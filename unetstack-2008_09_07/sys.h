@@ -118,6 +118,7 @@ int packet_ip_process(struct nc_buff *ncb);
 
 static inline void *ncb_push(struct nc_buff *ncb, unsigned int size)
 {
+	D("%p head insert %d onto %d", ncb, size, ncb->len);
 	if (ncb->head < ncb->data + size) {
 		ulog("%s: head: %p, data: %p, size: %u [%u], req_size: %u.\n",
 				__func__, ncb->head, ncb->data, ncb->len, ncb->total_size, size);
@@ -128,9 +129,13 @@ static inline void *ncb_push(struct nc_buff *ncb, unsigned int size)
 	return ncb->head;
 }
 
+/*
+ * move head forward by "size"
+ */
 static inline void *ncb_pull(struct nc_buff *ncb, unsigned int size)
 {
 	void *head = ncb->head;
+	D("%p move head forward by %d from %d", ncb, size, ncb->len);
 	if (ncb->tail < ncb->head + size) {
 		ulog("%s: head: %p, data: %p, size: %u [%u], req_size: %u.\n",
 				__func__, ncb->head, ncb->data, ncb->len, ncb->total_size, size);
@@ -141,8 +146,12 @@ static inline void *ncb_pull(struct nc_buff *ncb, unsigned int size)
 	return head;
 }
 
+/*
+ * set the data portion (head-tail) to "size" removing extra trailing bytes
+ */
 static inline void *ncb_trim(struct nc_buff *ncb, unsigned int size)
 {
+	D("%p trim to %d from %d", ncb, size, ncb->len);
 	if (size > ncb->len) {
 		ulog("%s: head: %p, data: %p, size: %u, req_size: %u.\n",
 				__func__, ncb->head, ncb->data, ncb->len, size);

@@ -14,9 +14,9 @@ typedef	int8_t		__s8;
 /* debug support */
 #define ND(format, ...) do {} while (0)
 #define D(format, ...) do {                             \
-    if (verbose)                                        \
-        fprintf(stderr, "--- %s [%d] " format "\n",     \
-        __FUNCTION__, __LINE__, ##__VA_ARGS__);         \
+    if (1)                                        \
+        fprintf(stderr, "--- %s [%s:%d] " format "\n",     \
+        __FUNCTION__, __FILE__, __LINE__, ##__VA_ARGS__);         \
         } while (0)
 
 #define NETCHANNEL_ADDR_SIZE            16

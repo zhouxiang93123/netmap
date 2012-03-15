@@ -26,7 +26,6 @@ struct pcap *my_pcap = NULL;
 #include <net/netmap_user.h>
 #endif
 
-int verbose;
 
 #ifdef NETMAP
 struct my_ring {
@@ -96,7 +95,7 @@ do_ioctl(struct my_ring *me, int what)
 }
 #endif /* NETMAP */
 
-
+#if 0 /* unused */
 /*
  * allocate a buffer and data
  */
@@ -130,15 +129,16 @@ void ncb_free(struct nc_buff *ncb)
         memset(ncb, 0xFF, sizeof(struct nc_buff));
         free(ncb);
 }
+#endif
 
 
 char *ifname = "eth0";
 unsigned char packet_edst[ETH_ALEN] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
-
 int netchannel_send_raw(struct nc_buff *ncb)
 {
 #ifdef USE_PCAP
+	D("sending %d bytes", ncb->len);
 	return pcap_inject(my_pcap, ncb->head, ncb->len);
 #endif /* USE_PCAP */
 	//sendto(ncb->nc->fd, ncb->head, ncb->len);
@@ -162,16 +162,20 @@ int netchannel_recv_raw(struct netchannel *nc, unsigned int tm)
 	int err;
 	struct pollfd pfd;
 
+again:
 	pfd.fd = nc->fd;
 	pfd.events = POLLIN;
 	pfd.revents = 0;
 
 	syscall_recv += 1;
-
+D("prepare to poll on fd %d for %d ms", pfd.fd, tm);
 	err = poll(&pfd, 1, tm);
 	if (err < 0) {
-		ulog_err("%s: failed to poll", __func__);
-		return err;
+		D("failed to poll");
+		perror("error");
+		if (0 && (errno == EINTR || errno == EAGAIN))
+			goto again;
+		//return err;
 	}
 	if (!(pfd.revents & POLLIN) || !err) {
 		ulog("%s: no data, revents: %x.\n", __func__, pfd.revents);
@@ -194,13 +198,17 @@ static int netchannel_create_raw(struct netchannel *nc __unused)
 {
 #ifdef USE_PCAP
 	char errbuff[PCAP_ERRBUF_SIZE];
-	my_pcap = pcap_open_live(ifname, 0, 1, 100, errbuff);
-	return (my_pcap ? pcap_fileno(my_pcap) : -1);
-
+	int ret;
+	D("device %s start", ifname);
+	my_pcap = pcap_open_live(ifname, 0, 1, 1000, errbuff);
+	ret = (my_pcap ? pcap_fileno(my_pcap) : -1);
+	if (my_pcap)
+		D("activate gives %d", pcap_activate(my_pcap));
+	D("device %s fileno %d", ifname, ret);
+	return ret;
 #endif
 #ifdef NETMAP
 #endif
-	return 0;
 }
 
 #ifdef NETMAP
@@ -279,6 +287,7 @@ struct netchannel *netchannel_create(struct netchannel_control *ctl, unsigned in
 	struct common_protocol *proto;
 	struct netchannel *nc;
 
+D("called");
 	if (ctl->saddr.proto == IPPROTO_TCP)
 		proto = &atcp_common_protocol;
 	else if (ctl->saddr.proto == IPPROTO_UDP)
@@ -305,7 +314,7 @@ struct netchannel *netchannel_create(struct netchannel_control *ctl, unsigned in
 		ulog_err("Failed to create netchannel");
 		goto err_out_free;
 	}
-
+	D("down to proto_create for %d", ctl->saddr.proto);
 	err = nc->proto->create(nc);
 	if (err)
 		goto err_out_free;

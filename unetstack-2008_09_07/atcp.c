@@ -317,17 +317,20 @@ static int atcp_build_header(struct atcp_protocol *tp, struct nc_buff *ncb, __u3
 	struct netchannel_addr *src = &nc->ctl.saddr;
 	struct netchannel_addr *dst = &nc->ctl.daddr;
 
+	D("add two NOP");
 	nop = (struct atcp_option_nop *)ncb_push(ncb, sizeof(struct atcp_option_nop));
 	nop->kind = 1;
 	nop = (struct atcp_option_nop *)ncb_push(ncb, sizeof(struct atcp_option_nop));
 	nop->kind = 1;
 
+	D("add timestamp");
 	ts = (struct atcp_option_timestamp *)ncb_push(ncb, sizeof(struct atcp_option_timestamp));
 	ts->kind = atcp_supported_options[TCP_OPT_TS].kind;
 	ts->length = atcp_supported_options[TCP_OPT_TS].length;
 	ts->tsval = htonl(atcp_packet_timestamp());
 	ts->tsecr = htonl(tp->tsecr);
 
+	D("add tcp header");
 	ncb->h.th = th = (struct tcphdr *)ncb_push(ncb, sizeof(struct tcphdr));
 	memset(th, 0, sizeof(struct tcphdr));
 
@@ -376,6 +379,7 @@ static int atcp_send_data(struct atcp_protocol *tp, struct nc_buff *ncb, __u32 f
 {
 	int err;
 
+	D("");
 	err = atcp_build_header(tp, ncb, flags, doff);
 	if (err)
 		return err;
@@ -394,6 +398,7 @@ static int atcp_send_bit(struct atcp_protocol *tp, __u32 flags)
 	}
 	ncb->nc = tp->nc;
 
+	D("");
 	ncb_pull(ncb, header_size);
 
 	err = atcp_send_data(tp, ncb, flags, 0);
@@ -1079,16 +1084,20 @@ static int atcp_connect(struct netchannel *nc)
 	}
 	ncb->nc = nc;
 
+	D("reset buffer");
 	ncb_pull(ncb, nc->header_size);
 
+	D("add MSS");
 	mss = (struct atcp_option_mss *)ncb_push(ncb, sizeof(struct atcp_option_mss));
 	mss->kind = TCP_OPT_MSS;
 	mss->length = atcp_supported_options[TCP_OPT_MSS].length;
 	mss->mss = htons(tp->mss);
 
+	D("add NOP");
 	nop = (struct atcp_option_nop *)ncb_push(ncb, sizeof(struct atcp_option_nop));
 	nop->kind = 1;
 	
+	D("add wscale");
 	wscale = (struct atcp_option_wscale *)ncb_push(ncb, sizeof(struct atcp_option_wscale));
 	wscale->kind = TCP_OPT_WSCALE;
 	wscale->length = atcp_supported_options[TCP_OPT_WSCALE].length;

@@ -46,6 +46,7 @@ int ip_build_header(struct nc_buff *ncb)
 	struct netchannel_addr *src = &nc->ctl.saddr;
 	struct netchannel_addr *dst = &nc->ctl.daddr;
 
+	D("add ip header");
 	ncb->nh.iph = iph = ncb_push(ncb, sizeof(struct iphdr));
 	if (!iph)
 		return -ENOMEM;

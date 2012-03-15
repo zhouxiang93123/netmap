@@ -57,9 +57,15 @@ static void term_signal(int signo)
 
 static void alarm_signal(int signo __attribute__ ((unused)))
 {
+	D("allarme");
 	print_stat();
 	alarm(alarm_timeout);
 }
+
+uint8_t mac_hdr[14] = {
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0x0, 0x2, 0x3, 0x4, 0x5, 0x6,
+        0x08, 0x0 };
 
 int transmit_data(struct nc_buff *ncb)
 {
@@ -78,6 +84,8 @@ int transmit_data(struct nc_buff *ncb)
 			ntohs(iph->tot_len));
 	}
 #endif
+	ncb_push(ncb, sizeof(mac_hdr));
+	bcopy(mac_hdr, ncb->head, sizeof(mac_hdr));
 	err = netchannel_send_raw(ncb);
 	if (err)
 		return err;
@@ -238,11 +246,12 @@ int main(int argc, char *argv[])
 
 	sent = recv = 0;
 
-	printf("size: %u.\n", size);
+	D("size: %u", size);
 
 	while (!need_exit) {
+		D("prepare to send");
 		err = netchannel_send(nc, str, size);
-		ulog("%s: recv: err: %d.\n", __func__, err);
+		ulog("%s: send: err: %d.\n", __func__, err);
 		if (err > 0) {
 			stat_written += err;
 			stat_written_msg++;

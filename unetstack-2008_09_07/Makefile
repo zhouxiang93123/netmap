@@ -7,6 +7,7 @@ CFLAGS	:= -I$(KDIR)/include -W -Wall -g -O1 -Werror
 LDFLAGS := -lc
 
 OBJS := atcp.o udp.o ip.o packet.o stat.o
+DEPS := sys.h Makefile
 
 USE_PCAP=1
 ifdef USE_PCAP
@@ -14,12 +15,14 @@ CFLAGS += -DUSE_PCAP -DUDEBUG
 CFLAGS += -include glue.h
 CFLAGS += -I../sys -Imy_inc
 LDFLAGS += -lpcap
-OBJS += netmap_unet.o
+DEPS += glue.h
+OBJS += netmap_unet.o ncbuff.o
 endif
 ifdef NETMAP
 CFLAGS += -DNETMAP
 CFLAGS += -include glue.h
 CFLAGS += -I../sys -Imy_inc
+DEPS += glue.h
 OBJS += netmap_unet.o
 endif
 
@@ -40,6 +43,7 @@ all: $(OBJS) $(TARGETS)
 stack: $(OBJS)
 	$(CC) $(LDFLAGS) $(OBJS) -o $@
 
+$(OBJS): $(DEPS)
 atcp.o:		atcp.c sys.h Makefile
 udp.o:		udp.c sys.h Makefile
 ip.o:		ip.c sys.h Makefile
