@@ -151,6 +151,7 @@ static void
 my_pcap_cb(u_char *d, const  struct  pcap_pkthdr *hdr, const u_char *snap)
 {
 	struct nc_buff *ncb = (struct nc_buff *)d;
+D("got len %d", hdr->caplen);
 	bcopy(snap, ncb->head, hdr->caplen);
 	ncb_trim(ncb, hdr->caplen);
 	packet_ip_process(ncb);
@@ -171,19 +172,21 @@ again:
 	pfd.revents = 0;
 
 	syscall_recv += 1;
-	err = poll(&pfd, 1, tm);
+	err = poll(&pfd, 1, tm * 5);
 	if (err < 0) {
+		D("failed to poll");
 		if ((errno == EINTR || errno == EAGAIN))
 			goto again;
-		D("failed to poll");
 		perror("error");
 		return err;
 	}
+D("poll gets %d", err);
 	if (!(pfd.revents & POLLIN) || !err) {
 		ulog("%s: no data, revents: %x.\n", __func__, pfd.revents);
 		return -EAGAIN;
 	}
 
+D("packet received ");
 	syscall_recv += 1;
 
 	ncb = ncb_alloc(4096);
@@ -209,24 +212,6 @@ static int netchannel_create_raw(struct netchannel *nc __unused)
 	ret = pcap_fileno(my_pcap);
 	D("activate gives %d", pcap_activate(my_pcap));
 	D("device %s fileno %d", ifname, ret);
-    {
-        int err, tm = 100;
-        struct pollfd pfd;
-	int i;
-
-	bzero(&pfd, sizeof(pfd));
-        pfd.fd = ret;
-        pfd.events = POLLIN;
-        pfd.revents = 0;
-for (i = 0; i < 10 ; i++) { 
-D("prepare to poll on fd %d for %d ms", pfd.fd, tm);
-        err = poll(&pfd, 1, tm);
-        if (err < 0) {
-                D("failed to poll");
-                perror("error");
-        }
-}
-    }
 	return ret;
 #endif
 #ifdef NETMAP
