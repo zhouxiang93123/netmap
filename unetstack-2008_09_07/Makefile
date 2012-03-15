@@ -3,13 +3,19 @@ KDIR	:= /home/zbr/aWork/git/linux-2.6/linux-2.6.netchannels
 PWD	:= $(shell pwd)
 CC	:= gcc
 
-CFLAGS	:= -I$(KDIR)/include -W -Wall -g -O3
+CFLAGS	:= -I$(KDIR)/include -W -Wall -g -O1 -Werror
 LDFLAGS := -lc
 
 OBJS := atcp.o udp.o ip.o packet.o stat.o
 
-NETMAP=1
-
+USE_PCAP=1
+ifdef USE_PCAP
+CFLAGS += -DUSE_PCAP -DUDEBUG
+CFLAGS += -include glue.h
+CFLAGS += -I../sys -Imy_inc
+LDFLAGS += -lpcap
+OBJS += netmap_unet.o
+endif
 ifdef NETMAP
 CFLAGS += -DNETMAP
 CFLAGS += -include glue.h

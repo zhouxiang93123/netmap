@@ -48,7 +48,7 @@ static int need_exit;
 static int alarm_timeout = 1;
 
 extern unsigned char packet_edst[];
-extern int packet_index;
+extern char *ifname;
 
 static void term_signal(int signo)
 {
@@ -93,7 +93,7 @@ static int netchannel_addr_init(struct netchannel_addr *a, char *addr, unsigned 
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_protocol = proto;
 
-	if (getaddrinfo(addr, "", &hints, &h)) {
+	if (getaddrinfo(addr, NULL, &hints, &h)) {
 		ulog_err("%s: Failed to get address of '%s'.\n", __func__, addr);
 		return -1;
 	}
@@ -161,8 +161,9 @@ int main(int argc, char *argv[])
 
 	srand(time(NULL));
 
-	src = dst = NULL;
-	sport = dport = 0;
+	src = "10.21.1.1";
+	dst = "10.21.1.2";
+	sport = dport = 8000;
 	proto = IPPROTO_TCP;
 	state = NETCHANNEL_ATCP_CONNECT;
 	size = sizeof(str);
@@ -171,7 +172,7 @@ int main(int argc, char *argv[])
 	while ((ch = getopt(argc, argv, "e:i:s:d:S:D:hp:lL:b:")) != -1) {
 		switch (ch) {
 			case 'i':
-				packet_index = atoi(optarg);
+				ifname = optarg;
 				break;
 			case 'e':
 				err = packet_parse_addr(optarg, packet_edst);

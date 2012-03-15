@@ -12,24 +12,23 @@
 #include <errno.h>
 #include <sys/poll.h>
 
+#ifdef USE_PCAP
+#include <pcap/pcap.h>
+struct pcap *my_pcap = NULL;
+#endif /* USE_PCAP */
+
+#ifdef NETMAP
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <net/if.h>
 #include <net/netmap.h>
 #include <net/netmap_user.h>
-
-/* debug support */
-#define ND(format, ...) do {} while (0)
-#define D(format, ...) do {                             \
-    if (verbose)                                        \
-        fprintf(stderr, "--- %s [%d] " format "\n",     \
-        __FUNCTION__, __LINE__, ##__VA_ARGS__);         \
-        } while (0)
-
+#endif
 
 int verbose;
 
+#ifdef NETMAP
 struct my_ring {
         struct nmreq nmr;
 
@@ -95,35 +94,72 @@ do_ioctl(struct my_ring *me, int what)
         }
         return 0;
 }
+#endif /* NETMAP */
 
 
+/*
+ * allocate a buffer and data
+ */
 struct nc_buff *
 ncb_alloc(unsigned int size)
 {
-	return NULL;
+        struct nc_buff *ncb;
+
+        ncb = malloc(sizeof(*ncb) + size);
+        if (!ncb)
+                return NULL;
+
+        memset(ncb, 0, sizeof(struct nc_buff));
+
+	ncb->data = ncb->head = (void *)(ncb + 1);
+        ncb->len = ncb->total_size = size;
+
+        ncb_timestamp(&ncb->tstamp);
+        ncb->refcnt = 1;
+        ncb->tail = ncb->end = ncb->head + ncb->len;
+
+        return ncb;
 }
 
 void ncb_free(struct nc_buff *ncb)
 {
+#if 0
+        if (ncb->dst)
+                route_put(ncb->dst);
+#endif
+        memset(ncb, 0xFF, sizeof(struct nc_buff));
+        free(ncb);
 }
 
 
-
-int packet_index = 1;
+char *ifname = "eth0";
 unsigned char packet_edst[ETH_ALEN] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
 
 int netchannel_send_raw(struct nc_buff *ncb)
 {
+#ifdef USE_PCAP
+	return pcap_inject(my_pcap, ncb->head, ncb->len);
+#endif /* USE_PCAP */
 	//sendto(ncb->nc->fd, ncb->head, ncb->len);
 
 	return 0;
 }
 
+#ifdef USE_PCAP
+static void
+my_pcap_cb(u_char *d, const  struct  pcap_pkthdr *hdr, const u_char *snap)
+{
+	struct nc_buff *ncb = (struct nc_buff *)d;
+	bcopy(snap, ncb->head, hdr->caplen);
+	ncb_trim(ncb, hdr->caplen);
+	packet_ip_process(ncb);
+}
+#endif
 int netchannel_recv_raw(struct netchannel *nc, unsigned int tm)
 {
 	struct nc_buff *ncb;
-	int err, received = 0;
+	int err;
 	struct pollfd pfd;
 
 	pfd.fd = nc->fd;
@@ -144,43 +180,30 @@ int netchannel_recv_raw(struct netchannel *nc, unsigned int tm)
 
 	syscall_recv += 1;
 
-	do {
-		ncb = ncb_alloc(4096);
-		if (!ncb)
-			return -ENOMEM;
-		ncb->nc = nc;
-
-		//err = recvfrom(nc->fd, ncb->head, ncb->len, 0, (struct sockaddr *)&sa, &len);
-		if (err < 0) {
-			ulog_err("%s: failed to read", __func__);
-			err = -errno;
-			goto err_out_free;
-		}
-
-		ncb_trim(ncb, err);
-
-		err = packet_ip_process(ncb);
-		if (err) {
-			err = 1;
-			ncb_put(ncb);
-		}
-		++received;
-	} while (err > 0 && ++received < 50);
-
+	ncb = ncb_alloc(4096);
+	if (!ncb)
+		return -ENOMEM;
+	ncb->nc = nc;
+	pcap_dispatch(my_pcap, 50, my_pcap_cb, (u_char *)ncb);
+	ncb_put(ncb);
 	return 0;
 
-err_out_free:
-	ncb_put(ncb);
-	return err;
 }
 
-static int netchannel_create_raw(struct netchannel *nc)
+static int netchannel_create_raw(struct netchannel *nc __unused)
 {
-/*
- * open a device. if me->mem is null then do an mmap.
- */
+#ifdef USE_PCAP
+	char errbuff[PCAP_ERRBUF_SIZE];
+	my_pcap = pcap_open_live(ifname, 0, 1, 100, errbuff);
+	return (my_pcap ? pcap_fileno(my_pcap) : -1);
+
+#endif
+#ifdef NETMAP
+#endif
+	return 0;
 }
 
+#ifdef NETMAP
 int
 netmap_open(struct my_ring *me, int ringid)
 {
@@ -241,6 +264,7 @@ error:
         close(me->fd);
         return -1;
 }
+#endif /* NETMAP */
 
 
 
