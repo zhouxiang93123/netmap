@@ -15,19 +15,23 @@
 #ifdef USE_PCAP
 #include <pcap/pcap.h>
 struct pcap *my_pcap = NULL;
+#define DISPATCH pcap_dispatch
+#define INJECT pcap_inject
 #endif /* USE_PCAP */
 
-#ifdef NETMAP
+#ifdef USE_NETMAP
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <net/if.h>
 #include <net/netmap.h>
 #include <net/netmap_user.h>
+#define DISPATCH netmap_dispatch
+#define INJECT netmap_inject
 #endif
 
 
-#ifdef NETMAP
+#ifdef USE_NETMAP
 struct my_ring {
         struct nmreq nmr;
 
@@ -93,7 +97,137 @@ do_ioctl(struct my_ring *me, int what)
         }
         return 0;
 }
-#endif /* NETMAP */
+
+int
+netmap_dispatch(pcap_t *p, int cnt, pcap_handler callback, u_char *user)
+{
+        struct my_ring *me = p;
+        int got = 0;
+        u_int si;
+
+        ND("cnt %d", cnt);
+        /* scan all rings */
+        for (si = me->begin; si < me->end; si++) {
+                struct netmap_ring *ring = NETMAP_RXRING(me->nifp, si);
+                ND("ring has %d pkts", ring->avail);
+                if (ring->avail == 0)
+                        continue;
+                me->hdr.ts = ring->ts;
+                while ((cnt == -1 || cnt != got) && ring->avail > 0) {
+                        u_int i = ring->cur;
+                        u_int idx = ring->slot[i].buf_idx;
+                        if (idx < 2) {
+                                D("%s bogus RX index %d at offset %d",
+                                        me->nifp->ni_name, idx, i);
+                                sleep(2);
+                        }
+                        u_char *buf = (u_char *)NETMAP_BUF(ring, idx);
+                        me->hdr.len = me->hdr.caplen = ring->slot[i].len;
+                        // D("call %p len %d", p, me->hdr.len);
+                        callback(user, &me->hdr, buf);
+                        ring->cur = NETMAP_RING_NEXT(ring, i);
+                        ring->avail--;
+                        got++;
+                }
+        }
+        return got;
+}
+
+int
+netmap_inject(pcap_t *p, const void *buf, size_t size)
+{
+        struct my_ring *me = p;
+        u_int si;
+
+        ND("cnt %d", cnt);
+        /* scan all rings */
+        for (si = me->begin; si < me->end; si++) {
+                struct netmap_ring *ring = NETMAP_TXRING(me->nifp, si);
+
+                ND("ring has %d pkts", ring->avail);
+                if (ring->avail == 0)
+                        continue;
+                u_int i = ring->cur;
+                u_int idx = ring->slot[i].buf_idx;
+                if (idx < 2) {
+                        D("%s bogus TX index %d at offset %d",
+                                me->nifp->ni_name, idx, i);
+                        sleep(2);
+                }
+                u_char *dst = (u_char *)NETMAP_BUF(ring, idx);
+                ring->slot[i].len = size;
+                bcopy(buf, dst, size);
+                ring->cur = NETMAP_RING_NEXT(ring, i);
+                ring->avail--;
+                // if (ring->avail == 0) ioctl(me->fd, NIOCTXSYNC, NULL);
+                return size;
+        }
+        errno = ENOBUFS;
+        return -1;
+}
+
+
+int
+netmap_open(struct my_ring *me, int ringid)
+{
+        int fd, err, l;
+        u_int i;
+        struct nmreq req;
+
+        me->fd = fd = open("/dev/netmap", O_RDWR);
+        if (fd < 0) {
+                D("Unable to open /dev/netmap");
+                return (-1);
+        }
+        bzero(&req, sizeof(req));
+        strncpy(req.nr_name, me->nmr.nr_name, sizeof(req.nr_name));
+        req.nr_ringid = ringid;
+        err = ioctl(fd, NIOCGINFO, &req);
+        if (err) {
+                D("cannot get info on %s", me->nmr.nr_name);
+                goto error;
+        }
+        me->memsize = l = req.nr_memsize;
+        ND("memsize is %d MB", l>>20);
+        err = ioctl(fd, NIOCREGIF, &req);
+        if (err) {
+                D("Unable to register %s", me->nmr.nr_name);
+                goto error;
+        }
+
+        if (me->mem == NULL) {
+                me->mem = mmap(0, l, PROT_WRITE | PROT_READ, MAP_SHARED, fd, 0);
+                if (me->mem == MAP_FAILED) {
+                        D("Unable to mmap");
+                        me->mem = NULL;
+                        goto error;
+                }
+        }
+
+        me->nifp = NETMAP_IF(me->mem, req.nr_offset);
+        me->queueid = ringid;
+        if (ringid & NETMAP_SW_RING) {
+                me->begin = req.nr_rx_rings;
+                me->end = me->begin + 1;
+        } else if (ringid & NETMAP_HW_RING) {
+                me->begin = ringid & NETMAP_RING_MASK;
+                me->end = me->begin + 1;
+        } else {
+                me->begin = 0;
+                me->end = req.nr_rx_rings;
+        }
+        /* request timestamps for packets */
+        for (i = me->begin; i < me->end; i++) {
+                struct netmap_ring *ring = NETMAP_RXRING(me->nifp, i);
+                ring->flags = NR_TIMESTAMP;
+        }
+        //me->tx = NETMAP_TXRING(me->nifp, 0);
+        return (0);
+error:
+        close(me->fd);
+        return -1;
+}
+#endif /* USE_NETMAP */
 
 char *ifname = "eth0";
 unsigned char packet_edst[ETH_ALEN] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
@@ -164,7 +298,7 @@ again:
 
 	syscall_recv += 1;
 
-	pcap_dispatch(my_pcap, 1, my_pcap_cb, (u_char *)nc);
+	DISPATCH(my_pcap, 1, my_pcap_cb, (u_char *)nc);
 	return 0;
 
 }
@@ -184,72 +318,10 @@ static int netchannel_create_raw(struct netchannel *nc __unused)
 	D("device %s fileno %d", ifname, ret);
 	return ret;
 #endif
-#ifdef NETMAP
+#ifdef USE_NETMAP
 #endif
 }
 
-#ifdef NETMAP
-int
-netmap_open(struct my_ring *me, int ringid)
-{
-        int fd, err, l;
-        u_int i;
-        struct nmreq req;
-
-        me->fd = fd = open("/dev/netmap", O_RDWR);
-        if (fd < 0) {
-                D("Unable to open /dev/netmap");
-                return (-1);
-        }
-        bzero(&req, sizeof(req));
-        strncpy(req.nr_name, me->nmr.nr_name, sizeof(req.nr_name));
-        req.nr_ringid = ringid;
-        err = ioctl(fd, NIOCGINFO, &req);
-        if (err) {
-                D("cannot get info on %s", me->nmr.nr_name);
-                goto error;
-        }
-        me->memsize = l = req.nr_memsize;
-        ND("memsize is %d MB", l>>20);
-        err = ioctl(fd, NIOCREGIF, &req);
-        if (err) {
-                D("Unable to register %s", me->nmr.nr_name);
-                goto error;
-        }
-
-        if (me->mem == NULL) {
-                me->mem = mmap(0, l, PROT_WRITE | PROT_READ, MAP_SHARED, fd, 0);
-                if (me->mem == MAP_FAILED) {
-                        D("Unable to mmap");
-                        me->mem = NULL;
-                        goto error;
-                }
-        }
-
-        me->nifp = NETMAP_IF(me->mem, req.nr_offset);
-        me->queueid = ringid;
-        if (ringid & NETMAP_SW_RING) {
-                me->begin = req.nr_rx_rings;
-                me->end = me->begin + 1;
-        } else if (ringid & NETMAP_HW_RING) {
-                me->begin = ringid & NETMAP_RING_MASK;
-                me->end = me->begin + 1;
-        } else {
-                me->begin = 0;
-                me->end = req.nr_rx_rings;
-        }
-        /* request timestamps for packets */
-        for (i = me->begin; i < me->end; i++) {
-                struct netmap_ring *ring = NETMAP_RXRING(me->nifp, i);
-                ring->flags = NR_TIMESTAMP;
-        }
-        //me->tx = NETMAP_TXRING(me->nifp, 0);
-        return (0);
-error:
-        close(me->fd);
-        return -1;
-}
-#endif /* NETMAP */
 
 
 

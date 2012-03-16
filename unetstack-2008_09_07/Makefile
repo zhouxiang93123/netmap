@@ -18,8 +18,8 @@ LDFLAGS += -lpcap
 DEPS += glue.h
 OBJS += netmap_unet.o ncbuff.o
 endif
-ifdef NETMAP
-CFLAGS += -DNETMAP
+ifdef USE_NETMAP
+CFLAGS += -DUSE_NETMAP
 CFLAGS += -include glue.h
 CFLAGS += -I../sys -Imy_inc
 DEPS += glue.h
