@@ -93,11 +93,15 @@ int packet_ip_process(struct nc_buff *ncb)
 	D("remove ip header");
 	ncb_trim(ncb, ntohs(iph->tot_len) - iph->ihl * 4);
 
-	if (memcmp(&iph->saddr, dst->addr, 4))
+	if (memcmp(&iph->saddr, dst->addr, 4)) {
+		D("--- not from our src, src 0x%x", iph->saddr);
 		return -EINVAL;
+	}
 	
-	if (memcmp(&iph->daddr, src->addr, 4))
+	if (memcmp(&iph->daddr, src->addr, 4)) {
+		D("--- not for me , dst 0x%x", iph->daddr);
 		return -EINVAL;
+	}
 
 	ncb_queue_tail(&ncb->nc->recv_queue, ncb);
 	ncb->nc->hit++;

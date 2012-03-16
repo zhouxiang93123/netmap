@@ -295,9 +295,9 @@ static inline int atcp_ncb_data_size(struct nc_buff *ncb)
 static int atcp_start_itimer(struct atcp_protocol *tp)
 {
 	tp->timer.it_interval.tv_sec = 1;
-	tp->timer.it_interval.tv_usec = 1000;
+	tp->timer.it_interval.tv_usec = 100000;
 	tp->timer.it_value.tv_sec = 1;
-	tp->timer.it_value.tv_usec = 1000;
+	tp->timer.it_value.tv_usec = 100000;
 
 	return setitimer(ITIMER_REAL, &tp->timer, NULL);
 }

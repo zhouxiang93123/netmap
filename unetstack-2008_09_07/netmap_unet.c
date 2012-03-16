@@ -154,9 +154,9 @@ my_pcap_cb(u_char *d, const  struct  pcap_pkthdr *hdr, const u_char *snap)
 	struct nc_buff *ncb = ncb_alloc(4096);
 	if (!ncb)
 		return;
+D("got len %d and trim", len);
 	ncb->nc = (struct netchannel *)d;
 	bcopy(snap, ncb->head, len);
-D("got len %d and trim", len);
 	ncb_trim(ncb, len);
 	ncb_pull(ncb, 14); /* remove MAC header */
 	packet_ip_process(ncb);
