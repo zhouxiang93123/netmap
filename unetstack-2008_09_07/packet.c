@@ -237,7 +237,7 @@ int main(int argc, char *argv[])
 	nc = netchannel_create(&ctl, state);
 	if (!nc)
 		return -EINVAL;
-
+D("------------------------- channel created -------------");
 	signal(SIGTERM, term_signal);
 	signal(SIGINT, term_signal);
 	signal(SIGALRM, alarm_signal);

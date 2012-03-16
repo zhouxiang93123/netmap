@@ -183,6 +183,7 @@ static inline void ncb_put(struct nc_buff *ncb)
 
 static inline void ncb_queue_init(struct nc_buff_head *list)
 {
+	D("init queue %p", list);
 	list->prev = list->next = (struct nc_buff *)list;
 	list->qlen = 0;
 }
@@ -197,10 +198,13 @@ static inline void ncb_queue_tail(struct nc_buff_head *list, struct nc_buff *ncb
 {
 	struct nc_buff *prev, *next;
 
+	ncb->refcnt++;
 	list->qlen++;
+	D("%d packets %p queued into %p", list->qlen, ncb, list);
 	next = (struct nc_buff *)list;
 	prev = next->prev;
 	ncb->next = next;
+	D("%p->next set to %p", ncb, next);
 	ncb->prev = prev;
 	next->prev  = prev->next = ncb;
 }
@@ -209,18 +213,22 @@ static inline struct nc_buff *ncb_dequeue(struct nc_buff_head *list)
 {
 	struct nc_buff *next, *prev, *result;
 
+	D("fetch from %p -> %p", list, list->next);
 	prev = (struct nc_buff *) list;
 	next = prev->next;
 	result = NULL;
 	if (next != prev) {
 		result	     = next;
+		D("%p->next to be set to %p", next, next->next);
 		next	     = next->next;
+		D("next set to %p", next);
 		list->qlen--;
 		next->prev   = prev;
+		D("prev is %p", prev);
 		prev->next   = next;
 		result->next = result->prev = NULL;
 	}
-
+	D("done");
 	return result;
 }
 

@@ -1166,8 +1166,9 @@ static int atcp_out_read(struct netchannel *nc, unsigned int tm)
 	int err;
 
 	err = netchannel_recv_raw(nc, tm);
-
+	D("netchannel_recv_raw done");
 	ncb = atcp_process_in_ncb(nc, &init_len);
+	D("atcp_process_in_ncb done");
 	if (ncb) {
 		ncb_put(ncb);
 		return 1;
@@ -1436,6 +1437,7 @@ static struct nc_buff *atcp_process_in_ncb(struct netchannel *nc, unsigned int *
 	struct tcphdr *th;
 
 	ncb = ncb_dequeue(&nc->recv_queue);
+	D("dequeue returns %p", ncb);
 	if (!ncb) 
 		return NULL;
 	ncb->nc = nc;
@@ -1553,6 +1555,7 @@ static int atcp_create(struct netchannel *nc)
 			return err;
 
 		err = atcp_connect(nc);
+		D("connect done");
 		if (err)
 			return err;
 

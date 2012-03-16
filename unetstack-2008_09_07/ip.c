@@ -104,7 +104,8 @@ int packet_ip_process(struct nc_buff *ncb)
 			inet_ntoa(*(struct in_addr *)&(iph->daddr)) );
 		return -EINVAL;
 	}
-
+	D("queue packet for %s",
+		inet_ntoa(*(struct in_addr *)&(iph->daddr)) );
 	ncb_queue_tail(&ncb->nc->recv_queue, ncb);
 	ncb->nc->hit++;
 

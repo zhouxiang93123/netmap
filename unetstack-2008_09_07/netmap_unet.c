@@ -114,20 +114,23 @@ static void
 my_pcap_cb(u_char *d, const  struct  pcap_pkthdr *hdr, const u_char *snap)
 {
 	int len = hdr->caplen; // remove header
-	struct nc_buff *ncb = ncb_alloc(4096);
-	uint16_t *d16, proto;
+	struct nc_buff *ncb;
+	uint16_t proto;
+	if (len < 34)
+		return; // too short for IP
 
+	proto = ntohs(*(uint16_t *)(snap + 12));	// mac type
+	if (proto != 0x800)
+		return;		// not IP
+	ncb = ncb_alloc(4096);
 	if (!ncb)
 		return;
 	ncb->nc = (struct netchannel *)d;
 	bcopy(snap, ncb->head, len);
-	d16 = (uint16_t *)(ncb->head + 12);
-	proto = ntohs(*d16);
 D("got len %5d mac type 0x%x and trim", len, proto);
 	ncb_trim(ncb, len);
 	ncb_pull(ncb, 14); /* remove MAC header */
-	if (proto == 0x800)
-		packet_ip_process(ncb);
+	packet_ip_process(ncb);
 	ncb_put(ncb);
 }
 #endif
@@ -161,7 +164,7 @@ again:
 
 	syscall_recv += 1;
 
-	pcap_dispatch(my_pcap, -1, my_pcap_cb, (u_char *)nc);
+	pcap_dispatch(my_pcap, 1, my_pcap_cb, (u_char *)nc);
 	return 0;
 
 }
@@ -172,7 +175,7 @@ static int netchannel_create_raw(struct netchannel *nc __unused)
 	char errbuff[PCAP_ERRBUF_SIZE];
 	int ret;
 	D("device %s start", ifname);
-	my_pcap = pcap_open_live(ifname, 2000, 0, 1000, errbuff);
+	my_pcap = pcap_open_live(ifname, 2000, 1, 1000, errbuff);
 	if (my_pcap == NULL)
 		return -1;
 
