@@ -32,7 +32,7 @@ struct nc_buff *ncb_alloc(unsigned int size)
 	if (!ncb)
 		return NULL;
 
-	D("%p %d", ncb, size);
+	ND("%p %d", ncb, size);
 	memset(ncb, 0, sizeof(struct nc_buff));
 
 	ncb->len = ncb->total_size = size;
@@ -57,7 +57,7 @@ void ncb_free(struct nc_buff *ncb)
 	if (ncb->dst)
 		route_put(ncb->dst);
 #endif
-	D("%p len %d/%d", ncb, ncb->len, ncb->total_size);
+	ND("%p len %d/%d", ncb, ncb->len, ncb->total_size);
 	memset(ncb->data, 0xFF, ncb->total_size);
 	free(ncb->data);
 	memset(ncb, 0xFF, sizeof(struct nc_buff));

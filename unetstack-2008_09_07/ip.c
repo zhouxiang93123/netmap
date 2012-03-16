@@ -94,12 +94,14 @@ int packet_ip_process(struct nc_buff *ncb)
 	ncb_trim(ncb, ntohs(iph->tot_len) - iph->ihl * 4);
 
 	if (memcmp(&iph->saddr, dst->addr, 4)) {
-		D("--- not from our src, src 0x%x", iph->saddr);
+		D("--- not from our src, src %s",
+			inet_ntoa(*(struct in_addr *)&(iph->saddr)) );
 		return -EINVAL;
 	}
 	
 	if (memcmp(&iph->daddr, src->addr, 4)) {
-		D("--- not for me , dst 0x%x", iph->daddr);
+		D("--- not for me , dst %s",
+			inet_ntoa(*(struct in_addr *)&(iph->daddr)) );
 		return -EINVAL;
 	}
 

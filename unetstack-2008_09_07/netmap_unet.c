@@ -95,43 +95,6 @@ do_ioctl(struct my_ring *me, int what)
 }
 #endif /* NETMAP */
 
-#if 0 /* unused */
-/*
- * allocate a buffer and data
- */
-struct nc_buff *
-ncb_alloc(unsigned int size)
-{
-        struct nc_buff *ncb;
-
-        ncb = malloc(sizeof(*ncb) + size);
-        if (!ncb)
-                return NULL;
-
-        memset(ncb, 0, sizeof(struct nc_buff));
-
-	ncb->data = ncb->head = (void *)(ncb + 1);
-        ncb->len = ncb->total_size = size;
-
-        ncb_timestamp(&ncb->tstamp);
-        ncb->refcnt = 1;
-        ncb->tail = ncb->end = ncb->head + ncb->len;
-
-        return ncb;
-}
-
-void ncb_free(struct nc_buff *ncb)
-{
-#if 0
-        if (ncb->dst)
-                route_put(ncb->dst);
-#endif
-        memset(ncb, 0xFF, sizeof(struct nc_buff));
-        free(ncb);
-}
-#endif
-
-
 char *ifname = "eth0";
 unsigned char packet_edst[ETH_ALEN] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
@@ -152,14 +115,19 @@ my_pcap_cb(u_char *d, const  struct  pcap_pkthdr *hdr, const u_char *snap)
 {
 	int len = hdr->caplen; // remove header
 	struct nc_buff *ncb = ncb_alloc(4096);
+	uint16_t *d16, proto;
+
 	if (!ncb)
 		return;
-D("got len %d and trim", len);
 	ncb->nc = (struct netchannel *)d;
 	bcopy(snap, ncb->head, len);
+	d16 = (uint16_t *)(ncb->head + 12);
+	proto = ntohs(*d16);
+D("got len %5d mac type 0x%x and trim", len, proto);
 	ncb_trim(ncb, len);
 	ncb_pull(ncb, 14); /* remove MAC header */
-	packet_ip_process(ncb);
+	if (proto == 0x800)
+		packet_ip_process(ncb);
 	ncb_put(ncb);
 }
 #endif
@@ -168,7 +136,7 @@ int netchannel_recv_raw(struct netchannel *nc, unsigned int tm)
 	int err;
 	struct pollfd pfd;
 
-D("prepare to poll on fd %d for %d ms", nc->fd, tm);
+ND("prepare to poll on fd %d for %d ms", nc->fd, tm);
 /* note itimers will wake us up */
 again:
 	bzero(&pfd, sizeof(pfd));
@@ -185,13 +153,12 @@ again:
 		perror("error");
 		return err;
 	}
-D("poll gets %d", err);
+	ND("poll gets %d", err);
 	if (!(pfd.revents & POLLIN) || !err) {
 		ulog("%s: no data, revents: %x.\n", __func__, pfd.revents);
 		return -EAGAIN;
 	}
 
-D("packet received ");
 	syscall_recv += 1;
 
 	pcap_dispatch(my_pcap, -1, my_pcap_cb, (u_char *)nc);
