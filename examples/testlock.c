@@ -44,6 +44,7 @@ int atomic_add_int(volatile int *p, int v)
         return __sync_fetch_and_add(p, v);
 }
 #else
+inline
 uint32_t atomic_add_int(uint32_t *p, int v)
 {
         __asm __volatile (
@@ -61,6 +62,7 @@ uint32_t atomic_add_int(uint32_t *p, int v)
 #include <pthread_np.h>	/* pthread w/ affinity */
 #include <sys/cpuset.h>	/* cpu_set */
 #endif
+
 #include <signal.h>	/* signal */
 #include <stdlib.h>
 #include <stdio.h>
@@ -75,6 +77,7 @@ uint32_t atomic_add_int(uint32_t *p, int v)
 
 static inline int min(int a, int b) { return a < b ? a : b; }
 
+#define ONE_MILLION	1000000
 /* debug support */
 #define D(format, ...)				\
 	fprintf(stderr, "%s [%d] " format "\n", 	\
@@ -84,12 +87,12 @@ int verbose = 0;
 
 #if 1
 /* Wrapper around `rdtsc' to take reliable timestamps flushing the pipeline */ 
-#define my_rdtsc(t) \
-	do { \
-		u_int __regs[4];					\
-									\
-		do_cpuid(0, __regs);					\
-		(t) = rdtsc();						\
+#define my_rdtsc(t)				\
+	do {					\
+		u_int __regs[4];		\
+						\
+		do_cpuid(0, __regs);		\
+		(t) = rdtsc();			\
 	} while (0)
 
 static __inline void
@@ -110,6 +113,8 @@ rdtsc(void)
 }
 #endif /* 1 */
 
+struct targ;
+
 /*** global arguments for all threads ***/
 struct glob_arg {
 	struct  {
@@ -121,6 +126,8 @@ struct glob_arg {
 	int privs;	// 1 if has IO privileges
 	int sel_us;	// microseconds in select
 	int usleep_us;	// microseconds in usleep
+	char *test_name;
+	void (*fn)(struct targ *);
 };
 
 /*
@@ -129,14 +136,14 @@ struct glob_arg {
  */
 struct targ {
 	struct glob_arg *g;
-	int used;
-	int completed;
-	u_int	*glob_ctr;
+	int		used;
+	int		completed;
+	u_int		*glob_ctr;
 	uint64_t volatile count;
-	struct timeval tic, toc;
-	int me;
-	pthread_t thread;
-	int affinity;
+	struct timeval	tic, toc;
+	int		me;
+	pthread_t	thread;
+	int		affinity;
 };
 
 
@@ -179,6 +186,9 @@ system_ncpus(void)
 #endif
 }
 
+/*
+ * try to get I/O privileges so we can execute cli/sti etc.
+ */
 int
 getprivs(void)
 {
@@ -216,34 +226,18 @@ setaffinity(pthread_t me, int i)
 	return 0;
 }
 
+uint64_t res;
+
 static void *
 td_body(void *data)
 {
 	struct targ *t = (struct targ *) data;
-	int m, i, io = t->g->privs;
-	int delta = (t->g->sel_us || t->g->usleep_us) ? 1000000 : 1;
 
 	if (setaffinity(t->thread, t->affinity))
 		goto quit;
 	/* main loop.*/
 	gettimeofday(&t->tic, NULL);
-	for (m = 0; m < t->g->m_cycles; m++) {
-		if (delta > 1) {
-			struct timeval to = { 0, t->g->sel_us};
-			if (t->g->sel_us)
-				select(0, NULL, NULL, NULL, &to);
-			if (t->g->usleep_us)
-				usleep(t->g->usleep_us);
-			t->count += delta;
-		} else {
-			for (i = 0; i < 1000000; i++) {
-				if (io)
-					__asm __volatile("cli; sti;");
-				atomic_add_int(t->glob_ctr, 1);
-				t->count++;
-			}
-		}
-	}
+	t->g->fn(t);
 	gettimeofday(&t->toc, NULL);
 	t->completed = 1;
 	//targ->count = 0;
@@ -254,11 +248,77 @@ quit:
 	return (NULL);
 }
 
+void
+test_sel(struct targ *t)
+{
+	int m;
+	for (m = 0; m < t->g->m_cycles; m++) {
+		struct timeval to = { 0, t->g->sel_us};
+		select(0, NULL, NULL, NULL, &to);
+		t->count += ONE_MILLION;
+	}
+}
+
+void
+test_usleep(struct targ *t)
+{
+	int m;
+	for (m = 0; m < t->g->m_cycles; m++) {
+		usleep(t->g->usleep_us);
+		t->count += ONE_MILLION;
+	}
+}
+
+void
+test_cli(struct targ *t)
+{
+        int m, i;
+	if (!t->g->privs) {	
+		D("privileged instructions not available");
+		return;
+	}
+        for (m = 0; m < t->g->m_cycles; m++) {
+		for (i = 0; i < ONE_MILLION; i++) {
+			__asm __volatile("cli;");
+			__asm __volatile("and %eax, %eax;");
+			__asm __volatile("sti;");
+			t->count++;
+		}
+        }
+}
+
+void
+test_atomic_add(struct targ *t)
+{
+        int m, i;
+        for (m = 0; m < t->g->m_cycles; m++) {
+		for (i = 0; i < ONE_MILLION; i++) {
+                	atomic_add_int(t->glob_ctr, 1);
+			t->count++;
+		}
+        }
+}
+
+struct entry {
+	void (*fn)(struct targ *);
+	char *name;
+	char *desc;
+};
+struct entry tests[] = {
+	{ test_sel, "select", NULL },
+	{ test_usleep, "usleep", NULL },
+	{ test_atomic_add, "add", NULL },
+	{ test_cli, "cli", NULL },
+//	{ test_atomic_cmpswap, "cmpswap", NULL },
+	{ NULL, NULL, NULL }
+};
 
 static void
 usage(void)
 {
-	const char *cmd = "pkt-gen";
+	const char *cmd = "test";
+	int i;
+
 	fprintf(stderr,
 		"Usage:\n"
 		"%s arguments\n"
@@ -271,6 +331,11 @@ usage(void)
 		"\t-m name		test name\n"
 		"",
 		cmd);
+	fprintf(stderr, "Available tests:\n");
+	for (i = 0; tests[i].name; i++) {
+		fprintf(stderr, "%12s : %s\n", tests[i].name,
+			tests[i].desc ?  tests[i].desc : "--");
+	}
 
 	exit(0);
 }
@@ -294,7 +359,7 @@ main(int arc, char **argv)
 	g.cpus = 1;
 	g.m_cycles = 1000;	/* millions */
 
-	while ( (ch = getopt(arc, argv, "A:a:n:w:c:t:vS:U:")) != -1) {
+	while ( (ch = getopt(arc, argv, "A:a:m:n:w:c:t:vS:U:")) != -1) {
 		switch(ch) {
 		default:
 			D("bad option %c %s", ch, optarg);
@@ -318,6 +383,9 @@ main(int arc, char **argv)
 		case 't':
 			g.nthreads = atoi(optarg);
 			break;
+		case 'm':
+			g.test_name = optarg;
+			break;
 		case 'S':
 			g.sel_us = atoi(optarg);
 			break;
@@ -331,6 +399,18 @@ main(int arc, char **argv)
 		}
 	}
 
+	if (g.test_name) {
+		for (i = 0; tests[i].name; i++) {
+			if (!strcmp(g.test_name, tests[i].name)) {
+				g.fn = tests[i].fn;
+				break;
+			}
+		}
+	}
+	if (!g.fn) {
+		D("missing/unknown test name");
+		usage();
+	}
 	i = system_ncpus();
 	if (g.cpus < 0 || g.cpus > i) {
 		D("%d cpus is too high, have only %d cpus", g.cpus, i);
@@ -398,11 +478,11 @@ main(int arc, char **argv)
 			if (ta[i].used == 0)
 				done++;
 		}
-		pps = toc.tv_sec* 1000000 + toc.tv_usec;
+		pps = toc.tv_sec* ONE_MILLION + toc.tv_usec;
 		if (pps < 10000)
 			continue;
-		pps = (my_count - prev)*1000000 / pps;
-		D("%" PRIu64 " mctr", pps/1000000);
+		pps = (my_count - prev)*ONE_MILLION / pps;
+		D("%" PRIu64 " mctr", pps/ONE_MILLION);
 		prev = my_count;
 		toc = now;
 		if (done == g.nthreads)
