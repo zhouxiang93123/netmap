@@ -33,10 +33,22 @@
 #include <inttypes.h>
 #include <sys/types.h>
 #include <pthread.h>	/* pthread_* */
+
+#define MY_UNUSED __attribute__ ((__unused__))
+
 #if defined(__APPLE__)
+
 #include <libkern/OSAtomic.h>
 #define atomic_add_int(p, n) OSAtomicAdd32(n, (int *)p)
+
 #elif defined(linux)
+
+int atomic_cmpset_32(volatile uint32_t *p, uint32_t old, uint32_t new)
+{
+	int ret = *p == old;
+	*p = new;
+	return ret;
+}
 
 #if defined(HAVE_GCC_ATOMICS)
 int atomic_add_int(volatile int *p, int v)
@@ -152,7 +164,7 @@ static int global_nthreads;
 
 /* control-C handler */
 static void
-sigint_h(int __attribute__ ((__unused__)) sig)
+sigint_h(int MY_UNUSED sig)
 {
 	int i;
 
@@ -203,7 +215,7 @@ getprivs(void)
 /* set the thread affinity. */
 /* ARGSUSED */
 static int
-setaffinity(pthread_t me, int i)
+setaffinity(pthread_t MY_UNUSED me, int MY_UNUSED i)
 {
 #ifdef HAVE_AFFINITY
 	cpuset_t cpumask;
@@ -219,9 +231,6 @@ setaffinity(pthread_t me, int i)
 		D("Unable to set affinity");
 		return 1;
 	}
-#else
-	me;
-	i;	
 #endif
 	return 0;
 }
