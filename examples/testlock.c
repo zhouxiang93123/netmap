@@ -75,7 +75,11 @@ uint32_t atomic_add_int(uint32_t *p, int v)
 
 #if __FreeBSD_version > 500000
 #include <sys/cpuset.h>	/* cpu_set */
+#if __FreeBSD_version > 800000
 #define HAVE_AFFINITY
+#endif
+
+
 #else
 int atomic_cmpset_32(volatile uint32_t *p, uint32_t old, uint32_t new)
 {
@@ -350,6 +354,28 @@ test_atomic_cmpset(struct targ *t)
         }
 }
 
+void
+test_time(struct targ *t)
+{
+        int m;
+	struct timespec ts;
+        for (m = 0; m < t->g->m_cycles; m++) {
+		clock_gettime(t->g->arg, &ts);
+		t->count += ONE_MILLION;
+        }
+}
+
+void
+test_gettimeofday(struct targ *t)
+{
+        int m;
+	struct timeval ts;
+        for (m = 0; m < t->g->m_cycles; m++) {
+		gettimeofday(&ts, NULL);
+		t->count += ONE_MILLION;
+        }
+}
+
 struct entry {
 	void (*fn)(struct targ *);
 	char *name;
@@ -358,6 +384,8 @@ struct entry {
 struct entry tests[] = {
 	{ test_sel, "select", NULL },
 	{ test_usleep, "usleep", NULL },
+	{ test_time, "time", NULL },
+	{ test_gettimeofday, "gettimeofday", NULL },
 	{ test_add, "add", NULL },
 	{ test_atomic_add, "atomic-add", NULL },
 	{ test_cli, "cli", NULL },
