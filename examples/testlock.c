@@ -150,8 +150,7 @@ struct glob_arg {
 	int nthreads;
 	int cpus;
 	int privs;	// 1 if has IO privileges
-	int sel_us;	// microseconds in select
-	int usleep_us;	// microseconds in usleep
+	int arg;	// microseconds in usleep
 	char *test_name;
 	void (*fn)(struct targ *);
 };
@@ -276,7 +275,7 @@ test_sel(struct targ *t)
 {
 	int m;
 	for (m = 0; m < t->g->m_cycles; m++) {
-		struct timeval to = { 0, t->g->sel_us};
+		struct timeval to = { 0, t->g->arg};
 		select(0, NULL, NULL, NULL, &to);
 		t->count += ONE_MILLION;
 	}
@@ -287,7 +286,7 @@ test_usleep(struct targ *t)
 {
 	int m;
 	for (m = 0; m < t->g->m_cycles; m++) {
-		usleep(t->g->usleep_us);
+		usleep(t->g->arg);
 		t->count += ONE_MILLION;
 	}
 }
@@ -305,6 +304,18 @@ test_cli(struct targ *t)
 			__asm __volatile("cli;");
 			__asm __volatile("and %eax, %eax;");
 			__asm __volatile("sti;");
+			t->count++;
+		}
+        }
+}
+
+void
+test_add(struct targ *t)
+{
+        int m, i;
+        for (m = 0; m < t->g->m_cycles; m++) {
+		for (i = 0; i < ONE_MILLION; i++) {
+                	t->glob_ctr[0] ++;
 			t->count++;
 		}
         }
@@ -342,7 +353,8 @@ struct entry {
 struct entry tests[] = {
 	{ test_sel, "select", NULL },
 	{ test_usleep, "usleep", NULL },
-	{ test_atomic_add, "add", NULL },
+	{ test_add, "add", NULL },
+	{ test_atomic_add, "atomic-add", NULL },
 	{ test_cli, "cli", NULL },
 	{ test_atomic_cmpset, "cmpset", NULL },
 	{ NULL, NULL, NULL }
@@ -364,6 +376,7 @@ usage(void)
 		"\t-n cycles		(millions) of cycles\n"
 		"\t-w report_ms		milliseconds between reports\n"
 		"\t-m name		test name\n"
+		"\t-N arg		usec for select/usleep\n"
 		"",
 		cmd);
 	fprintf(stderr, "Available tests:\n");
@@ -378,7 +391,7 @@ usage(void)
 
 struct glob_arg g;
 int
-main(int arc, char **argv)
+main(int argc, char **argv)
 {
 	int i, ch, report_interval, affinity, align;
 
@@ -394,7 +407,7 @@ main(int arc, char **argv)
 	g.cpus = 1;
 	g.m_cycles = 1000;	/* millions */
 
-	while ( (ch = getopt(arc, argv, "A:a:m:n:w:c:t:vS:U:")) != -1) {
+	while ( (ch = getopt(argc, argv, "A:a:m:n:w:c:t:vS:U:")) != -1) {
 		switch(ch) {
 		default:
 			D("bad option %c %s", ch, optarg);
@@ -421,11 +434,8 @@ main(int arc, char **argv)
 		case 'm':
 			g.test_name = optarg;
 			break;
-		case 'S':
-			g.sel_us = atoi(optarg);
-			break;
-		case 'U':
-			g.usleep_us = atoi(optarg);
+		case 'N':
+			g.arg = atoi(optarg);
 			break;
 
 		case 'v':
@@ -433,6 +443,10 @@ main(int arc, char **argv)
 			break;
 		}
 	}
+	argc -= optind;
+	argv += optind;
+	if (!g.test_name && argc > 0)
+		g.test_name = argv[0];
 
 	if (g.test_name) {
 		for (i = 0; tests[i].name; i++) {
