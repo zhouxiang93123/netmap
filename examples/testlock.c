@@ -69,11 +69,25 @@ uint32_t atomic_add_int(uint32_t *p, int v)
 #endif
 
 #else /* FreeBSD */
-#define HAVE_AFFINITY
+#include <sys/param.h>
 #include <machine/atomic.h>
 #include <pthread_np.h>	/* pthread w/ affinity */
+
+#if __FreeBSD_version > 500000
 #include <sys/cpuset.h>	/* cpu_set */
+#define HAVE_AFFINITY
+#else
+int atomic_cmpset_32(volatile uint32_t *p, uint32_t old, uint32_t new)
+{
+	int ret = *p == old;
+	*p = new;
+	return ret;
+}
+
+#define PRIu64	"llu"
 #endif
+
+#endif /* FreeBSD */
 
 #include <signal.h>	/* signal */
 #include <stdlib.h>
@@ -206,7 +220,7 @@ getprivs(void)
 {
 	int fd = open("/dev/io", O_RDWR);
 	if (fd < 0) {
-		D("cannot open /dev/io");
+		D("cannot open /dev/io, fd %d", fd);
 		return 0;
 	}
 	return 1;
@@ -283,7 +297,7 @@ test_cli(struct targ *t)
 {
         int m, i;
 	if (!t->g->privs) {	
-		D("privileged instructions not available");
+		D("%s", "privileged instructions not available");
 		return;
 	}
         for (m = 0; m < t->g->m_cycles; m++) {
@@ -429,7 +443,7 @@ main(int arc, char **argv)
 		}
 	}
 	if (!g.fn) {
-		D("missing/unknown test name");
+		D("%s", "missing/unknown test name");
 		usage();
 	}
 	i = system_ncpus();
