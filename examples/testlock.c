@@ -299,6 +299,18 @@ test_atomic_add(struct targ *t)
         }
 }
 
+void
+test_atomic_cmpset(struct targ *t)
+{
+        int m, i;
+        for (m = 0; m < t->g->m_cycles; m++) {
+		for (i = 0; i < ONE_MILLION; i++) {
+		        atomic_cmpset_32(t->glob_ctr, m, i);
+			t->count++;
+		}
+        }
+}
+
 struct entry {
 	void (*fn)(struct targ *);
 	char *name;
@@ -309,7 +321,7 @@ struct entry tests[] = {
 	{ test_usleep, "usleep", NULL },
 	{ test_atomic_add, "add", NULL },
 	{ test_cli, "cli", NULL },
-//	{ test_atomic_cmpswap, "cmpswap", NULL },
+	{ test_atomic_cmpset, "cmpset", NULL },
 	{ NULL, NULL, NULL }
 };
 
