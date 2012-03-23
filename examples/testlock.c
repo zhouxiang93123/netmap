@@ -258,6 +258,7 @@ td_body(void *data)
 	if (setaffinity(t->thread, t->affinity))
 		goto quit;
 	/* main loop.*/
+	D("testing %d cycles", t->g->m_cycles);
 	gettimeofday(&t->tic, NULL);
 	t->g->fn(t);
 	gettimeofday(&t->toc, NULL);
@@ -275,8 +276,12 @@ test_sel(struct targ *t)
 {
 	int m;
 	for (m = 0; m < t->g->m_cycles; m++) {
+		fd_set r;
 		struct timeval to = { 0, t->g->arg};
-		select(0, NULL, NULL, NULL, &to);
+		FD_ZERO(&r);
+		FD_SET(0,&r);
+		FD_SET(1,&r);
+		select(2, &r, NULL, NULL, &to);
 		t->count += ONE_MILLION;
 	}
 }
@@ -407,7 +412,7 @@ main(int argc, char **argv)
 	g.cpus = 1;
 	g.m_cycles = 1000;	/* millions */
 
-	while ( (ch = getopt(argc, argv, "A:a:m:n:w:c:t:vS:U:")) != -1) {
+	while ( (ch = getopt(argc, argv, "A:a:m:n:w:c:t:vN:")) != -1) {
 		switch(ch) {
 		default:
 			D("bad option %c %s", ch, optarg);
@@ -531,7 +536,7 @@ main(int argc, char **argv)
 		if (pps < 10000)
 			continue;
 		pps = (my_count - prev)*ONE_MILLION / pps;
-		D("%" PRIu64 " mctr", pps/ONE_MILLION);
+		D("%" PRIu64 " cycles/s", pps/ONE_MILLION);
 		prev = my_count;
 		toc = now;
 		if (done == g.nthreads)
