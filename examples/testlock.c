@@ -165,7 +165,6 @@ struct glob_arg {
  */
 struct targ {
 	struct glob_arg *g;
-	int		used;
 	int		completed;
 	u_int		*glob_ctr;
 	uint64_t volatile count;
@@ -187,14 +186,12 @@ sigint_h(int MY_UNUSED sig)
 
 	for (i = 0; i < global_nthreads; i++) {
 		/* cancel active threads. */
-		if (ta[i].used == 0)
+		if (ta[i].completed)
 			continue;
-
 		D("Cancelling thread #%d\n", i);
 		pthread_cancel(ta[i].thread);
-		ta[i].used = 0;
+		ta[i].completed = 0;
 	}
-
 	signal(SIGINT, SIG_DFL);
 }
 
@@ -266,12 +263,8 @@ td_body(void *data)
 	gettimeofday(&t->tic, NULL);
 	t->g->fn(t);
 	gettimeofday(&t->toc, NULL);
-	t->completed = 1;
-	//targ->count = 0;
 quit:
-	/* reset the ``used`` flag. */
-	t->used = 0;
-
+	t->completed = 1;
 	return (NULL);
 }
 
@@ -316,6 +309,20 @@ test_cli(struct targ *t)
 			t->count++;
 		}
         }
+}
+
+void
+test_nop(struct targ *t)
+{
+        int m, i;
+        for (m = 0; m < t->g->m_cycles; m++) {
+		for (i = 0; i < ONE_MILLION; i++) {
+			__asm __volatile("nop;");
+			__asm __volatile("nop; nop; nop; nop; nop;");
+			//__asm __volatile("nop; nop; nop; nop; nop;");
+			t->count++;
+		}
+	}
 }
 
 void
@@ -387,6 +394,7 @@ struct entry tests[] = {
 	{ test_time, "time", NULL },
 	{ test_gettimeofday, "gettimeofday", NULL },
 	{ test_add, "add", NULL },
+	{ test_nop, "nop", NULL },
 	{ test_atomic_add, "atomic-add", NULL },
 	{ test_cli, "cli", NULL },
 	{ test_atomic_cmpset, "cmpset", NULL },
@@ -524,15 +532,13 @@ main(int argc, char **argv)
 		struct targ *t = &ta[i];
 		bzero(t, sizeof(*t));
 		t->g = &g;
-		t->used = 1;
-		t->completed = 0;
 		t->me = i;
 		t->glob_ctr = &g.v.ctr[(i*align)/sizeof(g.v.ctr[0])];
 		D("thread %d ptr %p", i, t->glob_ctr);
 		t->affinity = affinity ? (affinity*i) % g.cpus : -1;
 		if (pthread_create(&t->thread, NULL, td_body, t) == -1) {
 			D("Unable to create thread %d", i);
-			t->used = 0;
+			t->completed = 1;
 		}
 	}
 	/* the main loop */
@@ -557,7 +563,7 @@ main(int argc, char **argv)
 		my_count = 0;
 		for (i = 0; i < g.nthreads; i++) {
 			my_count += ta[i].count;
-			if (ta[i].used == 0)
+			if (ta[i].completed)
 				done++;
 		}
 		pps = toc.tv_sec* ONE_MILLION + toc.tv_usec;
