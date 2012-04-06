@@ -109,8 +109,9 @@ static inline int min(int a, int b) { return a < b ? a : b; }
 
 #define ONE_MILLION	1000000
 /* debug support */
+#define ND(format, ...)			
 #define D(format, ...)				\
-	fprintf(stderr, "%s [%d] " format "\n", 	\
+	fprintf(stderr, "%s [%d] " format "\n",	\
 	__FUNCTION__, __LINE__, ##__VA_ARGS__)
 
 int verbose = 0;
@@ -436,7 +437,7 @@ main(int argc, char **argv)
 {
 	int i, ch, report_interval, affinity, align;
 
-	D("g has size %d", (int)sizeof(g));
+	ND("g has size %d", (int)sizeof(g));
 	report_interval = 250;	/* ms */
 	affinity = 0;		/* no affinity */
 	align = 0;		/* global variable */
