@@ -1,4 +1,76 @@
 --- status and other development notes ---
+20120407 syscall path
+lib/libc/net/Symbol.map
+    defines a few symbols that the linker is supposed to export
+
+lib/libc/net/send.c
+    send() calls _sendto()
+
+./libc/include/namespace.h:#define              sendto                          _sendto
+
+lib/libc/sys/Symbol.map
+	FBSDprivate_1.0		_sendto, __sys_sendto
+
+the threading library defines them
+./libthr/thread/thr_syscalls.c
+	ssize_t
+	__sendto(int s, const void *m, size_t l, int f, const struct sockaddr *t,
+	    socklen_t tl)
+	{
+		struct pthread *curthread = _get_curthread();
+		ssize_t ret;
+
+		_thr_cancel_enter(curthread);
+		ret = __sys_sendto(s, m, l, f, t, tl);
+		_thr_cancel_leave(curthread, ret <= 0);
+		return (ret);
+	}
+
+
+head/sys/kern/syscall.master
+; Processed to created init_sysent.c, syscalls.c and syscall.h.
+
+lib/libc/i386/SYS.h
+#define	SYSCALL(x)	2: PIC_PROLOGUE; jmp PIC_PLT(HIDENAME(cerror));	\
+			ENTRY(__CONCAT(__sys_,x));			\
+			.weak CNAME(x);					\
+			.set CNAME(x),CNAME(__CONCAT(__sys_,x));	\
+			.weak CNAME(__CONCAT(_,x));			\
+			.set CNAME(__CONCAT(_,x)),CNAME(__CONCAT(__sys_,x)); \
+			mov __CONCAT($SYS_,x),%eax; KERNCALL; jb 2b
+
+#define	RSYSCALL(x)	SYSCALL(x); ret; END(__CONCAT(__sys_,x))
+
+#define	PSEUDO(x)	2: PIC_PROLOGUE; jmp PIC_PLT(HIDENAME(cerror)); \
+			ENTRY(__CONCAT(__sys_,x));			\
+			.weak CNAME(__CONCAT(_,x));			\
+			.set CNAME(__CONCAT(_,x)),CNAME(__CONCAT(__sys_,x)); \
+			mov __CONCAT($SYS_,x),%eax; KERNCALL; jb 2b; ret; \
+			END(__CONCAT(__sys_,x))
+
+/* gas messes up offset -- although we don't currently need it, do for BCS */
+#define	LCALL(x,y)	.byte 0x9a ; .long y; .word x
+
+#define KERNCALL	int $0x80
+
+The main syscall in lib/libc/i386/sys/syscall.S
+
+ENTRY(syscall)
+	pop	%ecx	/* rta */
+	pop	%eax	/* syscall number */
+	push	%ecx
+	KERNCALL
+	push	%ecx	/* need to push a word to keep stack frame intact
+			   upon return; the word must be the return address. */
+	jb	1f
+	ret
+1:
+	PIC_PROLOGUE
+	jmp	PIC_PLT(HIDENAME(cerror))
+
+                                    
+
+--------------
 20120313 unetstack and linux netqueue
   http://www.ioremap.net/archive/unetstack/
   http://www.dnull.com/Alpine/
