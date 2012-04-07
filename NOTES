@@ -1,4 +1,22 @@
 --- status and other development notes ---
+20120407 sendto and other functions
+
+Measure netsend (and sendto() ) on various machines and dropping
+the packet at different places in the stack.
+sysctl kern.ipc.drop_send=N picks the place where packets are dropped
+Tests run using tools/tools/netrate/netsend
+
+CONFIG				QEMU		LE-2300		i7-3400
+				i7-3400
+l=18, no send			18.9		86.4		211
+l=18,   1 thread, pipe drop	.0436				1.400
+l=1400, 1 thread, pipe drop	.0393				1.300
+l=18, 2 thread, pipe drop					.943
+l=1400, 2 thread, pipe drop					.857
+l=18, 5 thread, pipe drop					.51
+l=1400, 5 thread, pipe drop					.50
+
+
 20120407 syscall path
 lib/libc/net/Symbol.map
     defines a few symbols that the linker is supposed to export
