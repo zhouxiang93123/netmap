@@ -361,6 +361,8 @@ main(int argc, char **argv)
 		}
 
 	}
+	argc -= optind;
+	argv += optind;
 
 	if (argc > 1)
 		ifa = argv[1];
