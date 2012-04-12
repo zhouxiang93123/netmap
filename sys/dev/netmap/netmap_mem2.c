@@ -581,8 +581,8 @@ netmap_if_new(const char *ifname, struct netmap_adapter *na)
 	struct netmap_ring *ring;
 	ssize_t base; /* handy for relative offsets between rings and nifp */
 	u_int i, len, ndesc;
-	u_int ntx = na->num_tx_queues + 1; /* shorthand, include stack queue */
-	u_int nrx = na->num_tx_queues + 1; /* shorthand, include stack queue */
+	u_int ntx = na->num_tx_rings + 1; /* shorthand, include stack queue */
+	u_int nrx = na->num_rx_rings + 1; /* shorthand, include stack queue */
 	struct netmap_kring *kring;
 
 	NMA_LOCK();
@@ -598,8 +598,8 @@ netmap_if_new(const char *ifname, struct netmap_adapter *na)
 	}
 
 	/* initialize base fields -- override const */
-	*(int *)(uintptr_t)&nifp->ni_tx_queues = na->num_tx_queues;
-	*(int *)(uintptr_t)&nifp->ni_rx_queues = na->num_rx_queues;
+	*(int *)(uintptr_t)&nifp->ni_tx_rings = na->num_tx_rings;
+	*(int *)(uintptr_t)&nifp->ni_rx_rings = na->num_rx_rings;
 	strncpy(nifp->ni_name, ifname, IFNAMSIZ);
 
 	(na->refcount)++;	/* XXX atomic ? we are under lock */
@@ -708,10 +708,10 @@ static void
 netmap_free_rings(struct netmap_adapter *na)
 {
 	int i;
-	for (i = 0; i < na->num_tx_queues + 1; i++)
+	for (i = 0; i < na->num_tx_rings + 1; i++)
 		netmap_obj_free_va(nm_mem->nm_ring_pool,
 			na->tx_rings[i].ring);
-	for (i = 0; i < na->num_tx_queues + 1; i++)
+	for (i = 0; i < na->num_rx_rings + 1; i++)
 		netmap_obj_free_va(nm_mem->nm_ring_pool,
 			na->rx_rings[i].ring);
 }

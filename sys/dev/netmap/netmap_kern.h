@@ -34,7 +34,7 @@
 #ifndef _NET_NETMAP_KERN_H_
 #define _NET_NETMAP_KERN_H_
 
-//#define NETMAP_MEM2    // use the new memory allocator
+#define NETMAP_MEM2    // use the new memory allocator
 
 #if defined(__FreeBSD__)
 #define	NM_LOCK_T	struct mtx
@@ -88,7 +88,7 @@ struct netmap_kring {
 	u_int nr_hwcur;
 	int nr_hwavail;
 	u_int nr_kflags;	/* private driver flags */
-#define NKR_PENDINTR   0x1     // Pending interrupt.
+#define NKR_PENDINTR	0x1	// Pending interrupt.
 	u_int nkr_num_slots;
 
 	int	nkr_hwofs;	/* offset between NIC and netmap ring */
@@ -106,20 +106,25 @@ struct netmap_adapter {
 	int refcount; /* number of user-space descriptors using this
 			 interface, which is equal to the number of
 			 struct netmap_if objs in the mapped region. */
+	/*
+	 * The selwakeup in the interrupt thread can use per-ring
+	 * and/or global wait queues. We track how many clients
+	 * of each type we have so we can optimize the drivers,
+	 * and especially avoid huge contention on the locks.
+	 */
+	int na_single;	/* threads attached to a single hw queue */
+	int na_multi;	/* threads attached to multiple hw queues */
 
 	int separate_locks; /* set if the interface suports different
 			       locks for rx, tx and core. */
 
-	u_int num_rx_queues; /* number of tx/rx queue pairs: this is
-			   a duplicate field needed to simplify the
-			   signature of ``netmap_detach``. */
-	u_int num_tx_queues;	// if nonzero, overrides num_queues XXX
+	u_int num_rx_rings; /* number of tx/rx ring pairs */
+	u_int num_tx_rings; // if nonzero, overrides num_rx_rings
 
 	u_int num_tx_desc; /* number of descriptor in each queue */
 	u_int num_rx_desc;
-	u_int buff_size;	// XXX deprecate, use NETMAP_BUF_SIZE
+	//u_int buff_size;	// XXX deprecate, use NETMAP_BUF_SIZE
 
-	//u_int	flags;	// XXX unused
 	/* tx_rings and rx_rings are private but allocated
 	 * as a contiguous chunk of memory. Each array has
 	 * N+1 entries, for the adapter queues and for the host queue.
@@ -131,9 +136,7 @@ struct netmap_adapter {
 
 	/* copy of if_qflush and if_transmit pointers, to intercept
 	 * packets from the network stack when netmap is active.
-	 * XXX probably if_qflush is not necessary.
 	 */
-	//void    (*if_qflush)(struct ifnet *);	// XXX unused
 	int     (*if_transmit)(struct ifnet *, struct mbuf *);
 
 	/* references to the ifnet and device routines, used by
@@ -210,7 +213,7 @@ struct netmap_slot *netmap_reset(struct netmap_adapter *na,
 int netmap_ring_reinit(struct netmap_kring *);
 
 extern int netmap_buf_size;
-#define NETMAP_BUF_SIZE netmap_buf_size
+#define NETMAP_BUF_SIZE	netmap_buf_size
 extern int netmap_mitigate;
 extern int netmap_no_pendintr;
 extern u_int netmap_total_buffers;
