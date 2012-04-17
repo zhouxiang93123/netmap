@@ -11,8 +11,10 @@
 	20	900	18	HPET			2685	2590 alternate
 	
 	nosend	2934	18	HPET		 	119000	i7-870 no send (drop port)
+	nosendx4 2934	18	HPET		 	118200	i7-870 no send (drop port)
 	20	2934	18	HPET		 	9783	sys_sendto()
 	20	2934	18	HPET		 	9634	send()
+	20x4	2934	18	HPET		 	9606	send() four threads
 	20	2934	18	HPET		 104	9602	9267 alternate
 	21	2934	18	HPET		 111	8982
 	22	2934	18	HPET			9006	alt 8710
@@ -21,22 +23,37 @@
 	25	2934	18	HPET		 136	7347
 	
 	40	2934	18	HPET		 144	6903	to 10.0.0.1
+	40x4	2934	18	HPET		 144	6720	to 10.0.0.1
 	41	2934	18	HPET		 156	6404	to 10.0.0.1 down to 6017
+	41x4	2934	18	HPET		 156	6423	to 10.0.0.1 down to 6017
+		--- 41-42 is m_uiotombuf()
+			involves copyout in
+			/home/luigi/FreeBSD/head/sys/amd64/amd64/support.S:
 	42	2934	18	HPET		 279	3577	to 10.0.0.1 down to 3544
+	42x4	2934	18	HPET		 279	3725	to 10.0.0.1 down to 3544
 	43	2934	18	HPET		 283	3522	to 10.0.0.1 down to 3544
 
 	30	2934	18	HPET		 292	3418	to 10.0.0.1
 	31	2934	18	HPET		 340	2936
 
 	50	2934	18	HPET		 361	2765	to 10.0.0.1
+	50x4	2934	18	HPET		 361	2802	to 10.0.0.1
 	51	2934	18	HPET			2635	to 10.0.0.1
+	51x4	2934	18	HPET			2689	to 10.0.0.1
 	52	2934	18	HPET		 477	2093	to 10.0.0.1
+	52x4	2934	18	HPET		 	 775	to 10.0.0.1
+		--- 52-53 is the pfil call
 	53	2934	18	HPET			 613	to 10.0.0.1 (not here ?)
 	54	2934	18	HPET			2090	to 10.0.0.1 also 2031 2046 ...
+	54x4	2934	18	HPET			 783	to 10.0.0.1 also 2031 2046 ...
 	55	2934	18	HPET		 534	1871	to 10.0.0.1
+	55x2	2934	18	HPET		 	1555	to 10.0.0.1 two threads
+	55x4	2934	18	HPET		 	 770	to 10.0.0.1 four threads
 
 	0	2934	18	HPET		 968	1032	to 127.0.0.1
 	0	2934	18	HPET			 622	to 10.0.0.1 (via ix0)
+	0x2	2934	18	HPET			 450	to 10.0.0.1 (via ix0)
+	0x4	2934	18	HPET			 351	to 10.0.0.1 (via ix0)
 	0	2934	18	HPET			 322	to 10.0.0.1 (and netmap-bridge)
 
 20120416 XXX BUG
