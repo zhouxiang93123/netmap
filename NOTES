@@ -1,4 +1,83 @@
 --- status and other development notes ---
+20120419 netsend statistics (with various breakpoints)
+sysctl dev.ix.0.enable_aim=0
+sysctl dev.ix.0.queue0.interrupt_rate=5000
+sysctl dev.ix.0.fc=0
+sysctl net.inet.drop ...
+
+call tree
+send()
+sendto()
+---- within the kernel ------ R/W = lock, T= tail call, C = normall call,
+kern/uipc_syscalls.c :: sys_sendto()
+kern/uipc_syscalls.c :: sendit()
+kern/uipc_syscalls.c :: kern_sendit()
+kern/uipc_socket.c :: sosend()
+			so->so_proto->pr_usrreqs->pru_sosend = sosend_dgram
+kern/uipc_socket.c :: sosend_dgram()
+			so->so_proto->pr_usrreqs->pru_send = udp_send
+netinet/udp_usrreq.c :: udp_send()
+netinet/udp_usrreq.c :: udp_output()
+netinet/ip_output.c :: ip_output()
+			ifp->if_output = ether_output
+net/if_ethersubr.c :: ether_output()
+	memcpy() or arpresolve()
+	3 memcpy for MAC header
+	pf_find_mtag() and csum_flags
+
+net/if_ethersubr.c :: ether_output_frame()
+		check ether_ipfw
+		call ifp->if_transmit
+			ifp->if_transmit = ixgbe_mq_start
+
+dev/ixgbe/ixgbe.c :: ixgbe_mq_start()
+	IXGBE_TX_TRYLOCK()
+	ixgbe_mq_start_locked()
+	IXGBE_TX_UNLOCK()
+
+dev/ixgbe/ixgbe.c :: ixgbe_mq_start_locked()
+	drbr_needs_enqueue() 30ns aka buf_ring_empty
+	for (;;) {
+		ixgbe_xmit()
+		drbr_dequeue()
+	}
+	
+dev/ixgbe/ixgbe.c :: ixgbe_xmit()
+	huge stack (32 descriptors)
+			bus_dmamap_load_mbuf_sg()
+			ixgbe_tso_setup() or ixgbe_tx_ctx_setup()
+	loop on descriptors
+	IXGBE_WRITE_REG(&adapter->hw, IXGBE_TDT(txr->me), i);
+
+... drbr_dequeue() uses sys/sys/buf_ring.h
+
+
+	BREAK	CLOCK	SIZE	TC		NSEC	KPPS	
+	0	2934	18	HPET		1289	775
+	p5556	2934	18	HPET		   8	118M
+	20	2934	18	HPET		107		103 107 103 103 103 103 107 107
+	20x4	2934	18	HPET		107
+	21x4	2934	18	HPET		111
+	22x4	2934	18	HPET		111	same as 21
+	23x4	2934	18	HPET		112-115
+	24x4	2934	18	HPET		117-121
+	25x4	2934	18	HPET		135-141
+	40x4	2934	18	HPET		144-150
+	41x4	2934	18	HPET		157-167		insensitive to length
+		allocation m_uiotombuf() -> uma_zalloc(zone_mbuf)
+			uma_zalloc():
+				critical_enter()
+				cache->uc_allocs++;
+	42x4	2934	18	HPET		266-270
+	42x4	2934	180	HPET		297
+	42x4	2934	1080	HPET		312
+	51x4	2934	1080	HPET		412
+	52x4	2934	18	HPET		1282 (!XXX slower than 1080)
+	52	2934	1080	HPET		515
+	56x4	2934	1080	HPET		1290
+	52x4	2934	1080	HPET		1325 (1256 in other tests)
+
+
 20120417 netsend statistics (with various breakpoints)
 	tests on i7-870 at 2934
 
@@ -27,7 +106,9 @@
 	41	2934	18	HPET		 156	6404	to 10.0.0.1 down to 6017
 	41x4	2934	18	HPET		 156	6423	to 10.0.0.1 down to 6017
 		--- 41-42 is m_uiotombuf()
-			involves copyout in
+				uiomove()
+				sys/kern/subr_uio.c::uiomove_faultflag(cp, n, uio, 0)
+			involves copyin in
 			/home/luigi/FreeBSD/head/sys/amd64/amd64/support.S:
 	42	2934	18	HPET		 279	3577	to 10.0.0.1 down to 3544
 	42x4	2934	18	HPET		 279	3725	to 10.0.0.1 down to 3544
