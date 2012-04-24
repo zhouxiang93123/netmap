@@ -429,7 +429,7 @@ sender_body(void *data)
 	struct netmap_ring *txring;
 	int i, n = targ->g->npackets / targ->g->nthreads, sent = 0;
 	int fill_all = 1;
-
+D("start");
 	if (setaffinity(targ->thread, targ->affinity))
 		goto quit;
 	/* setup poll(2) mechanism. */
@@ -672,6 +672,7 @@ int
 main(int arc, char **argv)
 {
 	int i, fd;
+	char pcap_errbuf[PCAP_ERRBUF_SIZE];
 
 	struct glob_arg g;
 
@@ -696,7 +697,7 @@ main(int arc, char **argv)
 	g.cpus = 1;
 
 	while ( (ch = getopt(arc, argv,
-			"i:t:r:l:d:s:D:S:b:c:p:T:w:v")) != -1) {
+			"i:t:r:l:d:s:D:S:b:c:p:PT:w:v")) != -1) {
 		switch(ch) {
 		default:
 			D("bad option %c %s", ch, optarg);
@@ -775,6 +776,26 @@ main(int arc, char **argv)
 		usage();
 	}
 
+	if (td_body == sender_body && g.src_mac == NULL) {
+		static char mybuf[20] = "ff:ff:ff:ff:ff:ff";
+		/* retrieve source mac address. */
+		if (source_hwaddr(ifname, mybuf) == -1) {
+			D("Unable to retrieve source mac");
+			// continue, fail later
+		}
+		g.src_mac = mybuf;
+	}
+
+    if (g.use_pcap) {
+	D("using pcap on %s", ifname);
+	g.p = pcap_open_live(ifname, 0, 1, 100, pcap_errbuf);
+	if (g.p == NULL) {
+		D("cannot open pcap on %s", ifname);
+		usage();
+	}
+	mmap_addr = NULL;
+	fd = -1;
+    } else {
 	bzero(&nmr, sizeof(nmr));
 	nmr.nr_version = NETMAP_API;
 	/*
@@ -809,16 +830,6 @@ main(int arc, char **argv)
 	if (g.nthreads < 1 || g.nthreads > devqueues) {
 		D("bad nthreads %d, have %d queues", g.nthreads, devqueues);
 		// continue, fail later
-	}
-
-	if (td_body == sender_body && g.src_mac == NULL) {
-		static char mybuf[20] = "ff:ff:ff:ff:ff:ff";
-		/* retrieve source mac address. */
-		if (source_hwaddr(ifname, mybuf) == -1) {
-			D("Unable to retrieve source mac");
-			// continue, fail later
-		}
-		g.src_mac = mybuf;
 	}
 
 	/*
@@ -869,6 +880,7 @@ main(int arc, char **argv)
 		D("aborting");
 		usage();
 	}
+    }
 
 
 	/* Wait for PHY reset. */
@@ -881,7 +893,12 @@ main(int arc, char **argv)
 	signal(SIGINT, sigint_h);
 
 	if (g.use_pcap) {
-		// XXX g.p = pcap_open_live(..);
+		g.p = pcap_open_live(ifname, 0, 1, 100, NULL);
+		if (g.p == NULL) {
+			D("cannot open pcap on %s", ifname);
+			usage();
+		} else
+			D("using pcap %p on %s", g.p, ifname);
 	}
 
 	targs = calloc(g.nthreads, sizeof(*targs));
@@ -1018,9 +1035,11 @@ main(int arc, char **argv)
 		rx_output(count, delta_t);
     }
 
+    if (g.use_pcap == 0) {
 	ioctl(fd, NIOCUNREGIF, &nmr);
 	munmap(mmap_addr, nmr.nr_memsize);
 	close(fd);
+    }
 
 	return (0);
 }
