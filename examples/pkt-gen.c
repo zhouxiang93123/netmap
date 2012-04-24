@@ -444,9 +444,13 @@ D("start");
 	void *pkt = &targ->pkt;
 	pcap_t *p = targ->g->p;
 
-	for (; sent < n; sent++) {
-		if (pcap_inject(p, pkt, size) == -1)
-			break;
+	for (i = 0; sent < n; i++) {
+		if (pcap_inject(p, pkt, size) != -1)
+			sent++;
+		if (i > 10000) {
+			targ->count = sent;
+			i = 0;
+		}
 	}
     } else {
 	while (sent < n) {
