@@ -96,6 +96,7 @@ int atomic_cmpset_32(volatile uint32_t *p, uint32_t old, uint32_t new)
 #include <signal.h>	/* signal */
 #include <stdlib.h>
 #include <stdio.h>
+#include <poll.h>
 #include <inttypes.h>	/* PRI* macros */
 #include <string.h>	/* strcmp */
 #include <fcntl.h>	/* open */
@@ -278,8 +279,21 @@ test_sel(struct targ *t)
 		struct timeval to = { 0, t->g->arg};
 		FD_ZERO(&r);
 		FD_SET(0,&r);
-		FD_SET(1,&r);
-		select(2, &r, NULL, NULL, &to);
+		// FD_SET(1,&r);
+		select(1, &r, NULL, NULL, &to);
+		t->count += ONE_MILLION;
+	}
+}
+
+void
+test_poll(struct targ *t)
+{
+	int m, ms = t->g->arg/1000;
+	for (m = 0; m < t->g->m_cycles; m++) {
+		struct pollfd x;
+		x.fd = 0;
+		x.events = POLLIN;
+		poll(&x, 1, ms);
 		t->count += ONE_MILLION;
 	}
 }
@@ -391,6 +405,7 @@ struct entry {
 };
 struct entry tests[] = {
 	{ test_sel, "select", NULL },
+	{ test_poll, "poll", NULL },
 	{ test_usleep, "usleep", NULL },
 	{ test_time, "time", NULL },
 	{ test_gettimeofday, "gettimeofday", NULL },
