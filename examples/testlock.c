@@ -79,6 +79,11 @@ uint32_t atomic_add_int(uint32_t *p, int v)
 #define HAVE_AFFINITY
 #endif
 
+inline void prefetch (const void *x)
+{
+        __asm volatile("prefetcht0 %0" :: "m" (*(const unsigned long *)x));
+}
+
 
 #else /* FreeBSD 4.x */
 int atomic_cmpset_32(volatile uint32_t *p, uint32_t old, uint32_t new)
@@ -400,6 +405,47 @@ test_gettimeofday(struct targ *t)
         }
 }
 
+static inline void
+fast_bcopy(void *_src, void *_dst, int l)
+{
+	uint64_t *src = _src;
+	uint64_t *dst = _dst;
+#define likely(x)       __builtin_expect(!!(x), 1)
+#define unlikely(x)       __builtin_expect(!!(x), 0)
+	if (unlikely(l >= 1024)) {
+		bcopy(src, dst, l);
+		return;
+	}
+	for (; l > 0; l-=64) {
+		*dst++ = *src++;
+		*dst++ = *src++;
+		*dst++ = *src++;
+		*dst++ = *src++;
+		*dst++ = *src++;
+		*dst++ = *src++;
+		*dst++ = *src++;
+		*dst++ = *src++;
+	}
+}
+	
+#define HU	0
+static struct glob_arg huge[HU+1];
+void
+test_bcopy(struct targ *t)
+{
+        int m, len;
+	len = t->g->arg;
+	if (len > (int)sizeof(struct glob_arg))
+		len = sizeof(struct glob_arg);
+	D("copying %d bytes", len);
+        for (m = 0; m < t->g->m_cycles; m++) {
+		//bcopy(t->g, (void *)&huge[m & HU], len);
+		fast_bcopy(t->g, (void *)&huge[m & HU], len);
+		//memcpy((void *)&huge[m & HU], t->g, len);
+		t->count+=1;
+        }
+}
+
 struct entry {
 	void (*fn)(struct targ *);
 	char *name;
@@ -411,6 +457,7 @@ struct entry tests[] = {
 	{ test_usleep, "usleep", 1 },
 	{ test_time, "time", 1 },
 	{ test_gettimeofday, "gettimeofday", 1 },
+	{ test_bcopy, "bcopy", 1 },
 	{ test_add, "add", ONE_MILLION },
 	{ test_nop, "nop", ONE_MILLION },
 	{ test_atomic_add, "atomic-add", ONE_MILLION },
