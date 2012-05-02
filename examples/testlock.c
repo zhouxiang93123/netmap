@@ -416,19 +416,21 @@ fast_bcopy(void *_src, void *_dst, int l)
 		bcopy(src, dst, l);
 		return;
 	}
-	for (; l > 0; l-=64) {
+	for (; l > 0; l-=32) {
 		*dst++ = *src++;
 		*dst++ = *src++;
 		*dst++ = *src++;
 		*dst++ = *src++;
+#if 0
 		*dst++ = *src++;
 		*dst++ = *src++;
 		*dst++ = *src++;
 		*dst++ = *src++;
+#endif
 	}
 }
 	
-#define HU	0
+#define HU	0x3ffff
 static struct glob_arg huge[HU+1];
 void
 test_bcopy(struct targ *t)
