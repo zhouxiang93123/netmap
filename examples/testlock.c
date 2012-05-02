@@ -80,7 +80,7 @@ uint32_t atomic_add_int(uint32_t *p, int v)
 #endif
 
 
-#else
+#else /* FreeBSD 4.x */
 int atomic_cmpset_32(volatile uint32_t *p, uint32_t old, uint32_t new)
 {
 	int ret = *p == old;
@@ -89,7 +89,7 @@ int atomic_cmpset_32(volatile uint32_t *p, uint32_t old, uint32_t new)
 }
 
 #define PRIu64	"llu"
-#endif
+#endif /* FreeBSD 4.x */
 
 #endif /* FreeBSD */
 
@@ -117,7 +117,7 @@ static inline int min(int a, int b) { return a < b ? a : b; }
 
 int verbose = 0;
 
-#if 1
+#ifdef MY_RDTSC
 /* Wrapper around `rdtsc' to take reliable timestamps flushing the pipeline */ 
 #define my_rdtsc(t)				\
 	do {					\
@@ -159,11 +159,12 @@ struct glob_arg {
 	int arg;	// microseconds in usleep
 	char *test_name;
 	void (*fn)(struct targ *);
+	uint64_t scale;	// scaling factor
+	char *scale_name;	// scaling factor
 };
 
 /*
- * Arguments for a new thread. The same structure is used by
- * the source and the sink
+ * Arguments for a new thread.
  */
 struct targ {
 	struct glob_arg *g;
@@ -230,10 +231,10 @@ getprivs(void)
 
 /* set the thread affinity. */
 /* ARGSUSED */
-static int
-setaffinity(pthread_t MY_UNUSED me, int MY_UNUSED i)
-{
 #ifdef HAVE_AFFINITY
+static int
+setaffinity(pthread_t me, int i)
+{
 	cpuset_t cpumask;
 
 	if (i == -1)
@@ -247,25 +248,26 @@ setaffinity(pthread_t MY_UNUSED me, int MY_UNUSED i)
 		D("Unable to set affinity");
 		return 1;
 	}
-#endif
 	return 0;
 }
+#endif
 
-uint64_t res;
 
 static void *
 td_body(void *data)
 {
 	struct targ *t = (struct targ *) data;
 
-	if (setaffinity(t->thread, t->affinity))
-		goto quit;
-	/* main loop.*/
-	D("testing %d cycles", t->g->m_cycles);
-	gettimeofday(&t->tic, NULL);
-	t->g->fn(t);
-	gettimeofday(&t->toc, NULL);
-quit:
+#ifdef HAVE_AFFINITY
+	if (0 == setaffinity(t->thread, t->affinity))
+#endif
+	{
+		/* main loop.*/
+		D("testing %d cycles", t->g->m_cycles);
+		gettimeofday(&t->tic, NULL);
+		t->g->fn(t);
+		gettimeofday(&t->toc, NULL);
+	}
 	t->completed = 1;
 	return (NULL);
 }
@@ -281,7 +283,7 @@ test_sel(struct targ *t)
 		FD_SET(0,&r);
 		// FD_SET(1,&r);
 		select(1, &r, NULL, NULL, &to);
-		t->count += ONE_MILLION;
+		t->count++;
 	}
 }
 
@@ -294,7 +296,7 @@ test_poll(struct targ *t)
 		x.fd = 0;
 		x.events = POLLIN;
 		poll(&x, 1, ms);
-		t->count += ONE_MILLION;
+		t->count++;
 	}
 }
 
@@ -304,7 +306,7 @@ test_usleep(struct targ *t)
 	int m;
 	for (m = 0; m < t->g->m_cycles; m++) {
 		usleep(t->g->arg);
-		t->count += ONE_MILLION;
+		t->count++;
 	}
 }
 
@@ -383,7 +385,7 @@ test_time(struct targ *t)
 	struct timespec ts;
         for (m = 0; m < t->g->m_cycles; m++) {
 		clock_gettime(t->g->arg, &ts);
-		t->count += ONE_MILLION;
+		t->count++;
         }
 }
 
@@ -394,27 +396,27 @@ test_gettimeofday(struct targ *t)
 	struct timeval ts;
         for (m = 0; m < t->g->m_cycles; m++) {
 		gettimeofday(&ts, NULL);
-		t->count += ONE_MILLION;
+		t->count++;
         }
 }
 
 struct entry {
 	void (*fn)(struct targ *);
 	char *name;
-	char *desc;
+	uint64_t scale;
 };
 struct entry tests[] = {
-	{ test_sel, "select", NULL },
-	{ test_poll, "poll", NULL },
-	{ test_usleep, "usleep", NULL },
-	{ test_time, "time", NULL },
-	{ test_gettimeofday, "gettimeofday", NULL },
-	{ test_add, "add", NULL },
-	{ test_nop, "nop", NULL },
-	{ test_atomic_add, "atomic-add", NULL },
-	{ test_cli, "cli", NULL },
-	{ test_atomic_cmpset, "cmpset", NULL },
-	{ NULL, NULL, NULL }
+	{ test_sel, "select", 1 },
+	{ test_poll, "poll", 1 },
+	{ test_usleep, "usleep", 1 },
+	{ test_time, "time", 1 },
+	{ test_gettimeofday, "gettimeofday", 1 },
+	{ test_add, "add", ONE_MILLION },
+	{ test_nop, "nop", ONE_MILLION },
+	{ test_atomic_add, "atomic-add", ONE_MILLION },
+	{ test_cli, "cli", ONE_MILLION },
+	{ test_atomic_cmpset, "cmpset", ONE_MILLION },
+	{ NULL, NULL, 0 }
 };
 
 static void
@@ -438,8 +440,7 @@ usage(void)
 		cmd);
 	fprintf(stderr, "Available tests:\n");
 	for (i = 0; tests[i].name; i++) {
-		fprintf(stderr, "%12s : %s\n", tests[i].name,
-			tests[i].desc ?  tests[i].desc : "--");
+		fprintf(stderr, "%12s\n", tests[i].name);
 	}
 
 	exit(0);
@@ -509,6 +510,15 @@ main(int argc, char **argv)
 		for (i = 0; tests[i].name; i++) {
 			if (!strcmp(g.test_name, tests[i].name)) {
 				g.fn = tests[i].fn;
+				g.scale = tests[i].scale;
+				if (g.scale == ONE_MILLION)
+					g.scale_name = "M";
+				else if (g.scale == 1000)
+					g.scale_name = "M";
+				else {
+					g.scale = 1;
+					g.scale_name = "";
+				}
 				break;
 			}
 		}
@@ -586,7 +596,8 @@ main(int argc, char **argv)
 		if (pps < 10000)
 			continue;
 		pps = (my_count - prev)*ONE_MILLION / pps;
-		D("%" PRIu64 " cycles/s", pps/ONE_MILLION);
+		D("%" PRIu64 " %scycles/s scale %" PRIu64, pps/g.scale,
+			g.scale_name, g.scale);
 		prev = my_count;
 		toc = now;
 		if (done == g.nthreads)
