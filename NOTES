@@ -1,4 +1,58 @@
 --- status and other development notes ---
+20120503 -- prefetch and the like
++ added userspace flags to pkt-gen to enable various
+  prefetch and copies.
+	pkt-gen -o 1		prefetch send source 
+	pkt-gen -o 2		access (not implemented)
+	pkt-gen -o 4		pkt_copy
+		takes from a static buffer and writes to buffers
+		spread in memory. The write buffer should absorb
+		the operation
+	pkt-gen -o 8		memcpy()
++ added dev.netmap.copy to test with in-kernel copies
+	dev.netmap.copy=1	bcopy
+	dev.netmap.copy=2	bcopy (later)
+	dev.netmap.copy=3	memcpy (later)
+	dev.netmap.copy=4	access (maybe ignored ?)
+	dev.netmap.copy=5	only prefetch
+
++ test with different packet lengths (intr=3000)
+	2048
+	2048 - 64
+	2048 - 128
+
+
+    ---- buf_size: 2048-128, intr=3k, 4 cores at 900 mhz ----
+		-- options=0 --	-- options=1 --	-- options=4 --
+	nm.copy	len=60	len=64	len=60	len=64	len=60	len=64
+	0	14.78	14.20	13.78	13.80	 9.46	 9.47
+	1	 4.35	 8.17*	 4.29	 7.88	 3.75	 6.25
+	2	 4.71	 7.75*	 4.62	 8.14*	 4.01	 6.42
+	3	 2.85	 2.85	 2.81	 2.75	 2.57	 2.57
+	4	11.70	11.70	12.35	12.35	 8.78	 8.78
+	5	13.98	14.00	13.04	13.04	 9.11	 9.11
+
+    ---- buf_size: 2048-64, intr=3k, 4 cores at 900 mhz ----
+		-- options=0 --	-- options=1 --	-- options=4 --
+	nm.copy	len=60	len=64	len=60	len=64	len=60	len=64
+	0	14.78	14.20	13.72	13.70	 9.45	 9.44
+	1	 4.35	 7.68*	 4.22	 7.74	 3.92	 6.33
+	2	 4.70	 7.79	 4.68	 8.04*	 4.11	 6.52
+	3	 2.85	 2.74	 2.80	 2.75	 2.56	 2.55
+	4	12.31*	11.83*	12.31	12.28	 8.78	 8.78
+	5	13.94	13.93	12.96	12.98	 9.03	 9.09
+
+    ---- buf_size: 2048, intr=3k, 4 cores at 900 mhz ----
+		-- options=0 --	-- options=1 --	-- options=4 --
+	nm.copy	len=60	len=64	len=60	len=64	len=60	len=64
+	0		14.20			 8.81	 8.84
+	1		 6.90			 3.78	 6.08
+	2		 7.82			 3.98	 6.16
+	3		 2.73			 2.44	 2.58
+	4	12.40	12.36			 8.33	 8.32
+	5		14.20			 8.87	 8.67
+
+-------------
 20120419 netsend statistics (with various breakpoints)
 sysctl dev.ix.0.enable_aim=0
 sysctl dev.ix.0.queue0.interrupt_rate=5000
