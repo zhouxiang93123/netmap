@@ -90,6 +90,36 @@ int verbose = 0;
 
 #define SKIP_PAYLOAD 1 /* do not check payload. */
 
+inline void prefetch (const void *x)
+{
+        __asm volatile("prefetcht0 %0" :: "m" (*(const unsigned long *)x));
+}
+
+// XXX only for multiples of 32 bytes, non overlapped.
+static inline void
+pkt_copy(void *_src, void *_dst, int l)
+{
+	uint64_t *src = _src;
+	uint64_t *dst = _dst;
+#define likely(x)       __builtin_expect(!!(x), 1)
+#define unlikely(x)       __builtin_expect(!!(x), 0)
+	if (unlikely(l >= 1024)) {
+		bcopy(src, dst, l);
+		return;
+	}
+	for (; l > 0; l-=64) {
+		*dst++ = *src++;
+		*dst++ = *src++;
+		*dst++ = *src++;
+		*dst++ = *src++;
+		*dst++ = *src++;
+		*dst++ = *src++;
+		*dst++ = *src++;
+		*dst++ = *src++;
+	}
+}
+
+
 #if EXPERIMENTAL
 /* Wrapper around `rdtsc' to take reliable timestamps flushing the pipeline */ 
 #define netmap_rdtsc(t) \
@@ -140,6 +170,11 @@ struct glob_arg {
 	int npackets;	/* total packets to send */
 	int nthreads;
 	int cpus;
+	int options;	/* testing */
+#define OPT_PREFETCH	1
+#define OPT_ACCESS	2
+#define OPT_COPY	4
+#define OPT_MEMCPY	8
 	int use_pcap;
 	pcap_t *p;
 };
@@ -394,19 +429,35 @@ check_payload(char *p, int psize)
  */
 static int
 send_packets(struct netmap_ring *ring, struct pkt *pkt, 
-		int size, u_int count, int fill_all)
+		int size, u_int count, int options)
 {
 	u_int sent, cur = ring->cur;
 
 	if (ring->avail < count)
 		count = ring->avail;
 
+#if 0
+	if (options & (OPT_COPY | OPT_PREFETCH) ) {
+		for (sent = 0; sent < count; sent++) {
+			struct netmap_slot *slot = &ring->slot[cur];
+			char *p = NETMAP_BUF(ring, slot->buf_idx);
+
+			prefetch(p);
+			cur = NETMAP_RING_NEXT(ring, cur);
+		}
+		cur = ring->cur;
+	}
+#endif
 	for (sent = 0; sent < count; sent++) {
 		struct netmap_slot *slot = &ring->slot[cur];
 		char *p = NETMAP_BUF(ring, slot->buf_idx);
 
-		if (fill_all)
+		if (options & OPT_COPY)
+			pkt_copy(pkt, p, size);
+		else if (options & OPT_MEMCPY)
 			memcpy(p, pkt, size);
+		else if (options & OPT_PREFETCH)
+			prefetch(p);
 
 		slot->len = size;
 		if (sent == count - 1)
@@ -428,7 +479,7 @@ sender_body(void *data)
 	struct netmap_if *nifp = targ->nifp;
 	struct netmap_ring *txring;
 	int i, n = targ->g->npackets / targ->g->nthreads, sent = 0;
-	int fill_all = 1;
+	int options = targ->g->options | OPT_COPY;
 D("start");
 	if (setaffinity(targ->thread, targ->affinity))
 		goto quit;
@@ -465,8 +516,8 @@ D("start");
 		/*
 		 * scan our queues and send on those with room
 		 */
-		if (sent > 100000)
-			fill_all = 0;
+		if (sent > 100000 && !(targ->g->options & OPT_COPY) )
+			options &= ~OPT_COPY;
 		for (i = targ->qfirst; i < targ->qlast; i++) {
 			int m, limit = MIN(n - sent, targ->g->burst);
 
@@ -474,12 +525,12 @@ D("start");
 			if (txring->avail == 0)
 				continue;
 			m = send_packets(txring, &targ->pkt, targ->g->pkt_size,
-					 limit, fill_all);
+					 limit, options);
 			sent += m;
 			targ->count = sent;
 		}
 	}
-	/* Tell the interface that we have new packets. */
+	/* flush any remaining packets */
 	ioctl(fds[0].fd, NIOCTXSYNC, NULL);
 
 	/* final part: wait all the TX queues to be empty. */
@@ -701,11 +752,14 @@ main(int arc, char **argv)
 	g.cpus = 1;
 
 	while ( (ch = getopt(arc, argv,
-			"i:t:r:l:d:s:D:S:b:c:p:PT:w:v")) != -1) {
+			"i:t:r:l:d:s:D:S:b:c:o:p:PT:w:v")) != -1) {
 		switch(ch) {
 		default:
 			D("bad option %c %s", ch, optarg);
 			usage();
+			break;
+		case 'o':
+			g.options = atoi(optarg);
 			break;
 		case 'i':	/* interface */
 			ifname = optarg;
@@ -886,7 +940,13 @@ main(int arc, char **argv)
 	}
     }
 
-
+	if (g.options) {
+		D("special options:%s%s%s%s\n",
+			g.options & OPT_PREFETCH ? " prefetch" : "",
+			g.options & OPT_ACCESS ? " access" : "",
+			g.options & OPT_MEMCPY ? " memcpy" : "",
+			g.options & OPT_COPY ? " copy" : "");
+	}
 	/* Wait for PHY reset. */
 	D("Wait %d secs for phy reset", wait_link);
 	sleep(wait_link);
