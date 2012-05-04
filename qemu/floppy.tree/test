@@ -1,5 +1,5 @@
 #!/bin/sh
-
+[ "x$DEST" = "x" ] && DEST=10.0.0.1
 f1() {
 	sysctl kern.timecounter.hardware=i8254
 	ifconfig ed2 delete
@@ -11,14 +11,14 @@ init() {
 	local a=$1
 	[ "x$a" = "x" ] && a=10.0.0.2
 	echo "prepare for tests with netsend"
-	ifconfig ix0 $1
+	ifconfig ix0 $a
 	sysctl dev.ix.0.enable_aim=0
 	sysctl dev.ix.0.queue0.interrupt_rate=5000
 	sysctl dev.ix.0.fc=0
 	sysctl dev.cpu.0.freq=2934
 	sysctl dev.netmap.drop
 	sysctl net.inet.icmp.icmplim=0
-	echo netsend 10.0.0.1 5555 18 0 5
+	echo netsend $DEST 5555 18 0 5
 }
 
 run_test() { # port num len breakpoint
@@ -26,7 +26,7 @@ run_test() { # port num len breakpoint
 	shift
 	echo "### break $3 cores $1 len $2"
 	sysctl dev.netmap.drop=$3
-	for i in $1; do (netsend 10.0.0.1 $ports $2 0 5 &) ; done
+	for i in $1; do (netsend $DEST $ports $2 0 5 &) ; done
 }
 
 batch() { # ports len breakpoint
