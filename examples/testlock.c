@@ -122,7 +122,7 @@ static inline int min(int a, int b) { return a < b ? a : b; }
 
 int verbose = 0;
 
-#ifdef MY_RDTSC
+#if 1//def MY_RDTSC
 /* Wrapper around `rdtsc' to take reliable timestamps flushing the pipeline */ 
 #define my_rdtsc(t)				\
 	do {					\
@@ -137,7 +137,7 @@ do_cpuid(u_int ax, u_int *p)
 {
 	__asm __volatile("cpuid"
 			 : "=a" (p[0]), "=b" (p[1]), "=c" (p[2]), "=d" (p[3])
-			 :  "0" (ax));
+			 :  "0" (ax) );
 }
 
 static __inline uint64_t
@@ -145,7 +145,7 @@ rdtsc(void)
 {
 	uint64_t rv;
 
-	__asm __volatile("rdtsc" : "=A" (rv));
+	__asm __volatile("rdtscp" : "=A" (rv) : : "%rax");
 	return (rv);
 }
 #endif /* 1 */
@@ -348,6 +348,32 @@ test_nop(struct targ *t)
 }
 
 void
+test_rdtsc1(struct targ *t)
+{
+        int m, i;
+	uint64_t v;
+        for (m = 0; m < t->g->m_cycles; m++) {
+		for (i = 0; i < ONE_MILLION; i++) {
+                	my_rdtsc(v);
+			t->count++;
+		}
+        }
+}
+
+void
+test_rdtsc(struct targ *t)
+{
+        int m, i;
+	volatile uint64_t v;
+        for (m = 0; m < t->g->m_cycles; m++) {
+		for (i = 0; i < ONE_MILLION; i++) {
+                	v = rdtsc();
+			t->count++;
+		}
+        }
+}
+
+void
 test_add(struct targ *t)
 {
         int m, i;
@@ -464,6 +490,8 @@ struct entry tests[] = {
 	{ test_nop, "nop", ONE_MILLION },
 	{ test_atomic_add, "atomic-add", ONE_MILLION },
 	{ test_cli, "cli", ONE_MILLION },
+	{ test_rdtsc, "rdtsc", ONE_MILLION },	// unserialized
+	{ test_rdtsc1, "rdtsc1", ONE_MILLION },	// serialized
 	{ test_atomic_cmpset, "cmpset", ONE_MILLION },
 	{ NULL, NULL, 0 }
 };
