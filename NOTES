@@ -1,4 +1,15 @@
 --- status and other development notes ---
+20120505 -- immediate operation for output and input
+    OUT: we get the mbuf, need to copy into the nm_buf and
+	kick the output queue. If the queue is idle we should
+	operate immediately, otherwise schedule a deferred
+	interrupt (txintr ?) and act on it.
+
+20120504 -- latency between filter and task
+	on the emulator (3.4GHz machine) up to 130k cycles, min 70k
+	on the i7-870 @2.93G the min is 3k cycles, more often 13k
+		and several 30k spikes.
+
 20120503 -- prefetch and the like
 + added userspace flags to pkt-gen to enable various
   prefetch and copies.
