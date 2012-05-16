@@ -7,30 +7,47 @@
  */
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <sys/types.h>
 #include <inttypes.h>
 #define	SYSCTL_HANDLER_ARGS	struct oidp *oidp, struct req *req
 #define SYSCTL_NODE(_1, _2, _3, _4, _5, _6)
-#define SYSCTL_ULONG(_1, _2, _3, _4, _5, _6, _7)
+#define SYSCTL_ULONG(_1, _2, _3, _4, _5, _6, _7)	\
+	uint64_t *_1 ## _ ## _3 = _5
+
 #define SYSCTL_STRING(_1, _2, _3, _4, _5, _6, _7)
-#define SYSCTL_PROC(_1, _2, _3, _4, _5, _6, _7, _8, _9)
-struct oidp;
+#define SYSCTL_PROC(_1, _2, _3, _4, _5, _6, _7, _8, _9)	\
+	void *_1 ## _ ## _3 = _7
+	
+struct oidp {
+	char *name;
+	int oldint;
+};
+
 struct req {
 	void *newptr;
 };
 
-int sysctl_handle_int(struct oidp *, int *value, int mode, struct req *); 
-#endif
+int sysctl_handle_int(struct oidp *o, int *value, int mode, struct req *r)
+{
+	printf("%s o %p val %p mode %d req %p\n",
+		__FUNCTION__, o, value, mode, r);
+	*value = o->oldint;
+	return 0;
+}
 // kern_test.c
 
+// amd64 version
 static __inline uint64_t
 rdtsc(void)
 {
-        uint64_t rv;
+        uint32_t low, high;
 
-        __asm __volatile("rdtscp" : "=A" (rv) : : "%rax");
-        return (rv);
+        __asm __volatile("rdtsc" : "=a" (low), "=d" (high));
+        return (low | ((uint64_t)high << 32));
 }
+#endif
+
 
 #include <sys/sysctl.h>
 static uint64_t test_count, t_start, t_end, t_delta;
@@ -94,23 +111,46 @@ test_run(SYSCTL_HANDLER_ARGS)
 	struct entry *i;
 
         value = test_run_val;
+	printf("%s starting with rn %p\n", __FUNCTION__, req->newptr);
         error = sysctl_handle_int(oidp, &value, 0, req);
+	printf("%s handle_int returns with %d\n", __FUNCTION__, error);
         if (error != 0 || req->newptr == NULL)
                 return (error);
         printf("new value is %d, string %s\n", value, test_name);
         test_run_val = value;
-	for (i = 0; i->name; i++) {
+	for (i = tests; i->name; i++) {
 		printf("compare .%s. .%s.\n", test_name, i->name);
-		if (!strcmp(test_name, i->name))
+		if (!strcmp(test_name, i->name)) {
+			printf("success\n");
 			break;
+		}
 	}
 	if (i->name) {
 		struct targ a;
-		a.count = test_count;
+		a.count = test_run_val;
 		printf("try to run test %s\n", test_name);
 		t_start = rdtsc();
 		i->fn(&a);
 		t_end = rdtsc();
+		t_delta = t_end - t_start;
+		printf("%s took %lu ticks\n", test_name, t_delta);
 	}
         return (0);
 }
+
+#ifndef _KERNEL
+int main(int argc, char *argv[])
+{
+	struct oidp o;
+	struct req r;
+
+	if (argc < 3)
+		return 0;
+	o.oldint = 0;
+	r.newptr = &o.oldint;
+	test_count = atoi(argv[1]);
+	strncpy(test_name, argv[2], sizeof(test_name) - 1);
+	test_run(&o, &r);
+	return 0;
+}
+#endif
