@@ -46,6 +46,23 @@ rdtsc(void)
         __asm __volatile("rdtsc" : "=a" (low), "=d" (high));
         return (low | ((uint64_t)high << 32));
 }
+#else
+/* kernel version */
+
+#include <sys/param.h>
+#include <sys/systm.h>
+#include <sys/conf.h>
+#include <sys/uio.h>
+#include <sys/kernel.h>
+#include <sys/module.h>
+#include <sys/bus.h>
+#include <machine/bus.h>
+#include <machine/resource.h>
+#include <sys/rman.h>
+#include <sys/time.h>
+#include <sys/joystick.h>
+#include <dev/joy/joyvar.h>
+
 #endif
 
 

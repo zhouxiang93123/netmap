@@ -2,7 +2,7 @@
 # we can just define 'progs' and create custom targets.
 PROGS	=	pkt-gen bridge testpcap libnetmap.so
 #PROGS += pingd
-PROGS	+= testlock testcsum test_select
+PROGS	+= testlock testcsum test_select kern_test
 
 CLEANFILES = $(PROGS) pcap.o
 NO_MAN=
