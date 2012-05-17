@@ -20,7 +20,9 @@ all: $(PROGS)
 
 testpcap: pcap.c libnetmap.so
 	$(CC) $(CFLAGS) -o ${.TARGET} pcap.c $(LDFLAGS)
-	
+
+kern_test: testmod/kern_test.c
+
 libnetmap.so:	pcap.c
 	$(CC) $(CFLAGS) -fpic -c ${.ALLSRC}
 	$(CC) -shared -o ${.TARGET} ${.ALLSRC:.c=.o}
