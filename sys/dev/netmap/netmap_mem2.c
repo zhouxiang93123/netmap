@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011 Matteo Landi, Luigi Rizzo. All rights reserved.
+ * Copyright (C) 2012 Matteo Landi, Luigi Rizzo. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -24,7 +24,7 @@
  */
 
 /*
- * $FreeBSD$
+ * $FreeBSD: head/sys/dev/netmap/netmap_mem2.c 234290 2012-04-14 16:44:18Z luigi $
  * $Id$
  *
  * New memory allocator for netmap
@@ -64,32 +64,32 @@
  * one entry in the bitmap to signal the state. Allocation scans
  * the bitmap, but since this is done only on attach, we are not
  * too worried about performance
- *
+ */
+
+/*
  *	MEMORY SIZES:
+ *
+ * (all the parameters below will become tunables)
  *
  * struct netmap_if is variable size but small.
  * Assuming each NIC has 8+2 rings, (4+1 tx, 4+1 rx) the netmap_if
- * uses 120 bytes on a 64-bit machine. With 16+2 rings that becomes
- * 184 bytes. We allocate NETMAP_IF_MAX_SIZE  (256) which is a
- * good compromise and nicely aligned.
+ * uses 120 bytes on a 64-bit machine.
+ * We allocate NETMAP_IF_MAX_SIZE  (1024) which should work even for
+ * cards with 48 ring pairs.
  * The total number of 'struct netmap_if' could be slightly larger
  * that the total number of rings on all interfaces on the system.
- * There is plenty of memory for them so let's stay large and give
- * room for NETMAP_IF_MAX_NUM (256) rings or 64K of memory.
  */
-#define NETMAP_IF_MAX_SIZE      256
-#define NETMAP_IF_MAX_NUM       256     /* total 64K memory */
+#define NETMAP_IF_MAX_SIZE      1024
+#define NETMAP_IF_MAX_NUM       512
 
 /*
- * netmap rings consume resources, because they contain large arrays
- * of slots. Worst case, each one has 2k descriptors at 8 bytes each,
+ * netmap rings are up to 2..4k descriptors, 8 bytes each,
  * plus some glue at the beginning (32 bytes).
- * To avoid trouble we set the ring size to 5 pages or 20k
- * As for the number of rings, an interface can have 18 of them,
- * so 100-150 rings is enough for a large system.
+ * We set the default ring size to 9 pages (36K) and enable
+ * a few hundreds of them.
  */
-#define NETMAP_RING_MAX_SIZE    (5*PAGE_SIZE)
-#define NETMAP_RING_MAX_NUM     150     /* 300K of memory */
+#define NETMAP_RING_MAX_SIZE    (9*PAGE_SIZE)
+#define NETMAP_RING_MAX_NUM     200	/* approx 8MB */
 
 /*
  * Buffers: the more the better. Buffer size is NETMAP_BUF_SIZE,
@@ -161,7 +161,7 @@ netmap_ofstophys(vm_offset_t offset)
 		return p[i]->lut[offset / p[i]->_objsize].paddr +
 			offset % p[i]->_objsize;
 	}
-	D("invalid ofs 0x%x out of 0x%x 0x%x 0x%x", o,
+	D("invalid ofs 0x%x out of 0x%x 0x%x 0x%x", (u_int)o,
 		p[0]->_memtotal, p[0]->_memtotal + p[1]->_memtotal,
 		p[0]->_memtotal + p[1]->_memtotal + p[2]->_memtotal);
 	return 0;	// XXX bad address
@@ -173,7 +173,7 @@ netmap_ofstophys(vm_offset_t offset)
  * Algorithm: scan until we find the cluster, then add the
  * actual offset in the cluster
  */
-ssize_t
+static ssize_t
 netmap_obj_offset(struct netmap_obj_pool *p, const void *vaddr)
 {
 	int i, k = p->clustentries, n = p->objtotal;
@@ -199,13 +199,14 @@ netmap_obj_offset(struct netmap_obj_pool *p, const void *vaddr)
 /* Helper functions which convert virtual addresses to offsets */
 #define netmap_if_offset(v)					\
 	netmap_obj_offset(nm_mem->nm_if_pool, (v))
-#define netmap_ring_offset(v)						\
+
+#define netmap_ring_offset(v)					\
     (nm_mem->nm_if_pool->_memtotal + 				\
 	netmap_obj_offset(nm_mem->nm_ring_pool, (v)))
 
-#define netmap_buf_offset(v)						\
+#define netmap_buf_offset(v)					\
     (nm_mem->nm_if_pool->_memtotal +				\
-	nm_mem->nm_ring_pool->_memtotal +				\
+	nm_mem->nm_ring_pool->_memtotal +			\
 	netmap_obj_offset(nm_mem->nm_buf_pool, (v)))
 
 
@@ -486,6 +487,8 @@ netmap_new_obj_allocator(const char *name, u_int objtotal, u_int objsize)
 			}
 			p->objtotal = i;
 			p->objfree = p->objtotal - 2;
+			p->_numclusters = i / clustentries;
+			p->_memtotal = p->_numclusters * p->_clustsize;
 			break;
 		}
 		for (; i < lim; i++, clust += objsize) {
@@ -581,8 +584,8 @@ netmap_if_new(const char *ifname, struct netmap_adapter *na)
 	struct netmap_ring *ring;
 	ssize_t base; /* handy for relative offsets between rings and nifp */
 	u_int i, len, ndesc;
-	u_int ntx = na->num_tx_rings + 1; /* shorthand, include stack queue */
-	u_int nrx = na->num_rx_rings + 1; /* shorthand, include stack queue */
+	u_int ntx = na->num_tx_rings + 1; /* shorthand, include stack ring */
+	u_int nrx = na->num_rx_rings + 1; /* shorthand, include stack ring */
 	struct netmap_kring *kring;
 
 	NMA_LOCK();
@@ -684,7 +687,7 @@ netmap_if_new(const char *ifname, struct netmap_adapter *na)
 #endif
 final:
 	/*
-	 * fill the slots for the rx and tx queues. They contain the offset
+	 * fill the slots for the rx and tx rings. They contain the offset
 	 * between the ring and nifp, so the information is usable in
 	 * userspace to reach the ring from the nifp.
 	 */

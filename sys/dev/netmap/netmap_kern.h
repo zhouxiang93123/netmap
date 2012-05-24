@@ -24,7 +24,7 @@
  */
 
 /*
- * $FreeBSD: head/sys/dev/netmap/netmap_kern.h 231796 2012-02-15 23:13:29Z luigi $
+ * $FreeBSD: head/sys/dev/netmap/netmap_kern.h 234227 2012-04-13 16:03:07Z luigi $
  * $Id$
  *
  * The header contains the definitions of constants and function
@@ -341,4 +341,6 @@ PNMB(struct netmap_slot *slot, uint64_t *pp)
 /* default functions to handle rx/tx interrupts */
 int netmap_rx_irq(struct ifnet *, int, int *);
 #define netmap_tx_irq(_n, _q) netmap_rx_irq(_n, _q, NULL)
+
+extern int netmap_copy;
 #endif /* _NET_NETMAP_KERN_H_ */

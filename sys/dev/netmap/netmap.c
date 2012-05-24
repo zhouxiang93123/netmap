@@ -23,6 +23,8 @@
  * SUCH DAMAGE.
  */
 
+#define NM_BRIDGE
+
 /*
  * This module supports memory mapped access to network devices,
  * see netmap(4).
@@ -53,7 +55,7 @@
  */
 
 #include <sys/cdefs.h> /* prerequisite */
-__FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 234174 2012-04-12 11:27:09Z luigi $");
+__FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 234986 2012-05-03 21:16:53Z luigi $");
 
 #include <sys/types.h>
 #include <sys/module.h>
@@ -115,6 +117,110 @@ int netmap_no_pendintr = 1;
 SYSCTL_INT(_dev_netmap, OID_AUTO, no_pendintr,
     CTLFLAG_RW, &netmap_no_pendintr, 0, "Always look for new received packets.");
 
+/*
+ * debugging support to analyse syscall behaviour
+ *	netmap_drop is the point where to drop
+
+	Path is:
+
+	./libthr/thread/thr_syscalls.c
+	lib/libc/i386/SYS.h
+	lib/libc/i386/sys/syscall.S
+
+	head/sys/kern/syscall.master
+	; Processed to created init_sysent.c, syscalls.c and syscall.h.
+	sys/kern/uipc_syscalls.c::sys_sendto()
+		sendit()
+		kern_sendit()
+		sosend()
+	sys/kern/uipc_socket.c::sosend()
+		so->so_proto->pr_usrreqs->pru_sosend(...)
+	sys/netinet/udp_usrreq.c::udp_usrreqs { }
+		.pru_sosend =           sosend_dgram,
+		.pru_send =             udp_send,
+		.pru_soreceive =        soreceive_dgram,
+	sys/kern/uipc_socket.c::sosend_dgram()
+		m_uiotombuf()
+		(*so->so_proto->pr_usrreqs->pru_send)
+	sys/netinet/udp_usrreq.c::udp_send()
+		sotoinpcb(so);
+		udp_output()
+			INP_RLOCK(inp);
+			INP_HASH_RLOCK(&V_udbinfo);
+		fill udp and ip headers
+		ip_output()
+
+	30	udp_send() before udp_output	
+	31	udp_output before ip_output
+	32	udp_output beginning
+	33	before in_pcbbind_setup
+	34	after in_pcbbind_setup
+	35	before prison_remote_ip4
+	36	after prison_remote_ip4
+	37	before computing udp
+
+	20	beginning of sys_sendto
+	21	beginning of sendit
+	22	sendit after getsockaddr
+	23	before kern_sendit
+	24	kern_sendit before getsock_cap()
+	25	kern_sendit before sosend()
+
+	40	sosend_dgram beginning
+	41	sosend_dgram after sbspace
+	42	sosend_dgram after m_uiotombuf
+	43	sosend_dgram after SO_DONTROUTE
+	44	sosend_dgram after pru_send (useless)
+
+	50	ip_output beginning
+	51	ip_output after flowtable
+	52	ip_output at sendit
+	53	ip_output after pfil_hooked
+	54	ip_output at passout
+	55	ip_output before if_output
+	56	ip_output after rtalloc etc.
+
+	60	uiomove print
+
+	70	pfil.c:: pfil_run_hooks beginning
+	71	print number of pfil entries
+
+	80	ether_output start
+	81	ether_output after first switch
+	82	ether_output after M_PREPEND
+	83	ether_output after simloop
+	84	ether_output after carp and netgraph
+	85	ether_output_frame before if_transmit()
+
+	90	ixgbe_mq_start (if_transmit) beginning
+	91	ixgbe_mq_start_locked before ixgbe_xmit
+
+FLAGS:
+	1	disable ETHER_BPF_MTAP
+	2	disable drbr stats update
+	4
+	8
+	16
+	32
+	64
+	128
+ */
+int netmap_drop = 0;
+int netmap_copy = 0;	/* copy content */
+int netmap_flags = 0; /* debug flags */
+
+SYSCTL_INT(_dev_netmap, OID_AUTO, drop, CTLFLAG_RW, &netmap_drop, 0 , "");
+SYSCTL_INT(_dev_netmap, OID_AUTO, flags, CTLFLAG_RW, &netmap_flags, 0 , "");
+SYSCTL_INT(_dev_netmap, OID_AUTO, copy, CTLFLAG_RW, &netmap_copy, 0 , "");
+
+#ifdef NM_BRIDGE /* support for netmap bridge */
+#define	NM_NAME	"vale"
+#include <sys/refcount.h>
+static struct ifnet *nm_ifnet_list;	// regular list
+static void bdg_netmap_attach(struct ifnet *ifp);
+#define NM_BRIDGE_RINGSIZE	1024
+
+#endif /* NM_BRIDGE */
 
 /*------------- memory allocator -----------------*/
 #ifdef NETMAP_MEM2
@@ -200,6 +306,34 @@ netmap_dtor_locked(void *data)
 	netmap_if_free(nifp);
 }
 
+static void
+nm_if_rele(struct ifnet *ifp)
+{
+	struct ifnet *prev, *cur;
+	if (strncmp(ifp->if_xname, NM_NAME, sizeof(NM_NAME) - 1)) {
+		if_rele(ifp);
+		return;
+	}
+	D("detach %s from the list", ifp->if_xname);
+	if (!refcount_release(&ifp->if_refcount))
+		return;
+	IFNET_WLOCK();
+	for (prev = NULL, cur = nm_ifnet_list; cur;
+		prev = cur, cur = (struct ifnet *)(cur->if_pspare[1])) {
+		if (cur == ifp)
+			break;
+	}
+	if (!cur)
+		D("ouch, cannot find ifp to remove");
+	if (prev)
+		prev->if_pspare[1] = ifp->if_pspare[1];
+	else
+		nm_ifnet_list = ifp->if_pspare[1];
+	IFNET_WUNLOCK();
+	D("done");
+	bzero(ifp, sizeof(*ifp));
+	free(ifp, M_DEVBUF);
+}
 
 static void
 netmap_dtor(void *data)
@@ -208,13 +342,15 @@ netmap_dtor(void *data)
 	struct ifnet *ifp = priv->np_ifp;
 	struct netmap_adapter *na = NA(ifp);
 
+	D("start");
 	na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
 	netmap_dtor_locked(data);
 	na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
 
-	if_rele(ifp);
+	nm_if_rele(ifp);
 	bzero(priv, sizeof(*priv));	/* XXX for safety */
 	free(priv, M_DEVBUF);
+	D("done");
 }
 
 
@@ -363,6 +499,46 @@ netmap_sync_from_host(struct netmap_adapter *na, struct thread *td)
 static int
 get_ifp(const char *name, struct ifnet **ifp)
 {
+#ifdef NM_BRIDGE
+	struct ifnet *iter = NULL;
+	do {
+
+		if (strncmp(name, NM_NAME, sizeof(NM_NAME) - 1))
+			break;
+		D("looking for a virtual bridge %s", name);
+		/* XXX locking */
+		IFNET_WLOCK();
+		/* lookup in the local list of bridges */
+		for (iter = nm_ifnet_list; iter;
+			iter = (struct ifnet *)(iter->if_pspare[1])) {
+			D("checking ifp %p", iter);
+			if (!strcmp(iter->if_xname, name)) {
+				iter->if_refcount++;
+				D("found existing interface");
+				IFNET_WUNLOCK();
+				break;
+			}
+		}
+		if (iter) /* already unlocked */
+			break;
+		D("create new bridge port %s", name);
+		iter = malloc(sizeof(*iter), M_DEVBUF,
+				M_NOWAIT | M_ZERO);
+		if (!iter) {
+			IFNET_WUNLOCK();
+			break;
+		}
+		iter->if_pspare[1] = nm_ifnet_list;
+		nm_ifnet_list = iter;
+		strcpy(iter->if_xname, name);
+		bdg_netmap_attach(iter);
+		iter->if_refcount++;
+		IFNET_WUNLOCK();
+		D("attaching virtual bridge");
+	} while (0);
+	*ifp = iter;
+	if (! *ifp)
+#endif /* NM_BRIDGE */
 	*ifp = ifunit_ref(name);
 	if (*ifp == NULL)
 		return (ENXIO);
@@ -371,7 +547,7 @@ get_ifp(const char *name, struct ifnet **ifp)
 	 */
 	if ((*ifp)->if_capabilities & IFCAP_NETMAP && NA(*ifp))
 		return 0;	/* valid pointer, we hold the refcount */
-	if_rele(*ifp);
+	nm_if_rele(*ifp);
 	return EINVAL;	// not NETMAP capable
 }
 
@@ -535,7 +711,7 @@ netmap_ioctl(__unused struct cdev *dev, u_long cmd, caddr_t data,
 		nmr->nr_tx_rings = na->num_tx_rings;
 		nmr->nr_rx_slots = na->num_rx_desc;
 		nmr->nr_tx_slots = na->num_tx_desc;
-		if_rele(ifp);	/* return the refcount */
+		nm_if_rele(ifp);	/* return the refcount */
 		break;
 
 	case NIOCREGIF:
@@ -561,7 +737,7 @@ netmap_ioctl(__unused struct cdev *dev, u_long cmd, caddr_t data,
 			      M_NOWAIT | M_ZERO);
 		if (priv == NULL) {
 			error = ENOMEM;
-			if_rele(ifp);   /* return the refcount */
+			nm_if_rele(ifp);   /* return the refcount */
 			break;
 		}
 
@@ -576,7 +752,7 @@ netmap_ioctl(__unused struct cdev *dev, u_long cmd, caddr_t data,
 			D("too many NIOCREGIF attempts, give up");
 			error = EINVAL;
 			free(priv, M_DEVBUF);
-			if_rele(ifp);	/* return the refcount */
+			nm_if_rele(ifp);	/* return the refcount */
 			break;
 		}
 
@@ -601,7 +777,7 @@ netmap_ioctl(__unused struct cdev *dev, u_long cmd, caddr_t data,
 		if (error) {	/* reg. failed, release priv and ref */
 error:
 			na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
-			if_rele(ifp);	/* return the refcount */
+			nm_if_rele(ifp);	/* return the refcount */
 			bzero(priv, sizeof(*priv));
 			free(priv, M_DEVBUF);
 			break;
@@ -696,7 +872,7 @@ error:
 		so.so_vnet = ifp->if_vnet;
 		// so->so_proto not null.
 		error = ifioctl(&so, cmd, data, td);
-		if_rele(ifp);
+		nm_if_rele(ifp);
 		break;
 	    }
 	}
@@ -1067,7 +1243,8 @@ netmap_start(struct ifnet *ifp, struct mbuf *m)
 			kring->nr_hwcur + kring->nr_hwavail, len);
 	na->nm_lock(ifp, NETMAP_CORE_LOCK, 0);
 	if (kring->nr_hwavail >= lim) {
-		D("stack ring %s full\n", ifp->if_xname);
+		if (netmap_verbose)
+			D("stack ring %s full\n", ifp->if_xname);
 		goto done;	/* no space */
 	}
 	if (len > NETMAP_BUF_SIZE) {
@@ -1208,6 +1385,70 @@ static struct cdevsw netmap_cdevsw = {
 	.d_poll = netmap_poll,
 };
 
+#ifdef NM_BRIDGE
+/*
+ *---- support for virtual bridge -----
+ */
+
+static int
+bdg_netmap_reg(struct ifnet *ifp, int onoff)
+{
+	if (onoff) {
+		ifp->if_capenable |= IFCAP_NETMAP;
+		D("should attach %s to the bridge", ifp->if_xname);
+	} else {
+		ifp->if_capenable &= ~IFCAP_NETMAP;
+		D("should detach %s from the bridge", ifp->if_xname);
+	}
+	return 0;
+}
+
+static int
+bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+{
+	struct netmap_adapter *na = NA(ifp);
+	struct netmap_kring *kring = &na->tx_rings[ring_nr];
+	struct netmap_ring *ring = kring->ring;
+	int j, k, l, n, lim = kring->nkr_num_slots - 1;
+
+	/* pretend we wrote all packets */
+	k = ring->cur;
+	if (k > lim)
+		return netmap_ring_reinit(kring);
+	kring->nr_hwcur = k;
+	ring->avail = kring->nr_hwavail;
+
+	if (netmap_verbose)
+		D("%s ring %d lock %d", ifp->if_xname, ring_nr, do_lock);
+	return 0;
+}
+
+static int
+bdg_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+{
+	D("%s ring %d lock %d", ifp->if_xname, ring_nr, do_lock);
+	return 0;
+}
+
+static void
+bdg_netmap_attach(struct ifnet *ifp)
+{
+	struct netmap_adapter na;
+
+	D("attaching virtual bridge");
+	bzero(&na, sizeof(na));
+
+	na.ifp = ifp;
+	na.separate_locks = 0;
+	na.num_tx_desc = NM_BRIDGE_RINGSIZE;
+	na.num_rx_desc = NM_BRIDGE_RINGSIZE;
+	na.nm_txsync = bdg_netmap_txsync;
+	na.nm_rxsync = bdg_netmap_rxsync;
+	na.nm_register = bdg_netmap_reg;
+	netmap_attach(&na, 1);
+}
+
+#endif /* NM_BRIDGE */
 
 static struct cdev *netmap_dev; /* /dev/netmap character device. */
 
