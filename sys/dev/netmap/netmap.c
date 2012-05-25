@@ -1434,6 +1434,9 @@ struct nm_bridge {
 	int n_ports;
 	uint64_t act_ports;
 	int freelist;	/* first buffer index */
+	NM_SELINFO_T si;	/* poll/select wait queue */
+	NM_LOCK_T bdg_lock;	/* protect the selinfo ? */
+
 
 	/* the forwarding table, MAC+ports */
 	struct nm_hash_ent ht[NM_BDG_HASH];
@@ -1525,6 +1528,7 @@ done:
 static int
 nm_bdg_send(void *buf, int len, struct ifnet *ifp)
 {
+	int ret = 0;
         struct netmap_adapter *na = NA(ifp);
         struct netmap_kring *kring = &na->rx_rings[0];
         struct netmap_ring *ring = kring->ring;
@@ -1550,10 +1554,12 @@ nm_bdg_send(void *buf, int len, struct ifnet *ifp)
 	slot->len = len;
 	kring->nr_hwavail++;
 	selwakeuppri(&kring->si, PI_NET);
+	ret = 1;
 done:
 	if (netmap_verbose)
 		D("done fwd to %s", ifp->if_xname);
 	na->nm_lock(ifp, NETMAP_CORE_UNLOCK, 0);
+	return ret;
 }
 
 static int
@@ -1589,13 +1595,16 @@ bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 *		link buffer
 	 *	+ unlock
 	 */
-    if (netmap_bridge == 1) {
+    if (!netmap_bridge) {
+	j = k; // used all
+    } else {
+	int sh, dh, i;
 	for (j = kring->nr_hwcur; j != k; j = (j == lim) ? 0 : j+1) {
 		struct netmap_slot *slot = &ring->slot[j];
 		int len = slot->len;
 		char *buf = NMB(slot);
 		uint64_t smac, dmac, dst = 0;
-		int sh, dh, i;
+		int sent = 0;
 
 		if (len < 14)
 			continue;
@@ -1628,15 +1637,25 @@ bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		dst &= ~mysrc; /* not to myself */
 		if (netmap_verbose)
 			D("pkt goes to ports 0x%llx", dst);
+		if (!dst)
+			continue;
 		for (i = 0; dst; i++) {
 			if ( !(dst & (1<<i) ) )
 				continue;
 			dst &= ~(1<<i);
-			nm_bdg_send(buf, len, b->ports[i]);
+			sent |= nm_bdg_send(buf, len, b->ports[i]);
 		}
+		if (!sent)
+			break;
 	}
+	i = k - j;
+	if (i < 0)
+		i += kring->nkr_num_slots;
+	kring->nr_hwavail = kring->nkr_num_slots - 1 - i;
+	if (j != k)
+		D("early break at %d/ %d, avail %d", j, k, kring->nr_hwavail);
     }
-	kring->nr_hwcur = k;
+	kring->nr_hwcur = j;
 	ring->avail = kring->nr_hwavail;
 
 	if (netmap_verbose)
