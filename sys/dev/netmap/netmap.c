@@ -208,7 +208,7 @@ FLAGS:
 int netmap_drop = 0;
 int netmap_copy = 0;	/* copy content */
 int netmap_flags = 0; /* debug flags */
-int netmap_bridge = 0; /* bridge flags */
+int netmap_bridge = 1; /* bridge flags */
 
 SYSCTL_INT(_dev_netmap, OID_AUTO, drop, CTLFLAG_RW, &netmap_drop, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, flags, CTLFLAG_RW, &netmap_flags, 0 , "");
@@ -998,7 +998,7 @@ netmap_poll(__unused struct cdev *dev, int events, struct thread *td)
 	core_lock = (check_all || !na->separate_locks) ? NEED_CL : NO_CL;
 #ifdef NM_BRIDGE
 	/* the bridge uses separate locks */
-	if (na->nm_register == bdg_netmap_reg) {
+	if (0 && na->nm_register == bdg_netmap_reg) {
 		D("not using core lock for %s", ifp->if_xname);
 		core_lock = NO_CL;
 	}
@@ -1123,8 +1123,7 @@ netmap_lock_wrapper(struct ifnet *dev, int what, u_int queueid)
 {
 	struct netmap_adapter *na = NA(dev);
 
-	D("%s what %d q %d", dev->if_xname, what, queueid);
-	D("rxq %p", &na->rx_rings[queueid].q_lock);
+	ND("%s what %d q %d", dev->if_xname, what, queueid);
 	switch (what) {
 #ifdef linux	/* some system do not need lock on register */
 	case NETMAP_REG_LOCK:
@@ -1535,7 +1534,7 @@ nm_bdg_send(void *buf, int len, struct ifnet *ifp)
 	void *dst;
 
 	// lock rx ring
-	na->nm_lock(ifp, NETMAP_RX_LOCK, 0);
+	na->nm_lock(ifp, NETMAP_CORE_LOCK, 0);
 
 	if (kring->nr_hwavail >= lim) {
 		if (netmap_verbose)
@@ -1554,7 +1553,7 @@ nm_bdg_send(void *buf, int len, struct ifnet *ifp)
 done:
 	if (netmap_verbose)
 		D("done fwd to %s", ifp->if_xname);
-	na->nm_lock(ifp, NETMAP_RX_UNLOCK, 0);
+	na->nm_lock(ifp, NETMAP_CORE_UNLOCK, 0);
 }
 
 static int
@@ -1654,13 +1653,13 @@ bdg_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	int j, l, n, lim = kring->nkr_num_slots - 1;
 	u_int k = ring->cur, resvd = ring->reserved;
 
-	D("%s ring %d lock %d avail %d",
+	ND("%s ring %d lock %d avail %d",
 		ifp->if_xname, ring_nr, do_lock, kring->nr_hwavail);
 
 	if (k > lim)
 		return netmap_ring_reinit(kring);
 	if (do_lock)
-		na->nm_lock(ifp, NETMAP_RX_LOCK, ring_nr);
+		na->nm_lock(ifp, NETMAP_CORE_LOCK, ring_nr);
 
 	/* skip past packets that userspace has released */
 	j = kring->nr_hwcur;    /* netmap ring index */
@@ -1676,14 +1675,14 @@ bdg_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		n = k - j;
 		if (n < 0)
 			n += kring->nkr_num_slots;
-		D("userspace releases %d packets", n);
+		ND("userspace releases %d packets", n);
                 for (n = 0; j != k; n++) {
                         struct netmap_slot *slot = &ring->slot[j];
                         void *addr = NMB(slot);
 
                         if (addr == netmap_buffer_base) { /* bad buf */
                                 if (do_lock)
-                                        na->nm_lock(ifp, NETMAP_RX_UNLOCK, ring_nr);
+                                        na->nm_lock(ifp, NETMAP_CORE_UNLOCK, ring_nr);
                                 return netmap_ring_reinit(kring);
                         }
 			/* decrease refcount for buffer */
@@ -1698,7 +1697,7 @@ bdg_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
         ring->avail = kring->nr_hwavail - resvd;
 
 	if (do_lock)
-		na->nm_lock(ifp, NETMAP_RX_UNLOCK, ring_nr);
+		na->nm_lock(ifp, NETMAP_CORE_UNLOCK, ring_nr);
 	return 0;
 }
 
@@ -1711,7 +1710,7 @@ bdg_netmap_attach(struct ifnet *ifp)
 	bzero(&na, sizeof(na));
 
 	na.ifp = ifp;
-	na.separate_locks = 1;
+	na.separate_locks = 0;
 	na.num_tx_desc = NM_BRIDGE_RINGSIZE;
 	na.num_rx_desc = NM_BRIDGE_RINGSIZE;
 	na.nm_txsync = bdg_netmap_txsync;
