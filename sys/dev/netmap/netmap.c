@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011 Matteo Landi, Luigi Rizzo. All rights reserved.
+ * Copyright (C) 2011-2012 Matteo Landi, Luigi Rizzo. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -253,7 +253,7 @@ struct nm_bdg_fwd {	/* forwarding entry for a bridge */
 };
 
 struct nm_hash_ent {
-	uint64_t	mac;
+	uint64_t	mac;	/* the top 2 bytes are the epoch */
 	uint64_t	ports;
 };
 
@@ -439,7 +439,6 @@ netmap_dtor(void *data)
 	struct ifnet *ifp = priv->np_ifp;
 	struct netmap_adapter *na = NA(ifp);
 
-	D("start");
 	na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
 	netmap_dtor_locked(data);
 	na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
@@ -447,7 +446,6 @@ netmap_dtor(void *data)
 	nm_if_rele(ifp);
 	bzero(priv, sizeof(*priv));	/* XXX for safety */
 	free(priv, M_DEVBUF);
-	D("done");
 }
 
 
