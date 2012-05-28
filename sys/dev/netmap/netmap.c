@@ -219,7 +219,6 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
 #define	NM_NAME	"vale"
 #include <sys/endian.h>
 #include <sys/refcount.h>
-static struct ifnet *nm_ifnet_list;	// regular list
 static void bdg_netmap_attach(struct ifnet *ifp);
 static int bdg_netmap_reg(struct ifnet *ifp, int onoff);
 #define NM_BRIDGE_RINGSIZE	1024
@@ -230,6 +229,41 @@ struct nm_bdg_fwd {	/* forwarding entry for a bridge */
 	uint32_t dst_idx;	/* dst index in fwd table */
 	uint32_t dst_buf;	/* where we copy to */
 };
+
+#define NM_BDG_MAXPORTS	16
+#define NM_BDG_HASH	1024	/* forwarding table entries */
+struct nm_hash_ent {
+	uint64_t	mac;
+	uint64_t	ports;
+};
+
+/*
+ * Interfaces for a bridge are all in ports[].
+ * The array has fixed size, an empty entry does not terminate
+ * the search.
+ */
+struct nm_bridge {
+	struct ifnet *ports[NM_BDG_MAXPORTS];
+	int n_ports;
+	uint64_t act_ports;
+	int freelist;	/* first buffer index */
+	NM_SELINFO_T si;	/* poll/select wait queue */
+	NM_LOCK_T bdg_lock;	/* protect the selinfo ? */
+
+	/* the forwarding table, MAC+ports */
+	struct nm_hash_ent ht[NM_BDG_HASH];
+};
+
+struct nm_bridge nm_bridge;
+
+#define BDG_LOCK(b)	mtx_lock(&(b)->bdg_lock)
+#define BDG_UNLOCK(b)	mtx_unlock(&(b)->bdg_lock)
+
+/*
+ * if_pspare[1]		link field
+ * if_ispare[0]		port index
+ * if_ispare[1]		freelist index
+ */
 
 #endif /* NM_BRIDGE */
 
@@ -323,7 +357,9 @@ nm_if_rele(struct ifnet *ifp)
 #ifndef NM_BRIDGE
 	if_rele(ifp);
 #else /* NM_BRIDGE */
-	struct ifnet *prev, *cur;
+	int i;
+	struct nm_bridge *b = &nm_bridge;
+
 	if (strncmp(ifp->if_xname, NM_NAME, sizeof(NM_NAME) - 1)) {
 		if_rele(ifp);
 		return;
@@ -331,22 +367,18 @@ nm_if_rele(struct ifnet *ifp)
 	D("detach %s from the list", ifp->if_xname);
 	if (!refcount_release(&ifp->if_refcount))
 		return;
-	IFNET_WLOCK();
-	for (prev = NULL, cur = nm_ifnet_list; cur;
-		prev = cur, cur = (struct ifnet *)(cur->if_pspare[1])) {
-		if (cur == ifp)
+	BDG_LOCK(b);
+	for (i = 0; i < NM_BDG_MAXPORTS; i++) {
+		if (b->ports[i] == ifp) {
+			b->ports[i] = NULL;
+			bzero(ifp, sizeof(*ifp));
+			free(ifp, M_DEVBUF);
 			break;
+		}
 	}
-	if (!cur)
+	BDG_UNLOCK(b);
+	if (i == NM_BDG_MAXPORTS)
 		D("ouch, cannot find ifp to remove");
-	if (prev)
-		prev->if_pspare[1] = ifp->if_pspare[1];
-	else
-		nm_ifnet_list = ifp->if_pspare[1];
-	IFNET_WUNLOCK();
-	D("done");
-	bzero(ifp, sizeof(*ifp));
-	free(ifp, M_DEVBUF);
 #endif /* NM_BRIDGE */
 }
 
@@ -516,43 +548,52 @@ get_ifp(const char *name, struct ifnet **ifp)
 {
 #ifdef NM_BRIDGE
 	struct ifnet *iter = NULL;
-	int l;
+	struct nm_bridge *b = &nm_bridge;
+
 	do {
+		int i, l, cand = -1;
 
 		if (strncmp(name, NM_NAME, sizeof(NM_NAME) - 1))
 			break;
 		D("looking for a virtual bridge %s", name);
 		/* XXX locking */
-		IFNET_WLOCK();
+		BDG_LOCK(b);
 		/* lookup in the local list of bridges */
-		for (iter = nm_ifnet_list; iter;
-			iter = (struct ifnet *)(iter->if_pspare[1])) {
+		for (i = 0; i < NM_BDG_MAXPORTS; i++) {
+			iter = b->ports[i];
+			if (iter == NULL) {
+				cand = i; /* insert point */
+				continue;
+			}
 			D("checking ifp %p", iter);
 			if (!strcmp(iter->if_xname, name)) {
 				iter->if_refcount++;
 				D("found existing interface");
-				IFNET_WUNLOCK();
+				BDG_UNLOCK(b);
 				break;
 			}
 		}
 		if (iter) /* already unlocked */
 			break;
+		if (cand == -1) {
+			BDG_UNLOCK(b);
+			D("bridge full, cannot create new port");
+no_port:
+			*ifp = NULL;
+			return EINVAL;
+		}
 		D("create new bridge port %s", name);
 		/* space for forwarding list after the ifnet */
 		l = sizeof(*iter) +
 			 sizeof(struct nm_bdg_fwd)*NM_BRIDGE_RINGSIZE ;
-		iter = malloc(l, M_DEVBUF,
-				M_NOWAIT | M_ZERO);
-		if (!iter) {
-			IFNET_WUNLOCK();
-			break;
-		}
-		iter->if_pspare[1] = nm_ifnet_list;
-		nm_ifnet_list = iter;
+		iter = malloc(l, M_DEVBUF, M_NOWAIT | M_ZERO);
+		if (!iter)
+			goto no_port;
 		strcpy(iter->if_xname, name);
 		bdg_netmap_attach(iter);
+		b->ports[cand] = iter;
 		iter->if_refcount++;
-		IFNET_WUNLOCK();
+		BDG_UNLOCK(b);
 		D("attaching virtual bridge");
 	} while (0);
 	*ifp = iter;
@@ -788,6 +829,11 @@ netmap_ioctl(__unused struct cdev *dev, u_long cmd, caddr_t data,
 			/* Otherwise set the card in netmap mode
 			 * and make it use the shared buffers.
 			 */
+			for (i = 0 ; i < na->num_tx_rings + 1; i++)
+				mtx_init(&na->tx_rings[i].q_lock, "nm_txq_lock", MTX_NETWORK_LOCK, MTX_DEF);
+			for (i = 0 ; i < na->num_rx_rings + 1; i++) {
+				mtx_init(&na->rx_rings[i].q_lock, "nm_rxq_lock", MTX_NETWORK_LOCK, MTX_DEF);
+			}
 			error = na->nm_register(ifp, 1); /* mode on */
 			if (error)
 				netmap_dtor_locked(priv);
@@ -998,7 +1044,7 @@ netmap_poll(__unused struct cdev *dev, int events, struct thread *td)
 	core_lock = (check_all || !na->separate_locks) ? NEED_CL : NO_CL;
 #ifdef NM_BRIDGE
 	/* the bridge uses separate locks */
-	if (0 && na->nm_register == bdg_netmap_reg) {
+	if (na->nm_register == bdg_netmap_reg) {
 		D("not using core lock for %s", ifp->if_xname);
 		core_lock = NO_CL;
 	}
@@ -1123,7 +1169,6 @@ netmap_lock_wrapper(struct ifnet *dev, int what, u_int queueid)
 {
 	struct netmap_adapter *na = NA(dev);
 
-	ND("%s what %d q %d", dev->if_xname, what, queueid);
 	switch (what) {
 #ifdef linux	/* some system do not need lock on register */
 	case NETMAP_REG_LOCK:
@@ -1205,15 +1250,11 @@ netmap_attach(struct netmap_adapter *na, int num_queues)
 		if (na->nm_lock == NULL) {
 			D("using default locks for %s", ifp->if_xname);
 			na->nm_lock = netmap_lock_wrapper;
+			/* core lock initialized here.
+			 * others initialized after netmap_if_new
+			 */
+			mtx_init(&na->core_lock, "netmap core lock", MTX_NETWORK_LOCK, MTX_DEF);
 		}
-		D("initializing %d %d locks for %s",
-			na->num_tx_rings + 1,
-			na->num_rx_rings + 1, ifp->if_xname);
-		mtx_init(&na->core_lock, "netmap core lock", MTX_NETWORK_LOCK, MTX_DEF);
-		for (i = 0 ; i < na->num_tx_rings + 1; i++)
-			mtx_init(&na->tx_rings[i].q_lock, "netmap txq lock", MTX_NETWORK_LOCK, MTX_DEF);
-		for (i = 0 ; i < na->num_rx_rings + 1; i++)
-			mtx_init(&na->rx_rings[i].q_lock, "netmap rxq lock", MTX_NETWORK_LOCK, MTX_DEF);
 	}
 #ifdef linux
 	D("netdev_ops %p", ifp->netdev_ops);
@@ -1422,34 +1463,6 @@ static struct cdevsw netmap_cdevsw = {
  *---- support for virtual bridge -----
  */
 
-#define NM_BDG_MAXPORTS	16
-#define NM_BDG_HASH	1024	/* forwarding table entries */
-struct nm_hash_ent {
-	uint64_t	mac;
-	uint64_t	ports;
-};
-
-struct nm_bridge {
-	struct ifnet *ports[NM_BDG_MAXPORTS];
-	int n_ports;
-	uint64_t act_ports;
-	int freelist;	/* first buffer index */
-	NM_SELINFO_T si;	/* poll/select wait queue */
-	NM_LOCK_T bdg_lock;	/* protect the selinfo ? */
-
-
-	/* the forwarding table, MAC+ports */
-	struct nm_hash_ent ht[NM_BDG_HASH];
-};
-
-struct nm_bridge nm_bridge;
-
-/*
- * if_pspare[1]		link field
- * if_ispare[0]		port index
- * if_ispare[1]		freelist index
- */
-
 #if 1 /* ----- FreeBSD if_bridge hash function ------- */
 
 /*
@@ -1498,11 +1511,12 @@ bdg_netmap_reg(struct ifnet *ifp, int onoff)
 	int i, err = 0;
 	struct nm_bridge *b = &nm_bridge;
 
-	IFNET_WLOCK();
+	BDG_LOCK(b);
 	if (onoff) {
+		/* must be already in the list */
 		D("should attach %s to the bridge", ifp->if_xname);
 		for (i=0; i < NM_BDG_MAXPORTS; i++)
-			if (b->ports[i] == NULL)
+			if (b->ports[i] == ifp)
 				break;
 		if (i == NM_BDG_MAXPORTS) {
 			D("no more ports available");
@@ -1517,11 +1531,10 @@ bdg_netmap_reg(struct ifnet *ifp, int onoff)
 		ifp->if_capenable &= ~IFCAP_NETMAP;
 		D("should detach %s from the bridge", ifp->if_xname);
 		i = ifp->if_ispare[0];
-		b->ports[i] = NULL;
 		b->act_ports &= ~(1<<i);
 	}
 done:
-	IFNET_WUNLOCK();
+	BDG_UNLOCK(b);
 	return err;
 }
 
@@ -1729,7 +1742,7 @@ bdg_netmap_attach(struct ifnet *ifp)
 	bzero(&na, sizeof(na));
 
 	na.ifp = ifp;
-	na.separate_locks = 0;
+	na.separate_locks = 1;
 	na.num_tx_desc = NM_BRIDGE_RINGSIZE;
 	na.num_rx_desc = NM_BRIDGE_RINGSIZE;
 	na.nm_txsync = bdg_netmap_txsync;
@@ -1765,6 +1778,10 @@ netmap_init(void)
 		(int)(nm_mem->nm_totalsize >> 20));
 	netmap_dev = make_dev(&netmap_cdevsw, 0, UID_ROOT, GID_WHEEL, 0660,
 			      "netmap");
+
+#ifdef NM_BRIDGE
+	mtx_init(&nm_bridge.bdg_lock, "bdg lock", "bdg_lock", MTX_DEF);
+#endif
 	return (error);
 }
 
