@@ -228,8 +228,8 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
  * In the tx loop, we aggregate traffic in batches to make all operations
  * faster. The batch size is NM_BDG_BATCH
  */
-#define	NM_NAME	"vale"			/* prefix for the interface */
-#define NM_BDG_MAXPORTS	16		/* up to 64 ? */
+#define	NM_NAME			"vale"	/* prefix for the interface */
+#define NM_BDG_MAXPORTS		16	/* up to 64 ? */
 #define NM_BRIDGE_RINGSIZE	1024	/* in the device */
 #define NM_BDG_HASH		1024	/* forwarding table entries */
 #define NM_BDG_BATCH		128	/* entries in the forwarding buffer */
@@ -417,7 +417,7 @@ nm_if_rele(struct ifnet *ifp)
 	if (!refcount_release(&ifp->if_refcount))
 		return;
 	BDG_LOCK(b);
-	D("want to disconnect %s %d from the bridge", ifp->if_xname, ifp->if_ispare[1]);
+	D("want to disconnect %s from the bridge", ifp->if_xname);
 	for (i = 0; i < NM_BDG_MAXPORTS; i++) {
 		if (b->bdg_ports[i] == ifp) {
 			b->bdg_ports[i] = NULL;
@@ -1661,7 +1661,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 		if (netmap_verbose) {
 		    uint8_t *s = buf+6, *d = buf;
 		    D("%d len %4d %02x:%02x:%02x:%02x:%02x:%02x -> %02x:%02x:%02x:%02x:%02x:%02x",
-			slot->buf_idx,
+			i,
 			ft[i].len,
 			s[0], s[1], s[2], s[3], s[4], s[5],
 			d[0], d[1], d[2], d[3], d[4], d[5]);
@@ -1688,8 +1688,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 		if (dst == 0)
 			dst = all_dst;
 		dst &= all_dst; /* only consider valid ports */
-		if (netmap_verbose)
-			D("pkt goes to ports 0x%llx", dst);
+		D("pkt goes to ports 0x%llx", dst);
 		ft[i].dst = dst;
 	}
 	/* second pass, scan interfaces and forward */
@@ -1705,7 +1704,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 		
 		if (!dst_ifp)
 			continue;
-		D("scan interface %d %s", ifn, dst_ifp->if_xname);
+		D("scan port %d %s", ifn, dst_ifp->if_xname);
 		dst = 1 << ifn;
 		if (dst & all_dst == 0)	/* skip if not set */
 			continue;
@@ -1714,7 +1713,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 
 		/* inside, scan slots */
 		for (i = 0; i < n; i++) {
-			if (ft[i].dst & dst == 0)
+			if ((ft[i].dst & dst) == 0)
 				continue;	/* not here */
 			if (!locked) {
 				kring = &na->rx_rings[0];
@@ -1732,13 +1731,14 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 			if (j > lim)
 				j -= kring->nkr_num_slots;
 			slot = &ring->slot[j];
-			ND("send %d %d bytes at %s:%d", i, ft[i].len, dst_ifp->if_xname, j);
+			D("send %d %d bytes at %s:%d", i, ft[i].len, dst_ifp->if_xname, j);
 			pkt_copy(ft[i].buf, NMB(slot), ft[i].len);
 			slot->len = ft[i].len;
 			kring->nr_hwavail++;
 			sent++;
 		}
 		if (locked) {
+			D("sent %d on %s", sent, dst_ifp->if_xname);
 			if (sent)
 				selwakeuppri(&kring->si, PI_NET);
 			na->nm_lock(dst_ifp, NETMAP_RX_UNLOCK, 0);
