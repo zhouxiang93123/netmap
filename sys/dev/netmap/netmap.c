@@ -218,13 +218,21 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, copy, CTLFLAG_RW, &netmap_copy, 0 , "");
 int netmap_bridge = 1; /* bridge flags */
 SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
 /*
- * system parameters
+ * system parameters.
+ *
+ * All switched ports have prefix NM_NAME.
+ * The switch has a max of NM_BDG_MAXPORTS ports (often stored in a bitmap,
+ * so a practical upper bound is 64).
+ * Each tx ring is read-write, whereas rx rings are readonly (XXX not done yet).
+ * The virtual interfaces use per-queue lock instead of core lock.
+ * In the tx loop, we aggregate traffic in batches to make all operations
+ * faster. The batch size is NM_BDG_BATCH
  */
 #define	NM_NAME	"vale"			/* prefix for the interface */
 #define NM_BDG_MAXPORTS	16		/* up to 64 ? */
 #define NM_BRIDGE_RINGSIZE	1024	/* in the device */
 #define NM_BDG_HASH		1024	/* forwarding table entries */
-#define NM_FWD_BUF		32	/* entries in the forwarding buffer */
+#define NM_BDG_BATCH		128	/* entries in the forwarding buffer */
 
 #include <sys/endian.h>
 #include <sys/refcount.h>
@@ -251,11 +259,13 @@ struct nm_hash_ent {
 
 /*
  * Interfaces for a bridge are all in ports[].
+ * An interface may enter the switch multiple times. if_ispare[1]
+ * determines when it is removed.
  * The array has fixed size, an empty entry does not terminate
  * the search.
  */
 struct nm_bridge {
-	struct ifnet *ports[NM_BDG_MAXPORTS];
+	struct ifnet *bdg_ports[NM_BDG_MAXPORTS];
 	int n_ports;
 	uint64_t act_ports;
 	int freelist;	/* first buffer index */
@@ -273,7 +283,7 @@ struct nm_bridge nm_bridge;
 
 /*
  * if_ispare[0]		port index
- * if_ispare[1]		freelist index
+ * if_ispare[1]		number of times it goes on the switch.
  */
 
 inline void prefetch (const void *x)
@@ -407,9 +417,10 @@ nm_if_rele(struct ifnet *ifp)
 	if (!refcount_release(&ifp->if_refcount))
 		return;
 	BDG_LOCK(b);
+	D("want to disconnect %s %d from the bridge", ifp->if_xname, ifp->if_ispare[1]);
 	for (i = 0; i < NM_BDG_MAXPORTS; i++) {
-		if (b->ports[i] == ifp) {
-			b->ports[i] = NULL;
+		if (b->bdg_ports[i] == ifp) {
+			b->bdg_ports[i] = NULL;
 			bzero(ifp, sizeof(*ifp));
 			free(ifp, M_DEVBUF);
 			break;
@@ -599,7 +610,7 @@ get_ifp(const char *name, struct ifnet **ifp)
 		BDG_LOCK(b);
 		/* lookup in the local list of bridges */
 		for (i = 0; i < NM_BDG_MAXPORTS; i++) {
-			iter = b->ports[i];
+			iter = b->bdg_ports[i];
 			if (iter == NULL) {
 				if (cand == -1)
 					cand = i; /* potential insert point */
@@ -624,13 +635,13 @@ no_port:
 		D("create new bridge port %s", name);
 		/* space for forwarding list after the ifnet */
 		l = sizeof(*iter) +
-			 sizeof(struct nm_bdg_fwd)*NM_FWD_BUF ;
+			 sizeof(struct nm_bdg_fwd)*NM_BDG_BATCH ;
 		iter = malloc(l, M_DEVBUF, M_NOWAIT | M_ZERO);
 		if (!iter)
 			goto no_port;
 		strcpy(iter->if_xname, name);
 		bdg_netmap_attach(iter);
-		b->ports[cand] = iter;
+		b->bdg_ports[cand] = iter;
 		iter->if_refcount++;
 		BDG_UNLOCK(b);
 		D("attaching virtual bridge");
@@ -1562,19 +1573,21 @@ bdg_netmap_reg(struct ifnet *ifp, int onoff)
 		 */
 		D("should attach %s to the bridge", ifp->if_xname);
 		for (i=0; i < NM_BDG_MAXPORTS; i++)
-			if (b->ports[i] == ifp)
+			if (b->bdg_ports[i] == ifp)
 				break;
 		if (i == NM_BDG_MAXPORTS) {
 			D("no more ports available");
 			err = EINVAL;
 			goto done;
 		}
+		D("setting %s in netmap mode", ifp->if_xname);
 		ifp->if_capenable |= IFCAP_NETMAP;
 		ifp->if_ispare[0] = i;
 		b->act_ports |= (1<<i);
-		b->ports[i] = ifp;
+		b->bdg_ports[i] = ifp;
 	} else {
 		/* should be in the list, too -- remove from the mask */
+		D("removing %s from netmap mode", ifp->if_xname);
 		ifp->if_capenable &= ~IFCAP_NETMAP;
 		i = ifp->if_ispare[0];
 		b->act_ports &= ~(1<<i);
@@ -1636,9 +1649,9 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 	uint64_t smac, dmac;
 	struct netmap_slot *slot;
 
-	D("prepare to send %d packets", n);
+	D("prepare to send %d packets, act_ports 0x%x", n, b->act_ports);
 	/* only consider valid destinations */
-	all_dst = b->act_ports & ~mysrc;
+	all_dst = (b->act_ports & ~mysrc) | 0xff0000; // XXX temp, keep number
 	/* first pass: hash and find destinations */
 	for (i = 0; i < n; i++) {
 		uint8_t *buf = ft[i].buf;
@@ -1648,33 +1661,41 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 		if (netmap_verbose) {
 		    uint8_t *s = buf+6, *d = buf;
 		    D("%d len %4d %02x:%02x:%02x:%02x:%02x:%02x -> %02x:%02x:%02x:%02x:%02x:%02x",
-			slot->buf_idx, buf,
+			slot->buf_idx,
 			ft[i].len,
 			s[0], s[1], s[2], s[3], s[4], s[5],
 			d[0], d[1], d[2], d[3], d[4], d[5]);
 		}
 		if ((buf[6] & 1) == 0) { /* valid src */
+		    	uint8_t *s = buf+6;
 			sh = nm_bridge_rthash(buf+6); // XXX hash of source
 			/* update source port forwarding entry */
 			b->ht[sh].mac = smac;	/* XXX expire ? */
-			b->ht[sh].ports = mysrc;
+			b->ht[sh].ports = mysrc | (ifp->if_ispare[0] << 16);
+			D("src %02x:%02x:%02x:%02x:%02x:%02x on port %d",
+				s[0], s[1], s[2], s[3], s[4], s[5], ifp->if_ispare[0]);
 		}
 		dst = 0;
 		if ( (buf[0] & 1) == 0) { /* unicast */
+		    	uint8_t *d = buf;
 			dh = nm_bridge_rthash(buf); // XXX hash of dst
-			if (b->ht[dh].mac == dmac)	/* found dst */
+			if (b->ht[dh].mac == dmac) {	/* found dst */
 				dst = b->ht[dh].ports;
+				D("dst %02x:%02x:%02x:%02x:%02x:%02x to port %x",
+					d[0], d[1], d[2], d[3], d[4], d[5], (dst >> 16));
+			}
 		}
 		if (dst == 0)
 			dst = all_dst;
 		dst &= all_dst; /* only consider valid ports */
 		if (netmap_verbose)
 			D("pkt goes to ports 0x%llx", dst);
-		ft->dst = i;
+		ft[i].dst = dst;
 	}
 	/* second pass, scan interfaces and forward */
+	all_dst = (b->act_ports & ~mysrc);
 	for (ifn = 0; all_dst; ifn++) {
-		struct ifnet *dst_ifp = b->ports[ifn];
+		struct ifnet *dst_ifp = b->bdg_ports[ifn];
 		struct netmap_adapter *na;
 		struct netmap_kring *kring;
 		struct netmap_ring *ring;
@@ -1707,20 +1728,19 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 					D("rx ring full on %s", ifp->if_xname);
 				break;
 			}
-			sent++;
 			j = kring->nr_hwcur + kring->nr_hwavail;
 			if (j > lim)
 				j -= kring->nkr_num_slots;
 			slot = &ring->slot[j];
-			D("send %d bytes at %s:%d", ft[i].len, dst_ifp->if_xname, j);
+			ND("send %d %d bytes at %s:%d", i, ft[i].len, dst_ifp->if_xname, j);
 			pkt_copy(ft[i].buf, NMB(slot), ft[i].len);
 			slot->len = ft[i].len;
+			kring->nr_hwavail++;
+			sent++;
 		}
 		if (locked) {
-			if (sent) {
-				kring->nr_hwavail += sent;
+			if (sent)
 				selwakeuppri(&kring->si, PI_NET);
-			}
 			na->nm_lock(dst_ifp, NETMAP_RX_UNLOCK, 0);
 		}
 	}
@@ -1736,40 +1756,20 @@ bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	int j, k, l, n, lim = kring->nkr_num_slots - 1;
+	int i, j, k, lim = kring->nkr_num_slots - 1;
 	struct nm_bdg_fwd *ft = (struct nm_bdg_fwd *)(ifp + 1);
 	int ft_i;
-	struct nm_bridge *b = &nm_bridge;
-	uint64_t mysrc = 1 << ifp->if_ispare[0];
-	int sh, dh, i;
 
 	k = ring->cur;
 	if (k > lim)
 		return netmap_ring_reinit(kring);
-	/* do the forwarding for slot j to slot k */
-	/*
-	 * the simple code works one packet at a time
-	 * the efficient one works in batches.
-	 * Phases are:
-	 * + prefetch dst/src MAC
-	 * + hash src and update the bridging table
-	 * + hash dst, fetch the destination list, compute the set
-	 *	of destinations
-	 * + for each destination:
-	 *	+ find first entry
-	 *	+ lock
-	 *	+ while have room and pkts
-	 *		copy if not done yet,
-	 *		otherwise buffer in local/global freelist
-	 *		link buffer
-	 *	+ unlock
-	 */
-    if (!netmap_bridge) {
-	j = k; // used all
-	kring->nr_hwcur = j;
-	ring->avail = kring->nr_hwavail;
-	return 0;
-    }
+	if (do_lock)
+		na->nm_lock(ifp, NETMAP_TX_LOCK, ring_nr);
+
+	if (!netmap_bridge) { /* testing only */
+		j = k; // used all
+		goto done;
+	}
 
 	ft_i = 0;	/* start from 0 */
 	for (j = kring->nr_hwcur; j != k; j = (j == lim) ? 0 : j+1) {
@@ -1780,11 +1780,11 @@ bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		prefetch(buf);
 		if (len < 14)
 			continue;
-		if (++ft_i == NM_FWD_BUF)
-			ft_i = nm_bdg_flush(ft, ft_i, ifp, b);
+		if (++ft_i == NM_BDG_BATCH)
+			ft_i = nm_bdg_flush(ft, ft_i, ifp, &nm_bridge);
 	}
 	if (ft_i)
-		ft_i = nm_bdg_flush(ft, ft_i, ifp, b);
+		ft_i = nm_bdg_flush(ft, ft_i, ifp, &nm_bridge);
 	/* count how many packets we sent */
 	i = k - j;
 	if (i < 0)
@@ -1793,8 +1793,11 @@ bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	if (j != k)
 		D("early break at %d/ %d, avail %d", j, k, kring->nr_hwavail);
 
+done:
 	kring->nr_hwcur = j;
 	ring->avail = kring->nr_hwavail;
+	if (do_lock)
+		na->nm_lock(ifp, NETMAP_TX_UNLOCK, ring_nr);
 
 	if (netmap_verbose)
 		D("%s ring %d lock %d", ifp->if_xname, ring_nr, do_lock);
