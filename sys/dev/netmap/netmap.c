@@ -417,7 +417,7 @@ nm_if_rele(struct ifnet *ifp)
 	if (!refcount_release(&ifp->if_refcount))
 		return;
 	BDG_LOCK(b);
-	D("want to disconnect %s from the bridge", ifp->if_xname);
+	ND("want to disconnect %s from the bridge", ifp->if_xname);
 	for (i = 0; i < NM_BDG_MAXPORTS; i++) {
 		if (b->bdg_ports[i] == ifp) {
 			b->bdg_ports[i] = NULL;
@@ -1649,7 +1649,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 	uint64_t smac, dmac;
 	struct netmap_slot *slot;
 
-	D("prepare to send %d packets, act_ports 0x%x", n, b->act_ports);
+	ND("prepare to send %d packets, act_ports 0x%x", n, b->act_ports);
 	/* only consider valid destinations */
 	all_dst = (b->act_ports & ~mysrc) | 0xff0000; // XXX temp, keep number
 	/* first pass: hash and find destinations */
@@ -1672,7 +1672,8 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 			/* update source port forwarding entry */
 			b->ht[sh].mac = smac;	/* XXX expire ? */
 			b->ht[sh].ports = mysrc | (ifp->if_ispare[0] << 16);
-			D("src %02x:%02x:%02x:%02x:%02x:%02x on port %d",
+			if (netmap_verbose)
+			    D("src %02x:%02x:%02x:%02x:%02x:%02x on port %d",
 				s[0], s[1], s[2], s[3], s[4], s[5], ifp->if_ispare[0]);
 		}
 		dst = 0;
@@ -1681,14 +1682,16 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 			dh = nm_bridge_rthash(buf); // XXX hash of dst
 			if (b->ht[dh].mac == dmac) {	/* found dst */
 				dst = b->ht[dh].ports;
-				D("dst %02x:%02x:%02x:%02x:%02x:%02x to port %x",
+				if (netmap_verbose)
+				    D("dst %02x:%02x:%02x:%02x:%02x:%02x to port %x",
 					d[0], d[1], d[2], d[3], d[4], d[5], (dst >> 16));
 			}
 		}
 		if (dst == 0)
 			dst = all_dst;
 		dst &= all_dst; /* only consider valid ports */
-		D("pkt goes to ports 0x%llx", dst);
+		if (netmap_verbose)
+			D("pkt goes to ports 0x%llx", dst);
 		ft[i].dst = dst;
 	}
 	/* second pass, scan interfaces and forward */
@@ -1704,7 +1707,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 		
 		if (!dst_ifp)
 			continue;
-		D("scan port %d %s", ifn, dst_ifp->if_xname);
+		ND("scan port %d %s", ifn, dst_ifp->if_xname);
 		dst = 1 << ifn;
 		if (dst & all_dst == 0)	/* skip if not set */
 			continue;
@@ -1731,14 +1734,14 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 			if (j > lim)
 				j -= kring->nkr_num_slots;
 			slot = &ring->slot[j];
-			D("send %d %d bytes at %s:%d", i, ft[i].len, dst_ifp->if_xname, j);
+			ND("send %d %d bytes at %s:%d", i, ft[i].len, dst_ifp->if_xname, j);
 			pkt_copy(ft[i].buf, NMB(slot), ft[i].len);
 			slot->len = ft[i].len;
 			kring->nr_hwavail++;
 			sent++;
 		}
 		if (locked) {
-			D("sent %d on %s", sent, dst_ifp->if_xname);
+			ND("sent %d on %s", sent, dst_ifp->if_xname);
 			if (sent)
 				selwakeuppri(&kring->si, PI_NET);
 			na->nm_lock(dst_ifp, NETMAP_RX_UNLOCK, 0);
