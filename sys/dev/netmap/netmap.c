@@ -286,7 +286,7 @@ struct nm_bridge nm_bridge;
  * if_ispare[1]		number of times it goes on the switch.
  */
 
-inline void prefetch (const void *x)
+static inline void prefetch (const void *x)
 {
         __asm volatile("prefetcht0 %0" :: "m" (*(const unsigned long *)x));
 }
@@ -1272,7 +1272,7 @@ netmap_lock_wrapper(struct ifnet *dev, int what, u_int queueid)
 int
 netmap_attach(struct netmap_adapter *na, int num_queues)
 {
-	int i, n, size;
+	int n, size;
 	void *buf;
 	struct ifnet *ifp = na->ifp;
 
@@ -1596,47 +1596,6 @@ done:
 }
 
 
-/*
- * send the buffer on the output interface.
- * Use the rx lock on the device for locking
- */
-static int
-nm_bdg_send(void *buf, int len, struct ifnet *ifp)
-{
-	int ret = 0;
-        struct netmap_adapter *na = NA(ifp);
-        struct netmap_kring *kring = &na->rx_rings[0];
-        struct netmap_ring *ring = kring->ring;
-        int j, k, l, n, lim = kring->nkr_num_slots - 1;
-        struct nm_bridge *b = &nm_bridge;
-	struct netmap_slot *slot;
-	void *dst;
-
-	// lock rx ring
-	na->nm_lock(ifp, NETMAP_RX_LOCK, 0);
-
-	if (kring->nr_hwavail >= lim) {
-		if (netmap_verbose)
-			D("rx ring full on %s", ifp->if_xname);
-		goto done;
-	}
-	j = kring->nr_hwcur + kring->nr_hwavail;
-	if (j > lim)
-		j -= kring->nkr_num_slots;
-	slot = &ring->slot[j];
-	dst = NMB(slot);
-	pkt_copy(buf, dst, len);
-	slot->len = len;
-	kring->nr_hwavail++;
-	selwakeuppri(&kring->si, PI_NET);
-	ret = 1;
-done:
-	if (netmap_verbose)
-		D("done fwd to %s", ifp->if_xname);
-	na->nm_lock(ifp, NETMAP_RX_UNLOCK, 0);
-	return ret;
-}
-
 static int
 nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *b)
 {
@@ -1682,14 +1641,14 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 				dst = b->ht[dh].ports;
 				if (netmap_verbose)
 				    D("dst %02x:%02x:%02x:%02x:%02x:%02x to port %x",
-					d[0], d[1], d[2], d[3], d[4], d[5], (dst >> 16));
+					d[0], d[1], d[2], d[3], d[4], d[5], (uint32_t)(dst >> 16));
 			}
 		}
 		if (dst == 0)
 			dst = all_dst;
 		dst &= all_dst; /* only consider valid ports */
 		if (netmap_verbose)
-			D("pkt goes to ports 0x%llx", dst);
+			D("pkt goes to ports 0x%x", (uint32_t)dst);
 		ft[i].dst = dst;
 	}
 	/* second pass, scan interfaces and forward */
@@ -1697,17 +1656,16 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 	for (ifn = 0; all_dst; ifn++) {
 		struct ifnet *dst_ifp = b->bdg_ports[ifn];
 		struct netmap_adapter *na;
-		struct netmap_kring *kring;
-		struct netmap_ring *ring;
-		int ofs, lim, sent=0;
-		int j, k;
+		struct netmap_kring *kring = NULL;
+		struct netmap_ring *ring = NULL;
+		int j, lim = 0, sent=0;
 		int locked = 0;
 		
 		if (!dst_ifp)
 			continue;
 		ND("scan port %d %s", ifn, dst_ifp->if_xname);
 		dst = 1 << ifn;
-		if (dst & all_dst == 0)	/* skip if not set */
+		if ((dst & all_dst) == 0)	/* skip if not set */
 			continue;
 		all_dst &= ~dst;	/* clear current node */
 		na = NA(dst_ifp);
@@ -1811,7 +1769,7 @@ bdg_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	int j, l, n, lim = kring->nkr_num_slots - 1;
+	int j, n, lim = kring->nkr_num_slots - 1;
 	u_int k = ring->cur, resvd = ring->reserved;
 
 	ND("%s ring %d lock %d avail %d",

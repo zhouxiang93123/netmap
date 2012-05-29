@@ -260,7 +260,6 @@ ixgbe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 */
 	j = kring->nr_hwcur;
 	if (j != k) {	/* we have new packets to send */
-volatile uint64_t x;
 		prefetch(&ring->slot[j]);
 		l = netmap_idx_k2n(kring, j); /* NIC index */
 		prefetch(&txr->tx_buffers[l]);
@@ -289,8 +288,6 @@ volatile uint64_t x;
 					IXGBE_TXD_CMD_RS : 0;
 			u_int len = slot->len;
 			void *addr = PNMB(slot, &paddr);
-			if (netmap_copy > 0)
-				prefetch(addr); // XXX
 
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
@@ -310,8 +307,6 @@ ring_reset:
 					IXGBE_TX_UNLOCK(txr);
 				return netmap_ring_reinit(kring);
 			}
-			if (netmap_copy == 1)
-				bcopy(addr, netmap_buffer_base, len);
 
 			if (slot->flags & NS_BUF_CHANGED) {
 				/* buffer has changed, unload and reload map */
@@ -330,13 +325,7 @@ ring_reset:
 			curr->read.olinfo_status = 0;
 			curr->read.cmd_type_len = htole32(len | flags |
 				IXGBE_ADVTXD_DCMD_IFCS | IXGBE_TXD_CMD_EOP);
-			if (netmap_copy == 2)
-				bcopy(addr, netmap_buffer_base, len);
-			if (netmap_copy == 3)
-				memcpy(netmap_buffer_base, addr, l);
 
-			if (netmap_copy == 4)
-				x = *(uint64_t *)addr;
 			/* make sure changes to the buffer are synced */
 			bus_dmamap_sync(txr->txtag, txbuf->map, BUS_DMASYNC_PREWRITE);
 		}
