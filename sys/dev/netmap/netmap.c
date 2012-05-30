@@ -54,6 +54,10 @@
  *    transmit or receive queues (or all queues for a given interface).
  */
 
+#ifdef linux
+#include "bsd_glue.h"
+static netdev_tx_t netmap_start_linux(struct sk_buff *skb, struct net_device *dev);
+#else /* !linux */
 #include <sys/cdefs.h> /* prerequisite */
 __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 234986 2012-05-03 21:16:53Z luigi $");
 
@@ -85,6 +89,7 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 234986 2012-05-03 21:16:53Z lui
 #include <machine/bus.h>	/* bus_dmamap_* */
 
 MALLOC_DEFINE(M_NETMAP, "netmap", "Network memory map");
+#endif /* !linux */
 
 /*
  * lock and unlock for the netmap memory allocator
@@ -459,6 +464,7 @@ netmap_dtor(void *data)
  * Return 0 on success, -1 otherwise.
  */
 
+#ifdef __FreeBSD__
 static int
 netmap_mmap(__unused struct cdev *dev,
 #if __FreeBSD_version < 900000
@@ -477,6 +483,7 @@ netmap_mmap(__unused struct cdev *dev,
 
 	return (0);
 }
+#endif /* __FreeBSD__ */
 
 
 /*
@@ -786,6 +793,21 @@ netmap_ioctl(__unused struct cdev *dev, u_long cmd, caddr_t data,
 	u_int i, lim;
 	struct netmap_if *nifp;
 
+#ifdef linux
+#define devfs_get_cdevpriv(pp)				\
+	({ *(struct netmap_priv_d **)pp = ((struct file *)td)->private_data; 	\
+		(*pp ? 0 : ENOENT); })
+
+/* devfs_set_cdevpriv cannot fail on linux */
+#define devfs_set_cdevpriv(p, fn)				\
+	({ ((struct file *)td)->private_data = p; (p ? 0 : EINVAL); })
+
+
+#define devfs_clear_cdevpriv()	do {				\
+		netmap_dtor(priv); ((struct file *)td)->private_data = 0;	\
+	} while (0)
+#endif /* linux */
+
 	CURVNET_SET(TD_TO_VNET(td));
 
 	error = devfs_get_cdevpriv((void **)&priv);
@@ -968,6 +990,7 @@ error:
 
 		break;
 
+#ifdef __FreeBSD__
 	case BIOCIMMEDIATE:
 	case BIOCGHDRCMPLT:
 	case BIOCSHDRCMPLT:
@@ -988,6 +1011,11 @@ error:
 		nm_if_rele(ifp);
 		break;
 	    }
+
+#else /* linux */
+	default:
+		error = EOPNOTSUPP;
+#endif /* linux */
 	}
 
 	CURVNET_RESTORE();
@@ -1004,6 +1032,11 @@ error:
  * selfd or on the global one.
  * Device-dependent parts (locking and sync of tx/rx rings)
  * are done through callbacks.
+ *
+ * On linux, pwait is the poll table.
+ * If pwait == NULL someone else already woke up before. We can report
+ * events but they are filtered upstream.
+ * If pwait != NULL, then pwait->key contains the list of events.
  */
 static int
 netmap_poll(__unused struct cdev *dev, int events, struct thread *td)
@@ -1225,32 +1258,26 @@ netmap_lock_wrapper(struct ifnet *dev, int what, u_int queueid)
 #endif /* linux */
 
 	case NETMAP_CORE_LOCK:
-		ND("%s >>>> CORE_LOCK", dev->if_xname);
 		mtx_lock(&na->core_lock);
 		break;
 
 	case NETMAP_CORE_UNLOCK:
-		ND("%s <<<< CORE_UNLOCK", dev->if_xname);
 		mtx_unlock(&na->core_lock);
 		break;
 
 	case NETMAP_TX_LOCK:
-		ND("%s >>>> TX_LOCK %d", dev->if_xname, queueid);
 		mtx_lock(&na->tx_rings[queueid].q_lock);
 		break;
 
 	case NETMAP_TX_UNLOCK:
-		ND("%s <<<< TX_UNLOCK %d", dev->if_xname, queueid);
 		mtx_unlock(&na->tx_rings[queueid].q_lock);
 		break;
 
 	case NETMAP_RX_LOCK:
-		ND("%s >>>> RX_LOCK %d", dev->if_xname, queueid);
 		mtx_lock(&na->rx_rings[queueid].q_lock);
 		break;
 
 	case NETMAP_RX_UNLOCK:
-		ND("%s <<<< RX_UNLOCK %d", dev->if_xname, queueid);
 		mtx_unlock(&na->rx_rings[queueid].q_lock);
 		break;
 	}
@@ -1440,6 +1467,16 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, int n,
 			kring->nkr_hwofs, na->ifp->if_xname,
 			tx == NR_TX ? "TX" : "RX", n);
 
+#if 0 // def linux
+	/* XXX check that the mappings are correct */
+	/* need ring_nr, adapter->pdev, direction */
+	buffer_info->dma = dma_map_single(&pdev->dev, addr, adapter->rx_buffer_len, DMA_FROM_DEVICE);
+	if (dma_mapping_error(&adapter->pdev->dev, buffer_info->dma)) {
+		D("error mapping rx netmap buffer %d", i);
+		// XXX fix error handling
+	}
+
+#endif /* linux */
 	/*
 	 * Wakeup on the individual and global lock
 	 * We do the wakeup here, but the ring is not yet reconfigured.
@@ -1887,6 +1924,7 @@ netmap_fini(void)
 }
 
 
+#ifdef __FreeBSD__
 /*
  * Kernel entry point.
  *
@@ -1918,3 +1956,4 @@ netmap_loader(__unused struct module *module, int event, __unused void *arg)
 
 
 DEV_MODULE(netmap, netmap_loader, NULL);
+#endif /* __FreeBSD__ */
