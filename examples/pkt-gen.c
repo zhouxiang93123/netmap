@@ -86,16 +86,16 @@ static inline int min(int a, int b) { return a < b ? a : b; }
 #endif
 
 int verbose = 0;
-#define MAX_QUEUES 64	/* no need to limit */
 
 #define SKIP_PAYLOAD 1 /* do not check payload. */
 
+// XXX does it work on 32-bit machines ?
 inline void prefetch (const void *x)
 {
         __asm volatile("prefetcht0 %0" :: "m" (*(const unsigned long *)x));
 }
 
-// XXX only for multiples of 32 bytes, non overlapped.
+// XXX only for multiples of 64 bytes, non overlapped.
 static inline void
 pkt_copy(void *_src, void *_dst, int l)
 {
@@ -175,13 +175,11 @@ struct glob_arg {
 #define OPT_ACCESS	2
 #define OPT_COPY	4
 #define OPT_MEMCPY	8
+#define OPT_TS		16	/* add a timestamp */
 	int use_pcap;
 	pcap_t *p;
 };
 
-struct mystat {
-	uint64_t containers[8];
-};
 
 /*
  * Arguments for a new thread. The same structure is used by
@@ -477,15 +475,43 @@ static void *
 pinger_body(void *data)
 {
 	struct targ *targ = (struct targ *) data;
-	int n = targ->g->npackets;
+	struct pollfd fds[1];
+	struct netmap_if *nifp = targ->nifp;
+	struct netmap_ring *txring, *rxring;
+	int i, sent = 0, n = targ->g->npackets;
+	fds[0].fd = targ->fd;
+	fds[0].events = (POLLIN);
 
 	if (targ->g->nthreads > 1) {
 		D("can only ping with 1 thread");
 		return NULL;
 	}
 	D("understood pinger %d but don't know how to do it", n);
+	while (n == 0 || sent < n) {
+		txring = NETMAP_TXRING(nifp, 0);
+		send_packets(txring, &targ->pkt, targ->g->pkt_size,
+			1, OPT_COPY | OPT_TS);
+		sent++;
+		if (poll(fds, 1, 5) <= 0) {
+			D("poll error/timeout on queue %d\n", targ->me);
+			continue;
+		}
+		/* see what we got back */
+		for (i = targ->qfirst; i < targ->qlast; i++) {
+			rxring = NETMAP_RXRING(nifp, i);
+			while (rxring->avail > 0) {
+				uint32_t cur = rxring->cur;
+				struct netmap_slot *slot = &rxring->slot[cur];
+				char *p = NETMAP_BUF(rxring, slot->buf_idx);
+				D("got pkt %p of size %d", p, slot->len);
+				rxring->avail--;
+				rxring->cur = NETMAP_RING_NEXT(rxring, cur);
+			}
+		}
+	}
 	return NULL;
 }
+
 
 /*
  * reply to ping requests
@@ -900,8 +926,8 @@ main(int arc, char **argv)
 		usage();
 	}
 
-	if (td_body == sender_body && g.src_mac == NULL) {
-		static char mybuf[20] = "ff:ff:ff:ff:ff:ff";
+	if (g.src_mac == NULL) {
+		static char mybuf[20] = "00:00:00:00:00:00";
 		/* retrieve source mac address. */
 		if (source_hwaddr(ifname, mybuf) == -1) {
 			D("Unable to retrieve source mac");
@@ -1085,9 +1111,10 @@ main(int arc, char **argv)
 			(td_body == receiver_body ? tifreq.nr_rx_rings : tifreq.nr_tx_rings);
 		targs[i].me = i;
 		targs[i].affinity = g.cpus ? i % g.cpus : -1;
+		/* default, init packets */
+		initialize_packet(&targs[i]);
 		if (td_body == sender_body) {
 			/* initialize the packet to send. */
-			initialize_packet(&targs[i]);
 		}
 
 		if (pthread_create(&targs[i].thread, NULL, td_body,
