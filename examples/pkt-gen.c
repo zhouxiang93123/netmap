@@ -331,6 +331,8 @@ checksum(const void *data, uint16_t len)
 
 /*
  * Fill a packet with some payload.
+ * We create a UDP packet so the payload starts at
+ *	14+20+8 = 42 bytes.
  */
 static void
 initialize_packet(struct targ *targ)
@@ -456,7 +458,14 @@ send_packets(struct netmap_ring *ring, struct pkt *pkt,
 			memcpy(p, pkt, size);
 		else if (options & OPT_PREFETCH)
 			prefetch(p);
-
+		if (options & OPT_TS) {
+			static uint32_t seq = 0;
+			struct timeval ts;
+			gettimeofday(&ts, NULL);
+			bcopy(p+42, &seq, 4);
+			bcopy(p+46, &ts, sizeof(ts));
+			seq++;
+		}
 		slot->len = size;
 		if (sent == count - 1)
 			slot->flags |= NS_REPORT;
@@ -469,8 +478,12 @@ send_packets(struct netmap_ring *ring, struct pkt *pkt,
 }
 
 /*
- * pinger only uses 1 thread.
+ * Send a packet, and wait for a response.
+ * The payload (after UDP header, ofs 42) has a 4-byte sequence
+ * followed by a struct timeval (or bintime?)
  */
+#define	PAY_OFS	42	/* where in the pkt... */
+
 static void *
 pinger_body(void *data)
 {
@@ -478,7 +491,7 @@ pinger_body(void *data)
 	struct pollfd fds[1];
 	struct netmap_if *nifp = targ->nifp;
 	struct netmap_ring *txring, *rxring;
-	int i, sent = 0, n = targ->g->npackets;
+	int i, rx = 0, sent = 0, n = targ->g->npackets;
 	fds[0].fd = targ->fd;
 	fds[0].events = (POLLIN);
 
@@ -486,12 +499,12 @@ pinger_body(void *data)
 		D("can only ping with 1 thread");
 		return NULL;
 	}
-	D("understood pinger %d but don't know how to do it", n);
 	while (n == 0 || sent < n) {
 		txring = NETMAP_TXRING(nifp, 0);
 		send_packets(txring, &targ->pkt, targ->g->pkt_size,
 			1, OPT_COPY | OPT_TS);
 		sent++;
+		/* should use a parameter to decide how often to send */
 		if (poll(fds, 1, 5) <= 0) {
 			D("poll error/timeout on queue %d", targ->me);
 			continue;
@@ -500,14 +513,23 @@ pinger_body(void *data)
 		for (i = targ->qfirst; i < targ->qlast; i++) {
 			rxring = NETMAP_RXRING(nifp, i);
 			while (rxring->avail > 0) {
-				uint32_t cur = rxring->cur;
+				uint32_t seq, cur = rxring->cur;
 				struct netmap_slot *slot = &rxring->slot[cur];
 				char *p = NETMAP_BUF(rxring, slot->buf_idx);
-				D("got pkt %p of size %d", p, slot->len);
+				struct timeval now, ts;
+
+				gettimeofday(&now, NULL);
+				bcopy(p+42, &seq, sizeof(seq));
+				bcopy(p+46, &ts, sizeof(ts));
+				timersub(&now, &ts, &ts);
+				D("seq %d delta %d.%06d", seq,
+					(int)ts.tv_sec, (int)ts.tv_usec);
 				rxring->avail--;
 				rxring->cur = NETMAP_RING_NEXT(rxring, cur);
+				rx++;
 			}
 		}
+		D("tx %d rx %d", sent, rx);
 	}
 	return NULL;
 }
@@ -520,13 +542,56 @@ static void *
 ponger_body(void *data)
 {
 	struct targ *targ = (struct targ *) data;
-	int n = targ->g->npackets;
+	struct pollfd fds[1];
+	struct netmap_if *nifp = targ->nifp;
+	struct netmap_ring *txring, *rxring;
+	int i, rx = 0, sent = 0, n = targ->g->npackets;
+	fds[0].fd = targ->fd;
+	fds[0].events = (POLLIN);
 
 	if (targ->g->nthreads > 1) {
 		D("can only reply ping with 1 thread");
 		return NULL;
 	}
 	D("understood ponger %d but don't know how to do it", n);
+	while (n == 0 || sent < n) {
+		uint32_t txcur, txavail;
+		if (poll(fds, 1, 1000) <= 0) {
+			D("poll error/timeout on queue %d", targ->me);
+			continue;
+		}
+		txring = NETMAP_TXRING(nifp, 0);
+		txcur = txring->cur;
+		txavail = txring->avail;
+		/* see what we got back */
+		for (i = targ->qfirst; i < targ->qlast; i++) {
+			rxring = NETMAP_RXRING(nifp, i);
+			while (rxring->avail > 0) {
+				uint32_t cur = rxring->cur;
+				struct netmap_slot *slot = &rxring->slot[cur];
+				char *src, *dst;
+				src = NETMAP_BUF(rxring, slot->buf_idx);
+				D("got pkt %p of size %d", src, slot->len);
+				rxring->avail--;
+				rxring->cur = NETMAP_RING_NEXT(rxring, cur);
+				rx++;
+				if (txavail == 0)
+					continue;
+				dst = NETMAP_BUF(txring,
+				    txring->slot[txcur].buf_idx);
+				/* copy... */
+				pkt_copy(src, dst, slot->len);
+				txring->slot[txcur].len = slot->len;
+				/* XXX swap src dst mac */
+				txcur = NETMAP_RING_NEXT(txring, txcur);
+				txavail--;
+				sent++;
+			}
+		}
+		txring->cur = txcur;
+		txring->avail = txavail;
+		D("tx %d rx %d", sent, rx);
+	}
 	return NULL;
 }
 
