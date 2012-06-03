@@ -493,7 +493,7 @@ pinger_body(void *data)
 			1, OPT_COPY | OPT_TS);
 		sent++;
 		if (poll(fds, 1, 5) <= 0) {
-			D("poll error/timeout on queue %d\n", targ->me);
+			D("poll error/timeout on queue %d", targ->me);
 			continue;
 		}
 		/* see what we got back */
@@ -570,7 +570,7 @@ D("start");
 		 * wait for available room in the send queue(s)
 		 */
 		if (poll(fds, 1, 2000) <= 0) {
-			D("poll error/timeout on queue %d\n", targ->me);
+			D("poll error/timeout on queue %d", targ->me);
 			goto quit;
 		}
 		/*
