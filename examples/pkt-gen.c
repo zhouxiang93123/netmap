@@ -470,6 +470,40 @@ send_packets(struct netmap_ring *ring, struct pkt *pkt,
 	return (sent);
 }
 
+/*
+ * pinger only uses 1 thread.
+ */
+static void *
+pinger_body(void *data)
+{
+	struct targ *targ = (struct targ *) data;
+	int n = targ->g->npackets;
+
+	if (targ->g->nthreads > 1) {
+		D("can only ping with 1 thread");
+		return NULL;
+	}
+	D("understood pinger %d but don't know how to do it", n);
+	return NULL;
+}
+
+/*
+ * reply to ping requests
+ */
+static void *
+ponger_body(void *data)
+{
+	struct targ *targ = (struct targ *) data;
+	int n = targ->g->npackets;
+
+	if (targ->g->nthreads > 1) {
+		D("can only reply ping with 1 thread");
+		return NULL;
+	}
+	D("understood ponger %d but don't know how to do it", n);
+	return NULL;
+}
+
 static void *
 sender_body(void *data)
 {
@@ -495,7 +529,7 @@ D("start");
 	void *pkt = &targ->pkt;
 	pcap_t *p = targ->g->p;
 
-	for (i = 0; sent < n; i++) {
+	for (i = 0; n == 0 || sent < n; i++) {
 		if (pcap_inject(p, pkt, size) != -1)
 			sent++;
 		if (i > 10000) {
@@ -504,7 +538,7 @@ D("start");
 		}
 	}
     } else {
-	while (sent < n) {
+	while (n == 0 || sent < n) {
 
 		/*
 		 * wait for available room in the send queue(s)
@@ -519,7 +553,8 @@ D("start");
 		if (sent > 100000 && !(targ->g->options & OPT_COPY) )
 			options &= ~OPT_COPY;
 		for (i = targ->qfirst; i < targ->qlast; i++) {
-			int m, limit = MIN(n - sent, targ->g->burst);
+			int m, limit = n == 0 ? targ->g->burst :
+				MIN(n - sent, targ->g->burst);
 
 			txring = NETMAP_TXRING(nifp, i);
 			if (txring->avail == 0)
@@ -704,8 +739,10 @@ usage(void)
 		"Usage:\n"
 		"%s arguments\n"
 		"\t-i interface		interface name\n"
-		"\t-t pkts_to_send	also forces send mode\n"
-		"\t-r pkts_to_receive	also forces receive mode\n"
+		"\t-f function		tx rx ping pong\n"
+		"\t-n count		number of iterations (can be 0)\n"
+		"\t-t pkts_to_send	also forces tx mode\n"
+		"\t-r pkts_to_receive	also forces rx mode\n"
 		"\t-l pkts_size		in bytes excluding CRC\n"
 		"\t-d dst-ip		end with %%n to sweep n addresses\n"
 		"\t-s src-ip		end with %%n to sweep n addresses\n"
@@ -722,6 +759,18 @@ usage(void)
 	exit(0);
 }
 
+struct sf {
+	char *key;
+	void *f;
+};
+
+static struct sf func[] = {
+	{ "tx",	sender_body },
+	{ "rx",	receiver_body },
+	{ "ping",	pinger_body },
+	{ "pong",	ponger_body },
+	{ NULL, NULL }
+};
 
 int
 main(int arc, char **argv)
@@ -752,12 +801,29 @@ main(int arc, char **argv)
 	g.cpus = 1;
 
 	while ( (ch = getopt(arc, argv,
-			"i:t:r:l:d:s:D:S:b:c:o:p:PT:w:v")) != -1) {
+			"f:n:i:t:r:l:d:s:D:S:b:c:o:p:PT:w:v")) != -1) {
+		struct sf *fn;
+
 		switch(ch) {
 		default:
 			D("bad option %c %s", ch, optarg);
 			usage();
 			break;
+		case 'n':
+			g.npackets = atoi(optarg);
+			break;
+
+		case 'f':
+			for (fn = func; fn->key; fn++) {
+				if (!strcmp(fn->key, optarg))
+					break;
+			}
+			if (fn->key)
+				td_body = fn->f;
+			else
+				D("unrecognised function %s", optarg);
+			break;
+
 		case 'o':
 			g.options = atoi(optarg);
 			break;

@@ -1,6 +1,17 @@
 /*
- * performance testing code
+ * (C) 2012 Luigi Rizzo
+ *
+ * Some glue to run performance testing of kernel code.
+ * You can define functions that run repeatedly some code (locks, etc.)
+ * in a tight loop, and drive the execution and timestamp it
+ * through sysctl variables.
+ * The module is very simple so it can be loaded/unloaded and
+ * modified as needed.
+ * Some of the functions can also run in userspace, so the code can
+ * be built in two versions. For the userspace case, the first two
+ * arguments represent the number of loops and test to run.
  */
+
 #ifndef _KERNEL
 /*
  * glue code to build this in userspace
