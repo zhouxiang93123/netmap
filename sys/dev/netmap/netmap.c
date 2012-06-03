@@ -239,8 +239,14 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
 #define NM_BDG_HASH		1024	/* forwarding table entries */
 #define NM_BDG_BATCH		128	/* entries in the forwarding buffer */
 
+#ifdef linux
+#define	DROP_BDG_REF(ifp)	(NA(ifp)->if_refcount-- <= 1)
+#else
+#define	DROP_BDG_REF(ifp)	refcount_release(&(ifp)->if_refcount)
 #include <sys/endian.h>
 #include <sys/refcount.h>
+#endif /* !linux */
+
 static void bdg_netmap_attach(struct ifnet *ifp);
 static int bdg_netmap_reg(struct ifnet *ifp, int onoff);
 /* per-tx-queue entry */
@@ -264,8 +270,6 @@ struct nm_hash_ent {
 
 /*
  * Interfaces for a bridge are all in ports[].
- * An interface may enter the switch multiple times. if_ispare[1]
- * determines when it is removed.
  * The array has fixed size, an empty entry does not terminate
  * the search.
  */
@@ -287,15 +291,15 @@ struct nm_bridge nm_bridge;
 #define BDG_UNLOCK(b)	mtx_unlock(&(b)->bdg_lock)
 
 /*
- * if_ispare[0]		port index
- * if_ispare[1]		number of times it goes on the switch.
+ * NA(ifp)->bdg_port	port index
  */
 
+#ifndef linux
 static inline void prefetch (const void *x)
 {
         __asm volatile("prefetcht0 %0" :: "m" (*(const unsigned long *)x));
 }
-
+#endif
 // XXX only for multiples of 64 bytes, non overlapped.
 static inline void
 pkt_copy(void *_src, void *_dst, int l)
@@ -419,7 +423,7 @@ nm_if_rele(struct ifnet *ifp)
 		if_rele(ifp);
 		return;
 	}
-	if (!refcount_release(&ifp->if_refcount))
+	if (!DROP_BDG_REF(ifp))
 		return;
 	BDG_LOCK(b);
 	ND("want to disconnect %s from the bridge", ifp->if_xname);
