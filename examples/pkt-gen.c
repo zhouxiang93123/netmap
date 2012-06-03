@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011 Matteo Landi, Luigi Rizzo. All rights reserved.
+ * Copyright (C) 2011-2012 Matteo Landi, Luigi Rizzo. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -458,14 +458,6 @@ send_packets(struct netmap_ring *ring, struct pkt *pkt,
 			memcpy(p, pkt, size);
 		else if (options & OPT_PREFETCH)
 			prefetch(p);
-		if (options & OPT_TS) {
-			static uint32_t seq = 0;
-			struct timeval ts;
-			gettimeofday(&ts, NULL);
-			bcopy(p+42, &seq, 4);
-			bcopy(p+46, &ts, sizeof(ts));
-			seq++;
-		}
 		slot->len = size;
 		if (sent == count - 1)
 			slot->flags |= NS_REPORT;
@@ -490,46 +482,75 @@ pinger_body(void *data)
 	struct targ *targ = (struct targ *) data;
 	struct pollfd fds[1];
 	struct netmap_if *nifp = targ->nifp;
-	struct netmap_ring *txring, *rxring;
-	int i, rx = 0, sent = 0, n = targ->g->npackets;
+	int i, rx = 0, n = targ->g->npackets;
 	fds[0].fd = targ->fd;
 	fds[0].events = (POLLIN);
+	static uint32_t sent;
+	struct timeval ts, now;
+	uint32_t count = 0, min = 1000000, av = 0;
 
 	if (targ->g->nthreads > 1) {
 		D("can only ping with 1 thread");
 		return NULL;
 	}
-	while (n == 0 || sent < n) {
-		txring = NETMAP_TXRING(nifp, 0);
-		send_packets(txring, &targ->pkt, targ->g->pkt_size,
-			1, OPT_COPY | OPT_TS);
-		sent++;
+	
+	while (n == 0 || (int)sent < n) {
+		struct netmap_ring *ring = NETMAP_TXRING(nifp, 0);
+		struct netmap_slot *slot;
+		char *p;
+	    for (i = 0; i < 1; i++) {
+		slot = &ring->slot[ring->cur];
+		p = NETMAP_BUF(ring, slot->buf_idx);
+
+		if (ring->avail == 0) {
+			D("-- ouch, cannot send");
+		} else {
+			pkt_copy(&targ->pkt, p, targ->g->pkt_size);
+			gettimeofday(&ts, NULL);
+			bcopy(&sent, p+42, sizeof(sent));
+			bcopy(&ts, p+46, sizeof(ts));
+			sent++;
+			ring->cur = NETMAP_RING_NEXT(ring, ring->cur);
+			ring->avail--;
+		}
+	    }
 		/* should use a parameter to decide how often to send */
-		if (poll(fds, 1, 5) <= 0) {
+		if (poll(fds, 1, 1000) <= 0) {
 			D("poll error/timeout on queue %d", targ->me);
 			continue;
 		}
 		/* see what we got back */
 		for (i = targ->qfirst; i < targ->qlast; i++) {
-			rxring = NETMAP_RXRING(nifp, i);
-			while (rxring->avail > 0) {
-				uint32_t seq, cur = rxring->cur;
-				struct netmap_slot *slot = &rxring->slot[cur];
-				char *p = NETMAP_BUF(rxring, slot->buf_idx);
-				struct timeval now, ts;
+			ring = NETMAP_RXRING(nifp, i);
+			while (ring->avail > 0) {
+				uint32_t seq;
+				slot = &ring->slot[ring->cur];
+				p = NETMAP_BUF(ring, slot->buf_idx);
 
 				gettimeofday(&now, NULL);
 				bcopy(p+42, &seq, sizeof(seq));
 				bcopy(p+46, &ts, sizeof(ts));
 				timersub(&now, &ts, &ts);
-				D("seq %d delta %d.%06d", seq,
+				if (0) D("seq %d/%d delta %d.%06d", seq, sent,
 					(int)ts.tv_sec, (int)ts.tv_usec);
-				rxring->avail--;
-				rxring->cur = NETMAP_RING_NEXT(rxring, cur);
+				if (ts.tv_usec < min)
+					min = ts.tv_usec;
+				count ++;
+				av += ts.tv_usec;
+				ring->avail--;
+				ring->cur = NETMAP_RING_NEXT(ring, ring->cur);
 				rx++;
 			}
 		}
-		D("tx %d rx %d", sent, rx);
+		//D("tx %d rx %d", sent, rx);
+		//usleep(100000);
+		if (count >= 10000) {
+			D("count %d min %d av %d",
+				count, min, av/count);
+			count = 0;
+			av = 0;
+			min = 1000000;
+		}
 	}
 	return NULL;
 }
@@ -571,7 +592,7 @@ ponger_body(void *data)
 				struct netmap_slot *slot = &rxring->slot[cur];
 				char *src, *dst;
 				src = NETMAP_BUF(rxring, slot->buf_idx);
-				D("got pkt %p of size %d", src, slot->len);
+				//D("got pkt %p of size %d", src, slot->len);
 				rxring->avail--;
 				rxring->cur = NETMAP_RING_NEXT(rxring, cur);
 				rx++;
@@ -590,7 +611,8 @@ ponger_body(void *data)
 		}
 		txring->cur = txcur;
 		txring->avail = txavail;
-		D("tx %d rx %d", sent, rx);
+		targ->count = sent;
+		//D("tx %d rx %d", sent, rx);
 	}
 	return NULL;
 }
