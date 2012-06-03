@@ -240,8 +240,10 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
 #define NM_BDG_BATCH		128	/* entries in the forwarding buffer */
 
 #ifdef linux
+#define	ADD_BDG_REF(ifp)	(NA(ifp)->if_refcount++)
 #define	DROP_BDG_REF(ifp)	(NA(ifp)->if_refcount-- <= 1)
 #else
+#define	ADD_BDG_REF(ifp)	(ifp)->if_refcount++
 #define	DROP_BDG_REF(ifp)	refcount_release(&(ifp)->if_refcount)
 #include <sys/endian.h>
 #include <sys/refcount.h>
@@ -299,7 +301,8 @@ static inline void prefetch (const void *x)
 {
         __asm volatile("prefetcht0 %0" :: "m" (*(const unsigned long *)x));
 }
-#endif
+#endif /* !linux */
+
 // XXX only for multiples of 64 bytes, non overlapped.
 static inline void
 pkt_copy(void *_src, void *_dst, int l)
@@ -626,7 +629,7 @@ get_ifp(const char *name, struct ifnet **ifp)
 				continue;
 			}
 			if (!strcmp(iter->if_xname, name)) {
-				iter->if_refcount++;
+				ADD_BDG_REF(iter);
 				D("found existing interface");
 				BDG_UNLOCK(b);
 				break;
@@ -651,7 +654,7 @@ no_port:
 		strcpy(iter->if_xname, name);
 		bdg_netmap_attach(iter);
 		b->bdg_ports[cand] = iter;
-		iter->if_refcount++;
+		ADD_BDG_REF(iter);
 		BDG_UNLOCK(b);
 		D("attaching virtual bridge");
 	} while (0);
@@ -1342,9 +1345,11 @@ netmap_attach(struct netmap_adapter *na, int num_queues)
 		}
 	}
 #ifdef linux
-	D("netdev_ops %p", ifp->netdev_ops);
-	/* prepare a clone of the netdev ops */
-	na->nm_ndo = *ifp->netdev_ops;
+	if (ifp->netdev_ops) {
+		D("netdev_ops %p", ifp->netdev_ops);
+		/* prepare a clone of the netdev ops */
+		na->nm_ndo = *ifp->netdev_ops;
+	}
 	na->nm_ndo.ndo_start_xmit = netmap_start_linux;
 #endif
 	D("%s for %s", buf ? "ok" : "failed", ifp->if_xname);
@@ -1621,14 +1626,14 @@ bdg_netmap_reg(struct ifnet *ifp, int onoff)
 		}
 		D("setting %s in netmap mode", ifp->if_xname);
 		ifp->if_capenable |= IFCAP_NETMAP;
-		ifp->if_ispare[0] = i;
+		NA(ifp)->bdg_port = i;
 		b->act_ports |= (1<<i);
 		b->bdg_ports[i] = ifp;
 	} else {
 		/* should be in the list, too -- remove from the mask */
 		D("removing %s from netmap mode", ifp->if_xname);
 		ifp->if_capenable &= ~IFCAP_NETMAP;
-		i = ifp->if_ispare[0];
+		i = NA(ifp)->bdg_port;
 		b->act_ports &= ~(1<<i);
 	}
 done:
@@ -1643,7 +1648,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 	int i, ifn;
 	uint64_t all_dst, dst;
 	uint32_t sh, dh;
-	uint64_t mysrc = 1 << ifp->if_ispare[0];
+	uint64_t mysrc = 1 << NA(ifp)->bdg_port;
 	uint64_t smac, dmac;
 	struct netmap_slot *slot;
 
@@ -1669,10 +1674,10 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 			sh = nm_bridge_rthash(buf+6); // XXX hash of source
 			/* update source port forwarding entry */
 			b->ht[sh].mac = smac;	/* XXX expire ? */
-			b->ht[sh].ports = mysrc | (ifp->if_ispare[0] << 16);
+			b->ht[sh].ports = mysrc | (NA(ifp)->bdg_port << 16);
 			if (netmap_verbose)
 			    D("src %02x:%02x:%02x:%02x:%02x:%02x on port %d",
-				s[0], s[1], s[2], s[3], s[4], s[5], ifp->if_ispare[0]);
+				s[0], s[1], s[2], s[3], s[4], s[5], NA(ifp)->bdg_port);
 		}
 		dst = 0;
 		if ( (buf[0] & 1) == 0) { /* unicast */
