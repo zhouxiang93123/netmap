@@ -37,6 +37,9 @@
 #define NETMAP_MEM2    // use the new memory allocator
 
 #if defined(__FreeBSD__)
+#define likely(x)	__builtin_expect(!!(x), 1)
+#define unlikely(x)	__builtin_expect(!!(x), 0)
+
 #define	NM_LOCK_T	struct mtx
 #define	NM_SELINFO_T	struct selinfo
 #define	MBUF_LEN(m)	((m)->m_pkthdr.len)
@@ -389,7 +392,7 @@ static inline void *
 NMB(struct netmap_slot *slot)
 {
 	uint32_t i = slot->buf_idx;
-	return (i >= netmap_total_buffers) ?  NMB_VA(0) : NMB_VA(i);
+	return (unlikely(i >= netmap_total_buffers)) ?  NMB_VA(0) : NMB_VA(i);
 }
 
 static inline void *

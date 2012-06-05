@@ -309,8 +309,6 @@ pkt_copy(void *_src, void *_dst, int l)
 {
         uint64_t *src = _src;
         uint64_t *dst = _dst;
-#define likely(x)       __builtin_expect(!!(x), 1)
-#define unlikely(x)       __builtin_expect(!!(x), 0)
         if (unlikely(l >= 1024)) {
                 bcopy(src, dst, l);
                 return;
@@ -1652,7 +1650,6 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 	uint64_t smac, dmac;
 	struct netmap_slot *slot;
 
-
 	ND("prepare to send %d packets, act_ports 0x%x", n, b->act_ports);
 	/* only consider valid destinations */
 	all_dst = (b->act_ports & ~mysrc);
@@ -1662,7 +1659,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 		dmac = le64toh(*(uint64_t *)(buf)) & 0xffffffffffff;
 		smac = le64toh(*(uint64_t *)(buf + 4));
 		smac >>= 16;
-		if (netmap_verbose) {
+		if (unlikely(netmap_verbose)) {
 		    uint8_t *s = buf+6, *d = buf;
 		    D("%d len %4d %02x:%02x:%02x:%02x:%02x:%02x -> %02x:%02x:%02x:%02x:%02x:%02x",
 			i,
@@ -1694,7 +1691,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 		if (dst == 0)
 			dst = all_dst;
 		dst &= all_dst; /* only consider valid ports */
-		if (netmap_verbose)
+		if (unlikely(netmap_verbose))
 			D("pkt goes to ports 0x%x", (uint32_t)dst);
 		ft[i].dst = dst;
 	}
@@ -1783,12 +1780,12 @@ bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	for (j = kring->nr_hwcur; j != k; j = (j == lim) ? 0 : j+1) {
 		struct netmap_slot *slot = &ring->slot[j];
 		int len = ft[ft_i].len = slot->len;
-		ft[ft_i].buf = NMB(slot);
+		char *buf = ft[ft_i].buf = NMB(slot);
 
-		//prefetch(buf);
-		if (len < 14)
+		prefetch(buf);
+		if (unlikely(len < 14))
 			continue;
-		if (++ft_i == netmap_bridge)
+		if (unlikely(++ft_i == netmap_bridge))
 			ft_i = nm_bdg_flush(ft, ft_i, ifp, &nm_bridge);
 	}
 	if (ft_i)
