@@ -220,8 +220,6 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, copy, CTLFLAG_RW, &netmap_copy, 0 , "");
 
 #ifdef NM_BRIDGE /* support for netmap bridge */
 
-int netmap_bridge = 1; /* bridge flags */
-SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
 /*
  * system parameters.
  *
@@ -239,6 +237,8 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
 #define NM_BDG_HASH		1024	/* forwarding table entries */
 #define NM_BDG_BATCH		128	/* entries in the forwarding buffer */
 
+int netmap_bridge = NM_BDG_BATCH; /* bridge batch size */
+SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
 #ifdef linux
 #define	ADD_BDG_REF(ifp)	(NA(ifp)->if_refcount++)
 #define	DROP_BDG_REF(ifp)	(NA(ifp)->if_refcount-- <= 1)
@@ -1652,9 +1652,10 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 	uint64_t smac, dmac;
 	struct netmap_slot *slot;
 
+
 	ND("prepare to send %d packets, act_ports 0x%x", n, b->act_ports);
 	/* only consider valid destinations */
-	all_dst = (b->act_ports & ~mysrc) | 0xff0000; // XXX temp, keep number
+	all_dst = (b->act_ports & ~mysrc);
 	/* first pass: hash and find destinations */
 	for (i = 0; i < n; i++) {
 		uint8_t *buf = ft[i].buf;
@@ -1674,7 +1675,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 			sh = nm_bridge_rthash(buf+6); // XXX hash of source
 			/* update source port forwarding entry */
 			b->ht[sh].mac = smac;	/* XXX expire ? */
-			b->ht[sh].ports = mysrc | (NA(ifp)->bdg_port << 16);
+			b->ht[sh].ports = mysrc;// | (NA(ifp)->bdg_port << 16);
 			if (netmap_verbose)
 			    D("src %02x:%02x:%02x:%02x:%02x:%02x on port %d",
 				s[0], s[1], s[2], s[3], s[4], s[5], NA(ifp)->bdg_port);
@@ -1763,7 +1764,7 @@ bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_ring *ring = kring->ring;
 	int i, j, k, lim = kring->nkr_num_slots - 1;
 	struct nm_bdg_fwd *ft = (struct nm_bdg_fwd *)(ifp + 1);
-	int ft_i;
+	int ft_i;	/* position in the forwarding table */
 
 	k = ring->cur;
 	if (k > lim)
@@ -1771,21 +1772,23 @@ bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	if (do_lock)
 		na->nm_lock(ifp, NETMAP_TX_LOCK, ring_nr);
 
-	if (!netmap_bridge) { /* testing only */
+	if (netmap_bridge == 0) { /* testing only */
 		j = k; // used all
 		goto done;
 	}
+	if (netmap_bridge > NM_BDG_BATCH)
+		netmap_bridge = NM_BDG_BATCH;
 
 	ft_i = 0;	/* start from 0 */
 	for (j = kring->nr_hwcur; j != k; j = (j == lim) ? 0 : j+1) {
 		struct netmap_slot *slot = &ring->slot[j];
 		int len = ft[ft_i].len = slot->len;
-		char *buf = ft[ft_i].buf = NMB(slot);
+		ft[ft_i].buf = NMB(slot);
 
-		prefetch(buf);
+		//prefetch(buf);
 		if (len < 14)
 			continue;
-		if (++ft_i == NM_BDG_BATCH)
+		if (++ft_i == netmap_bridge)
 			ft_i = nm_bdg_flush(ft, ft_i, ifp, &nm_bridge);
 	}
 	if (ft_i)

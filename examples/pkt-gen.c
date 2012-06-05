@@ -663,12 +663,14 @@ D("start");
 		/*
 		 * scan our queues and send on those with room
 		 */
-		if (sent > 100000 && !(targ->g->options & OPT_COPY) )
+		if (options & OPT_COPY && sent > 100000 && !(targ->g->options & OPT_COPY) ) {
+			D("drop copy");
 			options &= ~OPT_COPY;
+		}
 		for (i = targ->qfirst; i < targ->qlast; i++) {
-			int m, limit = n == 0 ? targ->g->burst :
-				MIN(n - sent, targ->g->burst);
-
+			int m, limit = targ->g->burst;
+			if (n > 0 && n - sent < limit)
+				limit = n - sent;
 			txring = NETMAP_TXRING(nifp, i);
 			if (txring->avail == 0)
 				continue;

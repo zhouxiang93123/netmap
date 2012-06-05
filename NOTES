@@ -1,4 +1,34 @@
 --- status and other development notes ---
+20120528 NM_BRIDGE
+	error on initialization order for locks.
+	Not a problem on linux, but it is on FreeBSD with witnesses.
+
+20120524 virtual bridging
+
+get_ifp lookup the fake bridge interface
+	returns the object with a reference
+
+netmap_if_new() allocates the software rings
+
+na->nm_register() puts the interface in netmap mode
+	in our case, attach to an (existing) bridge
+
+
+20120503 interrupt dispatching
+	apic_vector.S::call lapic_handle_intr
+	`-> intr_execute_handlers()
+	  `-> kern_intr.c::intr_event_handle()
+	   `-> if ih_filter --> call filter
+		or if filter returns FILTER_SCHEDULE_THREAD
+	    `-> schedule thread to execute handler
+
+    in the lem driver, the filter is lem_irq_fast() which
+    calls taskqueue_enqueue to run lem_handle_rxtx.
+    In qemu it takes between 70 and 210k cycles (20..60us)
+    to schedule the task.
+	On the test machine, at least 10k ticks corresponding
+    to about 3us before the task runs (rarely we have 3k ticks).
+
 20120505 -- immediate operation for output and input
     OUT: we get the mbuf, need to copy into the nm_buf and
 	kick the output queue. If the queue is idle we should
@@ -9,6 +39,7 @@
 	on the emulator (3.4GHz machine) up to 130k cycles, min 70k
 	on the i7-870 @2.93G the min is 3k cycles, more often 13k
 		and several 30k spikes.
+
 
 20120503 -- prefetch and the like
 + added userspace flags to pkt-gen to enable various
