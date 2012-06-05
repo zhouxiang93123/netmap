@@ -442,12 +442,12 @@ fast_bcopy(void *_src, void *_dst, int l)
 		bcopy(src, dst, l);
 		return;
 	}
-	for (; l > 0; l-=32) {
+	for (; likely(l > 0); l-=64) {
 		*dst++ = *src++;
 		*dst++ = *src++;
 		*dst++ = *src++;
 		*dst++ = *src++;
-#if 0
+#if 1
 		*dst++ = *src++;
 		*dst++ = *src++;
 		*dst++ = *src++;
