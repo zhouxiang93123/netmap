@@ -1654,7 +1654,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 	/* only consider valid destinations */
 	all_dst = (b->act_ports & ~mysrc);
 	/* first pass: hash and find destinations */
-	for (i = 0; i < n; i++) {
+	for (i = 0; likely(i < n); i++) {
 		uint8_t *buf = ft[i].buf;
 		dmac = le64toh(*(uint64_t *)(buf)) & 0xffffffffffff;
 		smac = le64toh(*(uint64_t *)(buf + 4));
@@ -1667,6 +1667,11 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 			s[0], s[1], s[2], s[3], s[4], s[5],
 			d[0], d[1], d[2], d[3], d[4], d[5]);
 		}
+		/*
+		 * The hash is somewhat expensive, there might be some
+		 * worthwhile optimizations here.
+		 */
+		/* the hash does have a cost. */
 		if ((buf[6] & 1) == 0) { /* valid src */
 		    	uint8_t *s = buf+6;
 			sh = nm_bridge_rthash(buf+6); // XXX hash of source
@@ -1715,7 +1720,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 		na = NA(dst_ifp);
 
 		/* inside, scan slots */
-		for (i = 0; i < n; i++) {
+		for (i = 0; likely(i < n); i++) {
 			if ((ft[i].dst & dst) == 0)
 				continue;	/* not here */
 			if (!locked) {
@@ -1723,8 +1728,8 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 				ring = kring->ring;
 				lim = kring->nkr_num_slots - 1;
 				na->nm_lock(dst_ifp, NETMAP_RX_LOCK, 0);
+				locked = 1;
 			}
-			locked = 1;
 			if (kring->nr_hwavail >= lim) {
 				if (netmap_verbose)
 					D("rx ring full on %s", ifp->if_xname);
@@ -1777,7 +1782,7 @@ bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		netmap_bridge = NM_BDG_BATCH;
 
 	ft_i = 0;	/* start from 0 */
-	for (j = kring->nr_hwcur; j != k; j = (j == lim) ? 0 : j+1) {
+	for (j = kring->nr_hwcur; likely(j != k); j = unlikely(j == lim) ? 0 : j+1) {
 		struct netmap_slot *slot = &ring->slot[j];
 		int len = ft[ft_i].len = slot->len;
 		char *buf = ft[ft_i].buf = NMB(slot);
@@ -1841,7 +1846,7 @@ bdg_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		if (n < 0)
 			n += kring->nkr_num_slots;
 		ND("userspace releases %d packets", n);
-                for (n = 0; j != k; n++) {
+                for (n = 0; likely(j != k); n++) {
                         struct netmap_slot *slot = &ring->slot[j];
                         void *addr = NMB(slot);
 
@@ -1853,7 +1858,7 @@ bdg_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			/* decrease refcount for buffer */
 
 			slot->flags &= ~NS_BUF_CHANGED;
-                        j = (j == lim) ? 0 : j + 1;
+                        j = unlikely(j == lim) ? 0 : j + 1;
                 }
                 kring->nr_hwavail -= n;
                 kring->nr_hwcur = k;
