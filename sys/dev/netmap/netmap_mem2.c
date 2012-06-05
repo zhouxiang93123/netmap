@@ -85,6 +85,7 @@
 /*
  * netmap rings are up to 2..4k descriptors, 8 bytes each,
  * plus some glue at the beginning (32 bytes).
+ * We set the default ring size to 9 pages (36K) and enable
  * a few hundreds of them.
  */
 #define NETMAP_RING_MAX_SIZE    (9*PAGE_SIZE)
