@@ -59,7 +59,6 @@ const char *default_payload="netmap pkt-gen Luigi Rizzo and Matteo Landi\n"
 #include <sys/param.h>
 #include <sys/cpuset.h>	/* cpu_set */
 #include <sys/sysctl.h>	/* sysctl */
-#include <sys/time.h>	/* timersub */
 
 #include <net/ethernet.h>
 #include <net/if.h>	/* ifreq */
@@ -72,6 +71,7 @@ const char *default_payload="netmap pkt-gen Luigi Rizzo and Matteo Landi\n"
 #include <net/netmap.h>
 #include <net/netmap_user.h>
 #include <pcap/pcap.h>
+#include <sys/time.h>	/* timersub */
 
 
 static inline int min(int a, int b) { return a < b ? a : b; }
@@ -486,7 +486,7 @@ pinger_body(void *data)
 	fds[0].fd = targ->fd;
 	fds[0].events = (POLLIN);
 	static uint32_t sent;
-	struct timeval ts, now;
+	struct timespec ts, now;
 	uint32_t count = 0, min = 1000000, av = 0;
 
 	if (targ->g->nthreads > 1) {
@@ -506,7 +506,7 @@ pinger_body(void *data)
 			D("-- ouch, cannot send");
 		} else {
 			pkt_copy(&targ->pkt, p, targ->g->pkt_size);
-			gettimeofday(&ts, NULL);
+			clock_gettime(CLOCK_REALTIME_PRECISE, &ts);
 			bcopy(&sent, p+42, sizeof(sent));
 			bcopy(&ts, p+46, sizeof(ts));
 			sent++;
@@ -527,16 +527,21 @@ pinger_body(void *data)
 				slot = &ring->slot[ring->cur];
 				p = NETMAP_BUF(ring, slot->buf_idx);
 
-				gettimeofday(&now, NULL);
+				clock_gettime(CLOCK_REALTIME_PRECISE, &now);
 				bcopy(p+42, &seq, sizeof(seq));
 				bcopy(p+46, &ts, sizeof(ts));
-				timersub(&now, &ts, &ts);
-				if (0) D("seq %d/%d delta %d.%06d", seq, sent,
-					(int)ts.tv_sec, (int)ts.tv_usec);
-				if (ts.tv_usec < min)
-					min = ts.tv_usec;
+				ts.tv_sec = now.tv_sec - ts.tv_sec;
+				ts.tv_nsec = now.tv_nsec - ts.tv_nsec;
+				if (ts.tv_nsec < 0) {
+					ts.tv_nsec += 1000000000;
+					ts.tv_sec--;
+				}
+				if (0) D("seq %d/%d delta %d.%09d", seq, sent,
+					(int)ts.tv_sec, (int)ts.tv_nsec);
+				if (ts.tv_nsec < min)
+					min = ts.tv_nsec;
 				count ++;
-				av += ts.tv_usec;
+				av += ts.tv_nsec;
 				ring->avail--;
 				ring->cur = NETMAP_RING_NEXT(ring, ring->cur);
 				rx++;
@@ -577,10 +582,15 @@ ponger_body(void *data)
 	D("understood ponger %d but don't know how to do it", n);
 	while (n == 0 || sent < n) {
 		uint32_t txcur, txavail;
+//#define BUSYWAIT
+#ifdef BUSYWAIT
+		ioctl(fds[0].fd, NIOCRXSYNC, NULL);
+#else
 		if (poll(fds, 1, 1000) <= 0) {
 			D("poll error/timeout on queue %d", targ->me);
 			continue;
 		}
+#endif
 		txring = NETMAP_TXRING(nifp, 0);
 		txcur = txring->cur;
 		txavail = txring->avail;
@@ -612,6 +622,9 @@ ponger_body(void *data)
 		txring->cur = txcur;
 		txring->avail = txavail;
 		targ->count = sent;
+#ifdef BUSYWAIT
+		ioctl(fds[0].fd, NIOCTXSYNC, NULL);
+#endif
 		//D("tx %d rx %d", sent, rx);
 	}
 	return NULL;
