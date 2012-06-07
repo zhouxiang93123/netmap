@@ -500,6 +500,7 @@ pinger_body(void *data)
 		char *p;
 	    for (i = 0; i < 1; i++) {
 		slot = &ring->slot[ring->cur];
+		slot->len = targ->g->pkt_size;
 		p = NETMAP_BUF(ring, slot->buf_idx);
 
 		if (ring->avail == 0) {
