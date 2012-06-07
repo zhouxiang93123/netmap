@@ -516,7 +516,7 @@ pinger_body(void *data)
 		}
 	    }
 		/* should use a parameter to decide how often to send */
-		if (poll(fds, 1, 1000) <= 0) {
+		if (poll(fds, 1, 300) <= 0) {
 			D("poll error/timeout on queue %d", targ->me);
 			continue;
 		}
