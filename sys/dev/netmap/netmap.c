@@ -1671,13 +1671,12 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 		 * The hash is somewhat expensive, there might be some
 		 * worthwhile optimizations here.
 		 */
-		/* the hash does have a cost. */
 		if ((buf[6] & 1) == 0) { /* valid src */
 		    	uint8_t *s = buf+6;
 			sh = nm_bridge_rthash(buf+6); // XXX hash of source
 			/* update source port forwarding entry */
 			b->ht[sh].mac = smac;	/* XXX expire ? */
-			b->ht[sh].ports = mysrc;// | (NA(ifp)->bdg_port << 16);
+			b->ht[sh].ports = mysrc;
 			if (netmap_verbose)
 			    D("src %02x:%02x:%02x:%02x:%02x:%02x on port %d",
 				s[0], s[1], s[2], s[3], s[4], s[5], NA(ifp)->bdg_port);
@@ -1777,7 +1776,7 @@ bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	if (do_lock)
 		na->nm_lock(ifp, NETMAP_TX_LOCK, ring_nr);
 
-	if (netmap_bridge == 0) { /* testing only */
+	if (netmap_bridge <= 0) { /* testing only */
 		j = k; // used all
 		goto done;
 	}
