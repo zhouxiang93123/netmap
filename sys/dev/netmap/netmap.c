@@ -235,7 +235,7 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, copy, CTLFLAG_RW, &netmap_copy, 0 , "");
 #define NM_BDG_MAXPORTS		16	/* up to 64 ? */
 #define NM_BRIDGE_RINGSIZE	1024	/* in the device */
 #define NM_BDG_HASH		1024	/* forwarding table entries */
-#define NM_BDG_BATCH		128	/* entries in the forwarding buffer */
+#define NM_BDG_BATCH		1024	/* entries in the forwarding buffer */
 
 int netmap_bridge = NM_BDG_BATCH; /* bridge batch size */
 SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
@@ -313,7 +313,7 @@ pkt_copy(void *_src, void *_dst, int l)
                 bcopy(src, dst, l);
                 return;
         }
-        for (; l > 0; l-=64) {
+        for (; likely(l > 0); l-=64) {
                 *dst++ = *src++;
                 *dst++ = *src++;
                 *dst++ = *src++;
@@ -1700,16 +1700,16 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 			D("pkt goes to ports 0x%x", (uint32_t)dst);
 		ft[i].dst = dst;
 	}
+
 	/* second pass, scan interfaces and forward */
 	all_dst = (b->act_ports & ~mysrc);
 	for (ifn = 0; all_dst; ifn++) {
 		struct ifnet *dst_ifp = b->bdg_ports[ifn];
 		struct netmap_adapter *na;
-		struct netmap_kring *kring = NULL;
-		struct netmap_ring *ring = NULL;
-		int j, lim = 0, sent=0;
-		int locked = 0;
-		
+		struct netmap_kring *kring;
+		struct netmap_ring *ring;
+		int j, lim, sent, locked;
+
 		if (!dst_ifp)
 			continue;
 		ND("scan port %d %s", ifn, dst_ifp->if_xname);
@@ -1719,6 +1719,9 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 		all_dst &= ~dst;	/* clear current node */
 		na = NA(dst_ifp);
 
+		ring = NULL;
+		kring = NULL;
+		lim = sent = locked = 0;
 		/* inside, scan slots */
 		for (i = 0; likely(i < n); i++) {
 			if ((ft[i].dst & dst) == 0)
@@ -1730,7 +1733,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 				na->nm_lock(dst_ifp, NETMAP_RX_LOCK, 0);
 				locked = 1;
 			}
-			if (kring->nr_hwavail >= lim) {
+			if (unlikely(kring->nr_hwavail >= lim)) {
 				if (netmap_verbose)
 					D("rx ring full on %s", ifp->if_xname);
 				break;
