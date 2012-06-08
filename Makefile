@@ -10,8 +10,8 @@ DIST_SRCS += ./examples ./test
 
 RELEASE_SRCS := ./sys/net ./sys/modules ./examples
 RELEASE_SRCS += ./sys/dev
-RELEASE_SRCS += ./head-netmap.diff ./README # ./NOTES
-RELEASE_EXCL := --exclude .svn --exclude sys/dev/\*/i\*.c
+RELEASE_SRCS += ./README # ./NOTES
+RELEASE_EXCL := --exclude .svn --exclude sys/dev/\*/i\*.c --exclude examples/testmod
 
 tgz:
 	tar cvzf /usr/ports/distfiles/${DIST_NAME} \
