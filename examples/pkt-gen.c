@@ -166,6 +166,11 @@ struct ip_range {
 	struct in_addr start, end;
 };
 
+struct mac_range {
+	char *name;
+	struct ether_addr start, end;
+};
+
 /*
  * global arguments for all threads
  */
@@ -173,8 +178,8 @@ struct ip_range {
 struct glob_arg {
 	struct ip_range src_ip;
 	struct ip_range dst_ip;
-	const char *src_mac;
-	const char *dst_mac;
+	struct mac_range dst_mac;
+	struct mac_range src_mac;
 	int pkt_size;
 	int burst;
 	int npackets;	/* total packets to send */
@@ -209,11 +214,6 @@ struct targ {
 	pthread_t thread;
 	int affinity;
 
-	uint8_t	dst_mac[6];
-	uint8_t	src_mac[6];
-	u_int dst_mac_range;
-	u_int src_mac_range;
-
 	struct pkt pkt;
 };
 
@@ -225,7 +225,7 @@ struct targ {
 static void
 extract_ip_range(struct ip_range *r)
 {
-	D("extract range from %s", r->name);
+	D("extract IP range from %s", r->name);
 	inet_aton(r->name, &r->start);
 	inet_aton(r->name, &r->end);
 #if 0
@@ -236,6 +236,27 @@ extract_ip_range(struct ip_range *r)
 	}
 #endif
 	D("%s starts at %s", r->name, inet_ntoa(r->start));
+}
+
+static void
+extract_mac_range(struct mac_range *r)
+{
+	D("extract MAC range from %s", r->name);
+	bcopy(ether_aton(r->name), &r->start, 6);
+	bcopy(ether_aton(r->name), &r->end, 6);
+#if 0
+	bcopy(targ->src_mac, eh->ether_shost, 6);
+	p = index(targ->g->src_mac, '-');
+	if (p)
+		targ->src_mac_range = atoi(p+1);
+
+	bcopy(ether_aton(targ->g->dst_mac), targ->dst_mac, 6);
+	bcopy(targ->dst_mac, eh->ether_dhost, 6);
+	p = index(targ->g->dst_mac, '-');
+	if (p)
+		targ->dst_mac_range = atoi(p+1);
+#endif
+	D("%s starts at %s", r->name, ether_ntoa(&r->start));
 }
 
 static struct targ *targs;
@@ -397,7 +418,6 @@ initialize_packet(struct targ *targ)
 	struct udphdr *udp;
 	uint16_t paylen = targ->g->pkt_size - sizeof(*eh) - sizeof(struct ip);
 	int i, l, l0 = strlen(default_payload);
-	char *p;
 
 	for (i = 0; i < paylen;) {
 		l = min(l0, paylen - i);
@@ -422,9 +442,10 @@ initialize_packet(struct targ *targ)
 
 
 	udp = &pkt->udp;
-	udp->uh_sport = htons(1234);
-        udp->uh_dport = htons(4321);
+	udp->uh_sport = htons(4096);
+        udp->uh_dport = htons(8192);
 	udp->uh_ulen = htons(paylen);
+	/* Magic: taken from sbin/dhclient/packet.c */
 	udp->uh_sum = wrapsum(checksum(udp, sizeof(*udp),
                     checksum(pkt->body,
                         paylen - sizeof(*udp),
@@ -435,18 +456,8 @@ initialize_packet(struct targ *targ)
                 ));
 
 	eh = &pkt->eh;
-	bcopy(ether_aton(targ->g->src_mac), targ->src_mac, 6);
-	bcopy(targ->src_mac, eh->ether_shost, 6);
-	p = index(targ->g->src_mac, '-');
-	if (p)
-		targ->src_mac_range = atoi(p+1);
-
-	bcopy(ether_aton(targ->g->dst_mac), targ->dst_mac, 6);
-	bcopy(targ->dst_mac, eh->ether_dhost, 6);
-	p = index(targ->g->dst_mac, '-');
-	if (p)
-		targ->dst_mac_range = atoi(p+1);
-
+	bcopy(&targ->g->src_mac.start, eh->ether_shost, 6);
+	bcopy(&targ->g->dst_mac.start, eh->ether_dhost, 6);
 	eh->ether_type = htons(ETHERTYPE_IP);
 }
 
@@ -936,7 +947,8 @@ usage(void)
 		"\t-s src-ip		end with %%n to sweep n addresses\n"
 		"\t-D dst-mac		end with %%n to sweep n addresses\n"
 		"\t-S src-mac		end with %%n to sweep n addresses\n"
-		"\t-b burst size		testing, mostly\n"
+		"\t-a cpu_id		use setaffinity\n"
+		"\t-b burst size	testing, mostly\n"
 		"\t-c cores		cores to use\n"
 		"\t-p threads		processes/threads to use\n"
 		"\t-T report_ms		milliseconds between reports\n"
@@ -976,14 +988,15 @@ main(int arc, char **argv)
 	char *ifname = NULL;
 	int wait_link = 2;
 	int devqueues = 1;	/* how many device queues */
+	int affinity = -1;
 
 	bzero(&g, sizeof(g));
 
 	/* ip addresses can also be a range x.x.x.x-x.x.x.y */
 	g.src_ip.name = "10.0.0.1";
 	g.dst_ip.name = "10.1.0.1";
-	g.dst_mac = "ff:ff:ff:ff:ff:ff";
-	g.src_mac = NULL;
+	g.dst_mac.name = "ff:ff:ff:ff:ff:ff";
+	g.src_mac.name = NULL;
 	g.pkt_size = 60;
 	g.burst = 512;		// default
 	g.nthreads = 1;
@@ -1015,6 +1028,9 @@ main(int arc, char **argv)
 
 		case 'o':
 			g.options = atoi(optarg);
+			break;
+		case 'a':       /* force affinity */
+			affinity = atoi(optarg);
 			break;
 		case 'i':	/* interface */
 			ifname = optarg;
@@ -1057,14 +1073,10 @@ main(int arc, char **argv)
 			break;
 
 		case 'D': /* destination mac */
-			g.dst_mac = optarg;
-	{
-		struct ether_addr *mac = ether_aton(g.dst_mac);
-		D("ether_aton(%s) gives %p", g.dst_mac, mac);
-	}
+			g.dst_mac.name = optarg;
 			break;
 		case 'S': /* source mac */
-			g.src_mac = optarg;
+			g.src_mac.name = optarg;
 			break;
 		case 'v':
 			verbose++;
@@ -1089,18 +1101,20 @@ main(int arc, char **argv)
 		usage();
 	}
 
-	if (g.src_mac == NULL) {
+	if (g.src_mac.name == NULL) {
 		static char mybuf[20] = "00:00:00:00:00:00";
 		/* retrieve source mac address. */
 		if (source_hwaddr(ifname, mybuf) == -1) {
 			D("Unable to retrieve source mac");
 			// continue, fail later
 		}
-		g.src_mac = mybuf;
+		g.src_mac.name = mybuf;
 	}
 	/* extract address ranges */
 	extract_ip_range(&g.src_ip);
 	extract_ip_range(&g.dst_ip);
+	extract_mac_range(&g.src_mac);
+	extract_mac_range(&g.dst_mac);
 
     if (g.use_pcap) {
 	D("using pcap on %s", ifname);
@@ -1188,7 +1202,7 @@ main(int arc, char **argv)
 	if (td_body == sender_body) {
 		fprintf(stdout, "%s -> %s (%s -> %s)\n",
 			g.src_ip.name, g.dst_ip.name,
-			g.src_mac, g.dst_mac);
+			g.src_mac.name, g.dst_mac.name);
 	}
 			
 	/* Exit if something went wrong. */
