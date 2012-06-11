@@ -217,6 +217,16 @@ do_ioctl(struct my_ring *me, int what)
 {
 	struct ifreq ifr;
 	int error;
+	int fd = me->fd;
+#ifdef linux
+	struct ethtool_value eval;
+	fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (fd == -1) {
+		D("socket failed");
+		return -1;
+	}
+#endif /* linux */
+
 
 	bzero(&ifr, sizeof(ifr));
 	strncpy(ifr.ifr_name, me->nmr.nr_name, sizeof(ifr.ifr_name));
@@ -226,12 +236,20 @@ do_ioctl(struct my_ring *me, int what)
 		ifr.ifr_flagshigh = (me->if_flags >> 16) & 0xffff;
 		ifr.ifr_flags = me->if_flags & 0xffff;
 		break;
+#ifndef linux
 	case SIOCSIFCAP:
 		ifr.ifr_reqcap = me->if_reqcap;
 		ifr.ifr_curcap = me->if_curcap;
 		break;
+#else /* linux */
+	case SIOCETHTOOL:
+		eval.cmd = subcmd;
+		eval.data = subvalue;
+		ifr.ifr_data = (caddr_t)&eval;
+		break;
+#endif /* linux */
 	}
-	error = ioctl(me->fd, what, &ifr);
+	error = ioctl(fd, what, &ifr);
 	if (error) {
 		D("ioctl 0x%x error %d", what, error);
 		return error;
@@ -246,12 +264,16 @@ do_ioctl(struct my_ring *me, int what)
 			(uint16_t)ifr.ifr_flagshigh, me->if_flags);
 		break;
 
+#ifndef linux
 	case SIOCGIFCAP:
 		me->if_reqcap = ifr.ifr_reqcap;
 		me->if_curcap = ifr.ifr_curcap;
 		D("curcap are 0x%x", me->if_curcap);
 		break;
+#endif /* !linux */
 	}
+	if (fd != me->fd)
+		close(fd);
 	return 0;
 }
 
@@ -394,7 +416,7 @@ pcap_findalldevs(pcap_if_t **alldevsp, __unused char *errbuf)
 		}
 #define SA_NEXT(x) ((struct sockaddr *)((char *)(x) + (x)->sa_len))
 		pca->addr = (struct sockaddr *)(pca + 1);
-		bcopy(i->ifa_addr, pca->addr, i->ifa_addr->sa_len);
+		pkt_copy(i->ifa_addr, pca->addr, i->ifa_addr->sa_len);
 		if (i->ifa_netmask) {
 			pca->netmask = SA_NEXT(pca->addr);
 			bcopy(i->ifa_netmask, pca->netmask, i->ifa_netmask->sa_len);
