@@ -95,6 +95,18 @@ do_ioctl(struct my_ring *me, int what)
 {
 	struct ifreq ifr;
 	int error;
+#ifdef __FreeBSD__
+	int fd = me->fd;
+#else  /* linux */
+	struct ethtool_value eval;
+	int fd;
+	fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (fd < 0) {
+		printf("Error: cannot get device control socket.\n");
+		return -1;
+	}
+#endif /* !linux */
+
 
 	bzero(&ifr, sizeof(ifr));
 	strncpy(ifr.ifr_name, me->ifname, sizeof(ifr.ifr_name));
@@ -103,16 +115,23 @@ do_ioctl(struct my_ring *me, int what)
 		ifr.ifr_flagshigh = me->if_flags >> 16;
 		ifr.ifr_flags = me->if_flags & 0xffff;
 		break;
+#ifdef __FreeBSD__
 	case SIOCSIFCAP:
 		ifr.ifr_reqcap = me->if_reqcap;
 		ifr.ifr_curcap = me->if_curcap;
 		break;
+#else /* linux */
+	case SIOCETHTOOL:
+		eval.cmd = subcmd;
+		eval.data = 0;
+		ifr.ifr_data = (caddr_t)&eval;
+		break;
+#endif /* linux */
+
 	}
-	error = ioctl(me->fd, what, &ifr);
-	if (error) {
-		D("ioctl error %d", what);
-		return error;
-	}
+	error = ioctl(fd, what, &ifr);
+	if (error)
+		goto done;
 	switch (what) {
 	case SIOCGIFFLAGS:
 		me->if_flags = (ifr.ifr_flagshigh << 16) |
@@ -121,14 +140,22 @@ do_ioctl(struct my_ring *me, int what)
 			D("flags are 0x%x", me->if_flags);
 		break;
 
+#ifdef __FreeBSD__
 	case SIOCGIFCAP:
 		me->if_reqcap = ifr.ifr_reqcap;
 		me->if_curcap = ifr.ifr_curcap;
 		if (verbose)
 			D("curcap are 0x%x", me->if_curcap);
 		break;
+#endif /* __FreeBSD__ */
 	}
-	return 0;
+done:
+#ifdef linux
+	close(fd);
+#endif
+	if (error)
+		D("ioctl error %d %d", error, what);
+	return error;
 }
 
 /*
