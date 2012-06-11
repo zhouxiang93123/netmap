@@ -1003,7 +1003,7 @@ main(int arc, char **argv)
 	g.cpus = 1;
 
 	while ( (ch = getopt(arc, argv,
-			"f:n:i:t:r:l:d:s:D:S:b:c:o:p:PT:w:v")) != -1) {
+			"a:f:n:i:t:r:l:d:s:D:S:b:c:o:p:PT:w:v")) != -1) {
 		struct sf *fn;
 
 		switch(ch) {
