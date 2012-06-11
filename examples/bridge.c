@@ -17,10 +17,21 @@
 #include <fcntl.h> /* open */
 #include <unistd.h> /* close */
 
+#ifdef __linux__
+#define ifr_flagshigh  ifr_flags
+#define ifr_curcap     ifr_flags
+#define ifr_reqcap     ifr_flags
+#define IFF_PPROMISC   IFF_PROMISC
+#define __unused __attribute__((__unused__))
+#include <linux/ethtool.h>
+#include <linux/sockios.h>
+#else
 #include <sys/endian.h> /* le64toh */
+#include <machine/param.h>
+#endif
+
 #include <sys/mman.h> /* PROT_* */
 #include <sys/ioctl.h> /* ioctl */
-#include <machine/param.h>
 #include <sys/poll.h>
 #include <sys/socket.h> /* sockaddr.. */
 #include <arpa/inet.h> /* ntohs */
@@ -29,6 +40,7 @@
 #include <net/ethernet.h>
 #include <net/netmap.h>
 #include <net/netmap_user.h>
+#include <sys/time.h>  // gettimeofday
 
 #include <netinet/in.h> /* sockaddr_in */
 

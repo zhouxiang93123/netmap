@@ -337,10 +337,12 @@ pcap_findalldevs(pcap_if_t **alldevsp, __unused char *errbuf)
 	*alldevsp = NULL;
 	i_head = NULL;
 
+#ifndef linux
 	if (getifaddrs(&i_head)) {
 		D("cannot get if addresses");
 		return -1;
 	}
+#endif /* !linux */
 	for (i = i_head; i; i = i->ifa_next) {
 		//struct ifaddrs   *ifa;
 		struct pcap_addr *pca;

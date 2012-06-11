@@ -219,7 +219,9 @@ static int global_nthreads;
 static void
 sigint_h(__unused int sig)
 {
-	for (int i = 0; i < global_nthreads; i++) {
+	int i;
+
+	for (i = 0; i < global_nthreads; i++) {
 		/* cancel active threads. */
 		if (targs[i].used == 0)
 			continue;
@@ -232,11 +234,11 @@ sigint_h(__unused int sig)
 	signal(SIGINT, SIG_DFL);
 }
 
-
 /* sysctl wrapper to return the number of active CPUs */
 static int
 system_ncpus(void)
 {
+#ifdef __FreeBSD__
 	int mib[2], ncpus;
 	size_t len;
 
@@ -246,6 +248,9 @@ system_ncpus(void)
 	sysctl(mib, 2, &ncpus, &len, NULL, 0);
 
 	return (ncpus);
+#else
+	return 1;
+#endif /* !__FreeBSD__ */
 }
 
 /*
@@ -289,6 +294,7 @@ source_hwaddr(const char *ifname, char *buf)
 static int
 setaffinity(pthread_t me, int i)
 {
+#ifdef __FreeBSD__
 	cpuset_t cpumask;
 
 	if (i == -1)
@@ -302,6 +308,7 @@ setaffinity(pthread_t me, int i)
 		D("Unable to set affinity");
 		return 1;
 	}
+#endif /* __FreeBSD__ */
 	return 0;
 }
 
