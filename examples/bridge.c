@@ -107,7 +107,6 @@ do_ioctl(struct my_ring *me, int what)
 	}
 #endif /* !linux */
 
-
 	bzero(&ifr, sizeof(ifr));
 	strncpy(ifr.ifr_name, me->ifname, sizeof(ifr.ifr_name));
 	switch (what) {
@@ -127,7 +126,6 @@ do_ioctl(struct my_ring *me, int what)
 		ifr.ifr_data = (caddr_t)&eval;
 		break;
 #endif /* linux */
-
 	}
 	error = ioctl(fd, what, &ifr);
 	if (error)
@@ -173,12 +171,13 @@ netmap_open(struct my_ring *me, int ringid)
 		return (-1);
 	}
 	bzero(&req, sizeof(req));
+	req.nr_version = NETMAP_API;
 	strncpy(req.nr_name, me->ifname, sizeof(req.nr_name));
 	req.nr_ringid = ringid;
-	req.nr_version = NETMAP_API;
 	err = ioctl(fd, NIOCGINFO, &req);
 	if (err) {
-		D("cannot get info on %s", me->ifname);
+		D("cannot get info on %s, errno %d ver %d",
+			me->ifname, errno, req.nr_version);
 		goto error;
 	}
 	me->memsize = l = req.nr_memsize;
@@ -376,6 +375,7 @@ main(int argc, char **argv)
 
 	while ( (ch = getopt(argc, argv, "b:i:vw:")) != -1) {
 		switch (ch) {
+		default:
 			D("bad option %c %s", ch, optarg);
 			usage();
 			break;
@@ -453,11 +453,28 @@ main(int argc, char **argv)
 		me[1].if_flags |= IFF_PPROMISC;
 		do_ioctl(me+1, SIOCSIFFLAGS);
 
+#ifdef __FreeBSD__
 		/* also disable checksums etc. */
 		do_ioctl(me, SIOCGIFCAP);
 		me[0].if_reqcap = me[0].if_curcap;
 		me[0].if_reqcap &= ~(IFCAP_HWCSUM | IFCAP_TSO | IFCAP_TOE);
 		do_ioctl(me+0, SIOCSIFCAP);
+#else /* !__FreeBSD__ */
+		/* disable:
+		 * - generic-segmentation-offload
+		 * - tcp-segmentation-offload
+		 * - rx-checksumming
+		 * - tx-checksumming
+		 * XXX check how to set back the caps.
+		 */
+		do_ioctl(me, SIOCETHTOOL, ETHTOOL_SGSO);
+		do_ioctl(me, SIOCETHTOOL, ETHTOOL_STSO);
+		do_ioctl(me, SIOCETHTOOL, ETHTOOL_SRXCSUM);
+		do_ioctl(me, SIOCETHTOOL, ETHTOOL_STXCSUM);
+		do_ioctl(me+0, SIOCSIFCAP, 0);
+#endif /* !__FreeBSD__ */
+
+
 	}
 	do_ioctl(me+1, SIOCGIFFLAGS);
 	if ((me[1].if_flags & IFF_UP) == 0) {
