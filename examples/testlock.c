@@ -24,7 +24,7 @@
  */
 
 /*
- * $Id: pkt-gen.c 10189 2012-01-12 10:56:43Z luigi $
+ * $Id$
  *
  * Test program to study various concurrency issues.
  * Create multiple threads, possibly bind to cpus, and run a workload.
