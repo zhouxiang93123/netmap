@@ -41,7 +41,6 @@ const char *default_payload="netmap pkt-gen Luigi Rizzo and Matteo Landi\n"
 
 #include <errno.h>
 #include <pthread.h>	/* pthread_* */
-#include <pthread_np.h>	/* pthread w/ affinity */
 #include <signal.h>	/* signal */
 #include <stdlib.h>
 #include <stdio.h>
@@ -57,12 +56,11 @@ const char *default_payload="netmap pkt-gen Luigi Rizzo and Matteo Landi\n"
 #include <sys/socket.h>	/* sockaddr.. */
 #include <arpa/inet.h>	/* ntohs */
 #include <sys/param.h>
-#include <sys/cpuset.h>	/* cpu_set */
 #include <sys/sysctl.h>	/* sysctl */
+#include <sys/time.h>	/* timersub */
 
 #include <net/ethernet.h>
 #include <net/if.h>	/* ifreq */
-#include <net/if_dl.h>	/* LLADDR */
 
 #include <netinet/in.h>
 #include <netinet/ip.h>
@@ -71,8 +69,16 @@ const char *default_payload="netmap pkt-gen Luigi Rizzo and Matteo Landi\n"
 #include <net/netmap.h>
 #include <net/netmap_user.h>
 #include <pcap/pcap.h>
-#include <sys/time.h>	/* timersub */
 
+#ifdef __FreeBSD__
+#include <pthread_np.h> /* pthread w/ affinity */
+#include <sys/cpuset.h> /* cpu_set */
+#include <net/if_dl.h>  /* LLADDR */
+#else /* FreeBSD */
+#include <netinet/ether.h>      /* ether_aton */
+#include <linux/if_packet.h>    /* sockaddr_ll */
+#define __unused __attribute__((__unused__))
+#endif /* !FreeBSD */
 
 static inline int min(int a, int b) { return a < b ? a : b; }
 
@@ -119,13 +125,11 @@ pkt_copy(void *_src, void *_dst, int l)
 	}
 }
 
-
 #if EXPERIMENTAL
 /* Wrapper around `rdtsc' to take reliable timestamps flushing the pipeline */ 
 #define netmap_rdtsc(t) \
 	do { \
 		u_int __regs[4];					\
-									\
 		do_cpuid(0, __regs);					\
 		(t) = rdtsc();						\
 	} while (0)
@@ -146,7 +150,6 @@ rdtsc(void)
 	__asm __volatile("rdtsc" : "=A" (rv));
 	return (rv);
 }
-#define MAX_SAMPLES 100000
 #endif /* EXPERIMENTAL */
 
 
@@ -257,6 +260,12 @@ system_ncpus(void)
  * locate the src mac address for our interface, put it
  * into the user-supplied buffer. return 0 if ok, -1 on error.
  */
+#ifdef __linux__
+#define sockaddr_dl    sockaddr_ll
+#define sdl_family     sll_family
+#define AF_LINK        AF_PACKET
+#define LLADDR(s)      s->sll_addr;
+#endif /* linux */
 static int
 source_hwaddr(const char *ifname, char *buf)
 {
@@ -314,33 +323,67 @@ setaffinity(pthread_t me, int i)
 
 /* Compute the checksum of the given ip header. */
 static uint16_t
-checksum(const void *data, uint16_t len)
+checksum(const void *data, uint16_t len, uint32_t sum)
 {
         const uint8_t *addr = data;
-        uint32_t sum = 0;
+	uint32_t i;
 
-        while (len > 1) {
-                sum += addr[0] * 256 + addr[1];
-                addr += 2;
-                len -= 2;
+        /* Checksum all the pairs of bytes first... */
+        for (i = 0; i < (len & ~1U); i += 2) {
+                sum += (u_int16_t)ntohs(*((u_int16_t *)(addr + i)));
+                if (sum > 0xFFFF)
+                        sum -= 0xFFFF;
         }
-
-        if (len == 1)
-                sum += *addr * 256;
-
-        sum = (sum >> 16) + (sum & 0xffff);
-        sum += (sum >> 16);
-
-        sum = htons(sum);
-
-        return ~sum;
+	/*
+	 * If there's a single byte left over, checksum it, too.
+	 * Network byte order is big-endian, so the remaining byte is
+	 * the high byte.
+	 */
+	if (i < len) {
+		sum += addr[i] << 8;
+		if (sum > 0xFFFF)
+			sum -= 0xFFFF;
+	}
+	return sum;
 }
+
+static u_int16_t
+wrapsum(u_int32_t sum)
+{
+	sum = ~sum & 0xFFFF;
+	return (htons(sum));
+}
+
+#if 0 // XXX unused
+static int
+address_range(char *address)
+{
+	char *p;
+	int range = 1;
+	p = index(address, '%');
+	if (p) {
+		range = MIN(256, MAX(1, atoi(p + 1)));
+		/* To make the inet_aton pass, we need to replace the %n stuff
+		 * with a 0 and a character of eos.
+		 */
+		p[0] = '0';
+		p[1] = '\0';
+	}
+	return range;
+}
+#endif // XXX unused
 
 /*
  * Fill a packet with some payload.
  * We create a UDP packet so the payload starts at
  *	14+20+8 = 42 bytes.
  */
+#ifdef __linux__
+#define uh_sport source
+#define uh_dport dest
+#define uh_ulen len
+#define uh_sum check
+#endif /* linux */
 static void
 initialize_packet(struct targ *targ)
 {
@@ -348,7 +391,7 @@ initialize_packet(struct targ *targ)
 	struct ether_header *eh;
 	struct ip *ip;
 	struct udphdr *udp;
-	uint16_t paylen = targ->g->pkt_size - sizeof(*eh) - sizeof(*ip);
+	uint16_t paylen = targ->g->pkt_size - sizeof(*eh) - sizeof(struct ip);
 	int i, l, l0 = strlen(default_payload);
 	char *p;
 
@@ -358,14 +401,22 @@ initialize_packet(struct targ *targ)
 		i += l;
 	}
 	pkt->body[i-1] = '\0';
+	ip = &pkt->ip;
 
 	udp = &pkt->udp;
 	udp->uh_sport = htons(1234);
         udp->uh_dport = htons(4321);
 	udp->uh_ulen = htons(paylen);
-	udp->uh_sum = 0; // checksum(udp, sizeof(*udp));
+	udp->uh_sum = wrapsum(checksum(udp, sizeof(*udp),
+                    checksum(pkt->body,
+                        paylen - sizeof(*udp),
+                        checksum(&ip->ip_src, 2 * sizeof(ip->ip_src),
+                            IPPROTO_UDP + (u_int32_t)ntohs(udp->uh_ulen)
+                        )
+                    )
+                ));
 
-	ip = &pkt->ip;
+
         ip->ip_v = IPVERSION;
         ip->ip_hl = 5;
         ip->ip_id = 0;
@@ -384,7 +435,7 @@ initialize_packet(struct targ *targ)
 		targ->dst_ip_range = atoi(p+1);
 		D("dst-ip sweep %d addresses", targ->dst_ip_range);
 	}
-	ip->ip_sum = checksum(ip, sizeof(*ip));
+	ip->ip_sum = wrapsum(checksum(ip, sizeof(*ip), 0));
 
 	eh = &pkt->eh;
 	bcopy(ether_aton(targ->g->src_mac), targ->src_mac, 6);
@@ -490,6 +541,7 @@ pinger_body(void *data)
 	struct pollfd fds[1];
 	struct netmap_if *nifp = targ->nifp;
 	int i, rx = 0, n = targ->g->npackets;
+
 	fds[0].fd = targ->fd;
 	fds[0].events = (POLLIN);
 	static uint32_t sent;
@@ -637,6 +689,7 @@ ponger_body(void *data)
 	}
 	return NULL;
 }
+
 
 static void *
 sender_body(void *data)
@@ -1223,9 +1276,6 @@ main(int arc, char **argv)
 		targs[i].affinity = g.cpus ? i % g.cpus : -1;
 		/* default, init packets */
 		initialize_packet(&targs[i]);
-		if (td_body == sender_body) {
-			/* initialize the packet to send. */
-		}
 
 		if (pthread_create(&targs[i].thread, NULL, td_body,
 				   &targs[i]) == -1) {
