@@ -213,7 +213,7 @@ struct my_ring {
 
 
 static int
-do_ioctl(struct my_ring *me, int what)
+do_ioctl(struct my_ring *me, int what, __unused int subcmd)
 {
 	struct ifreq ifr;
 	int error;
@@ -508,14 +508,14 @@ pcap_set_promisc(pcap_t *p, int promisc)
 	struct my_ring *me = p;
 
 	D("promisc %d", promisc);
-        if (do_ioctl(me, SIOCGIFFLAGS))
+        if (do_ioctl(me, SIOCGIFFLAGS, 0))
 		D("SIOCGIFFLAGS failed");
 	if (promisc) {
 		me->if_flags |= IFF_PPROMISC;
 	} else {
 		me->if_flags &= ~IFF_PPROMISC;
 	}
-	if (do_ioctl(me, SIOCSIFFLAGS))
+	if (do_ioctl(me, SIOCSIFFLAGS, 0))
 		D("SIOCSIFFLAGS failed");
 	return 0;
 }
@@ -608,18 +608,31 @@ pcap_open_live(const char *device, __unused int snaplen,
 		return NULL;
 	}
 	me->to_ms = to_ms;
-        if (do_ioctl(me, SIOCGIFFLAGS))
+        if (do_ioctl(me, SIOCGIFFLAGS, 0))
 		D("SIOCGIFFLAGS failed");
 	if (promisc) {
 		me->if_flags |= IFF_PPROMISC;
-		if (do_ioctl(me, SIOCSIFFLAGS))
+		if (do_ioctl(me, SIOCSIFFLAGS, 0))
 			D("SIOCSIFFLAGS failed");
 	}
-        if (do_ioctl(me, SIOCGIFCAP))
+#ifdef __FreeBSD__
+        if (do_ioctl(me, SIOCGIFCAP, 0))
 		D("SIOCGIFCAP failed");
         me->if_reqcap &= ~(IFCAP_HWCSUM | IFCAP_TSO | IFCAP_TOE);
-        if (do_ioctl(me, SIOCSIFCAP))
+        if (do_ioctl(me, SIOCSIFCAP, 0))
 		D("SIOCSIFCAP failed");
+#else /* linux */
+	/* disable:
+	 * - generic-segmentation-offload
+	 * - tcp-segmentation-offload
+	 * - rx-checksumming
+	 * - tx-checksumming
+	 */
+	do_ioctl(me, SIOCETHTOOL, ETHTOOL_SGSO);
+	do_ioctl(me, SIOCETHTOOL, ETHTOOL_STSO);
+	do_ioctl(me, SIOCETHTOOL, ETHTOOL_SRXCSUM);
+	do_ioctl(me, SIOCETHTOOL, ETHTOOL_STXCSUM);
+#endif /* !FreeBSD */
 
 	return (pcap_t *)me;
 }
