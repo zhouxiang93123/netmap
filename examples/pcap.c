@@ -1,5 +1,5 @@
 /*
- * (C) 2011 Luigi Rizzo
+ * (C) 2011-2012 Luigi Rizzo
  *
  * BSD license
  *
@@ -18,10 +18,22 @@
 #include <fcntl.h> /* open */
 #include <unistd.h> /* close */
 
+#ifdef linux
+#define ifr_flagshigh   ifr_flags
+#define ifr_curcap      ifr_flags
+#define ifr_reqcap      ifr_flags
+#define IFF_PPROMISC    IFF_PROMISC
+#define __unused __attribute__((__unused__))
+#include <linux/ethtool.h>
+#include <linux/sockios.h>
+//#include <linux/if.h>
+#else /* __FreeBSD__ */
 #include <sys/endian.h> /* le64toh */
+#include <machine/param.h>
+#endif /* __FreeBSD__ */
+
 #include <sys/mman.h> /* PROT_* */
 #include <sys/ioctl.h> /* ioctl */
-#include <machine/param.h>
 #include <sys/poll.h>
 #include <sys/socket.h> /* sockaddr.. */
 #include <arpa/inet.h> /* ntohs */
@@ -163,7 +175,7 @@ struct eproto {
 };
 #endif /* !PCAP_ERRBUF_SIZE */
 
-#ifdef __PIC__
+#if 1 //def __PIC__
 /*
  * build as a shared library
  */
