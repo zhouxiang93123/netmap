@@ -74,11 +74,12 @@ const char *default_payload="netmap pkt-gen Luigi Rizzo and Matteo Landi\n"
 #include <pthread_np.h> /* pthread w/ affinity */
 #include <sys/cpuset.h> /* cpu_set */
 #include <net/if_dl.h>  /* LLADDR */
-#else /* FreeBSD */
+#else /* linux */
+#define CLOCK_REALTIME_PRECISE CLOCK_REALTIME
 #include <netinet/ether.h>      /* ether_aton */
 #include <linux/if_packet.h>    /* sockaddr_ll */
 #define __unused __attribute__((__unused__))
-#endif /* !FreeBSD */
+#endif /* linux */
 
 static inline int min(int a, int b) { return a < b ? a : b; }
 
@@ -160,12 +161,18 @@ struct pkt {
 	uint8_t body[2048];	// XXX hardwired
 } __attribute__((__packed__));
 
+struct ip_range {
+	char *name;
+	struct in_addr start, end;
+};
+
 /*
  * global arguments for all threads
  */
+
 struct glob_arg {
-	const char *src_ip;
-	const char *dst_ip;
+	struct ip_range src_ip;
+	struct ip_range dst_ip;
 	const char *src_mac;
 	const char *dst_mac;
 	int pkt_size;
@@ -206,14 +213,30 @@ struct targ {
 	uint8_t	src_mac[6];
 	u_int dst_mac_range;
 	u_int src_mac_range;
-	uint32_t dst_ip;
-	uint32_t src_ip;
-	u_int dst_ip_range;
-	u_int src_ip_range;
 
 	struct pkt pkt;
 };
 
+
+/*
+ * extract the extremes from a range of ipv4 addresses.
+ * currently only takes the first 4 bytes
+ */
+static void
+extract_ip_range(struct ip_range *r)
+{
+	D("extract range from %s", r->name);
+	inet_aton(r->name, &r->start);
+	inet_aton(r->name, &r->end);
+#if 0
+	p = index(targ->g->src_ip, '-');
+	if (p) {
+		targ->dst_ip_range = atoi(p+1);
+		D("dst-ip sweep %d addresses", targ->dst_ip_range);
+	}
+#endif
+	D("%s starts at %s", r->name, inet_ntoa(r->start));
+}
 
 static struct targ *targs;
 static int global_nthreads;
@@ -354,25 +377,6 @@ wrapsum(u_int32_t sum)
 	return (htons(sum));
 }
 
-#if 0 // XXX unused
-static int
-address_range(char *address)
-{
-	char *p;
-	int range = 1;
-	p = index(address, '%');
-	if (p) {
-		range = MIN(256, MAX(1, atoi(p + 1)));
-		/* To make the inet_aton pass, we need to replace the %n stuff
-		 * with a 0 and a character of eos.
-		 */
-		p[0] = '0';
-		p[1] = '\0';
-	}
-	return range;
-}
-#endif // XXX unused
-
 /*
  * Fill a packet with some payload.
  * We create a UDP packet so the payload starts at
@@ -403,6 +407,20 @@ initialize_packet(struct targ *targ)
 	pkt->body[i-1] = '\0';
 	ip = &pkt->ip;
 
+        ip->ip_v = IPVERSION;
+        ip->ip_hl = 5;
+        ip->ip_id = 0;
+        ip->ip_tos = IPTOS_LOWDELAY;
+	ip->ip_len = ntohs(targ->g->pkt_size - sizeof(*eh));
+        ip->ip_id = 0;
+        ip->ip_off = htons(IP_DF); /* Don't fragment */
+        ip->ip_ttl = IPDEFTTL;
+	ip->ip_p = IPPROTO_UDP;
+	ip->ip_dst.s_addr = targ->g->dst_ip.start.s_addr;
+	ip->ip_src.s_addr = targ->g->src_ip.start.s_addr;
+	ip->ip_sum = wrapsum(checksum(ip, sizeof(*ip), 0));
+
+
 	udp = &pkt->udp;
 	udp->uh_sport = htons(1234);
         udp->uh_dport = htons(4321);
@@ -416,27 +434,6 @@ initialize_packet(struct targ *targ)
                     )
                 ));
 
-
-        ip->ip_v = IPVERSION;
-        ip->ip_hl = 5;
-        ip->ip_id = 0;
-        ip->ip_tos = IPTOS_LOWDELAY;
-	ip->ip_len = ntohs(targ->g->pkt_size - sizeof(*eh));
-        ip->ip_id = 0;
-        ip->ip_off = htons(IP_DF); /* Don't fragment */
-        ip->ip_ttl = IPDEFTTL;
-	ip->ip_p = IPPROTO_UDP;
-	inet_aton(targ->g->src_ip, (struct in_addr *)&ip->ip_src);
-	inet_aton(targ->g->dst_ip, (struct in_addr *)&ip->ip_dst);
-	targ->dst_ip = ip->ip_dst.s_addr;
-	targ->src_ip = ip->ip_src.s_addr;
-	p = index(targ->g->src_ip, '-');
-	if (p) {
-		targ->dst_ip_range = atoi(p+1);
-		D("dst-ip sweep %d addresses", targ->dst_ip_range);
-	}
-	ip->ip_sum = wrapsum(checksum(ip, sizeof(*ip), 0));
-
 	eh = &pkt->eh;
 	bcopy(ether_aton(targ->g->src_mac), targ->src_mac, 6);
 	bcopy(targ->src_mac, eh->ether_shost, 6);
@@ -449,6 +446,7 @@ initialize_packet(struct targ *targ)
 	p = index(targ->g->dst_mac, '-');
 	if (p)
 		targ->dst_mac_range = atoi(p+1);
+
 	eh->ether_type = htons(ETHERTYPE_IP);
 }
 
@@ -839,6 +837,7 @@ receiver_body(void *data)
 	gettimeofday(&targ->tic, NULL);
     if (targ->g->use_pcap) {
 	for (;;) {
+		/* XXX should we poll ? */
 		pcap_dispatch(targ->g->p, targ->g->burst, receive_pcap, NULL);
 	}
     } else {
@@ -980,8 +979,9 @@ main(int arc, char **argv)
 
 	bzero(&g, sizeof(g));
 
-	g.src_ip = "10.0.0.1";
-	g.dst_ip = "10.1.0.1";
+	/* ip addresses can also be a range x.x.x.x-x.x.x.y */
+	g.src_ip.name = "10.0.0.1";
+	g.dst_ip.name = "10.1.0.1";
 	g.dst_mac = "ff:ff:ff:ff:ff:ff";
 	g.src_mac = NULL;
 	g.pkt_size = 60;
@@ -1031,10 +1031,10 @@ main(int arc, char **argv)
 			g.pkt_size = atoi(optarg);
 			break;
 		case 'd':
-			g.dst_ip = optarg;
+			g.dst_ip.name = optarg;
 			break;
 		case 's':
-			g.src_ip = optarg;
+			g.src_ip.name = optarg;
 			break;
 		case 'T':	/* report interval */
 			report_interval = atoi(optarg);
@@ -1098,6 +1098,9 @@ main(int arc, char **argv)
 		}
 		g.src_mac = mybuf;
 	}
+	/* extract address ranges */
+	extract_ip_range(&g.src_ip);
+	extract_ip_range(&g.dst_ip);
 
     if (g.use_pcap) {
 	D("using pcap on %s", ifname);
@@ -1184,7 +1187,7 @@ main(int arc, char **argv)
 		g.cpus);
 	if (td_body == sender_body) {
 		fprintf(stdout, "%s -> %s (%s -> %s)\n",
-			g.src_ip, g.dst_ip,
+			g.src_ip.name, g.dst_ip.name,
 			g.src_mac, g.dst_mac);
 	}
 			
