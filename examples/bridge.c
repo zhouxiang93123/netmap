@@ -91,7 +91,7 @@ sigint_h(__unused int sig)
 
 
 static int
-do_ioctl(struct my_ring *me, int what)
+do_ioctl(struct my_ring *me, int what, __unused int subcmd)
 {
 	struct ifreq ifr;
 	int error;
@@ -400,6 +400,7 @@ main(int argc, char **argv)
 		}
 
 	}
+
 	argc -= optind;
 	argv += optind;
 
@@ -441,24 +442,23 @@ main(int argc, char **argv)
 
 	/* if bridging two interfaces, set promisc mode */
 	if (i != NETMAP_SW_RING) {
-		do_ioctl(me, SIOCGIFFLAGS);
+		do_ioctl(me, SIOCGIFFLAGS, 0);
 		if ((me[0].if_flags & IFF_UP) == 0) {
 			D("%s is down, bringing up...", me[0].ifname);
 			me[0].if_flags |= IFF_UP;
 		}
 		me[0].if_flags |= IFF_PPROMISC;
-		do_ioctl(me, SIOCSIFFLAGS);
+		do_ioctl(me, SIOCSIFFLAGS, 0);
 
-		do_ioctl(me+1, SIOCGIFFLAGS);
+		do_ioctl(me+1, SIOCGIFFLAGS, 0);
 		me[1].if_flags |= IFF_PPROMISC;
-		do_ioctl(me+1, SIOCSIFFLAGS);
+		do_ioctl(me+1, SIOCSIFFLAGS, 0);
 
 #ifdef __FreeBSD__
 		/* also disable checksums etc. */
-		do_ioctl(me, SIOCGIFCAP);
+		do_ioctl(me, SIOCGIFCAP, 0);
 		me[0].if_reqcap = me[0].if_curcap;
 		me[0].if_reqcap &= ~(IFCAP_HWCSUM | IFCAP_TSO | IFCAP_TOE);
-		do_ioctl(me+0, SIOCSIFCAP);
 #else /* !__FreeBSD__ */
 		/* disable:
 		 * - generic-segmentation-offload
@@ -471,22 +471,27 @@ main(int argc, char **argv)
 		do_ioctl(me, SIOCETHTOOL, ETHTOOL_STSO);
 		do_ioctl(me, SIOCETHTOOL, ETHTOOL_SRXCSUM);
 		do_ioctl(me, SIOCETHTOOL, ETHTOOL_STXCSUM);
-		do_ioctl(me+0, SIOCSIFCAP, 0);
 #endif /* !__FreeBSD__ */
-
-
+		do_ioctl(me+0, SIOCSIFCAP, 0);
 	}
-	do_ioctl(me+1, SIOCGIFFLAGS);
+	do_ioctl(me+1, SIOCGIFFLAGS, 0);
 	if ((me[1].if_flags & IFF_UP) == 0) {
 		D("%s is down, bringing up...", me[1].ifname);
 		me[1].if_flags |= IFF_UP;
 	}
-	do_ioctl(me+1, SIOCSIFFLAGS);
+	do_ioctl(me+1, SIOCSIFFLAGS, 0);
 
-	do_ioctl(me+1, SIOCGIFCAP);
+#ifdef __FreeBSD__
+	do_ioctl(me+1, SIOCGIFCAP, 0);
 	me[1].if_reqcap = me[1].if_curcap;
 	me[1].if_reqcap &= ~(IFCAP_HWCSUM | IFCAP_TSO | IFCAP_TOE);
-	do_ioctl(me+1, SIOCSIFCAP);
+	do_ioctl(me+1, SIOCSIFCAP, 0);
+#else /* linux */
+	do_ioctl(me+1, SIOCETHTOOL, ETHTOOL_SGSO);
+	do_ioctl(me+1, SIOCETHTOOL, ETHTOOL_STSO);
+	do_ioctl(me+1, SIOCETHTOOL, ETHTOOL_SRXCSUM);
+	do_ioctl(me+1, SIOCETHTOOL, ETHTOOL_STXCSUM);
+#endif /* !__FreeBSD__ */
 
 	/* setup poll(2) variables. */
 	memset(pollfd, 0, sizeof(pollfd));
