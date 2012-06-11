@@ -1290,7 +1290,13 @@ main(int arc, char **argv)
 		targs[i].qlast = (g.nthreads > 1) ? i+1 :
 			(td_body == receiver_body ? tifreq.nr_rx_rings : tifreq.nr_tx_rings);
 		targs[i].me = i;
-		targs[i].affinity = g.cpus ? i % g.cpus : -1;
+		if (affinity >= 0) {
+			if (affinity < g.cpus)
+				targs[i].affinity = affinity;
+			else
+				targs[i].affinity = i % g.cpus;
+		} else
+			targs[i].affinity = -1;
 		/* default, init packets */
 		initialize_packet(&targs[i]);
 
