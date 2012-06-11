@@ -244,7 +244,7 @@ do_ioctl(struct my_ring *me, int what, __unused int subcmd)
 #else /* linux */
 	case SIOCETHTOOL:
 		eval.cmd = subcmd;
-		eval.data = subvalue;
+		eval.data = 0; // subvalue;
 		ifr.ifr_data = (caddr_t)&eval;
 		break;
 #endif /* linux */
