@@ -17,7 +17,7 @@ kern_return_t netmap_kext_Stop(kmod_info_t *ki, void *d) {
 extern kern_return_t _start(kmod_info_t *ki, void *data);
 extern kern_return_t _stop(kmod_info_t *ki, void *data);
 
-KMOD_EXPLICIT_DECL(it.unipi.iet.luigi.kext.netmap_kext, "1.0.0d1", _start, _stop)
+KMOD_EXPLICIT_DECL(it.unipi.iet.netmap_osx, "1.0.0", _start, _stop)
 __private_extern__ kmod_start_func_t *_realmain = netmap_kext_Start;
 __private_extern__ kmod_stop_func_t *_antimain = netmap_kext_Stop;
 __private_extern__ int _kext_apple_cc = __APPLE_CC__;
