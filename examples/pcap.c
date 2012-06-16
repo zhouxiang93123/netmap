@@ -21,7 +21,6 @@ int verbose = 0;
  */
 #ifndef PCAP_ERRBUF_SIZE
 #define PCAP_ERRBUF_SIZE 128
-
 /*
  * Each packet is accompanied by a header including the timestamp,
  * captured size and actual size.

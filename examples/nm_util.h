@@ -77,7 +77,7 @@
 
 #include <net/netmap.h>
 #include <net/netmap_user.h>
-#include <pcap/pcap.h>
+// #include <pcap/pcap.h> // XXX do we need it ?
 
 #include <pthread.h>	/* pthread_* */
 #if defined(__FreeBSD__)
@@ -118,9 +118,9 @@ inline void prefetch (const void *x)
 
 // XXX only for multiples of 64 bytes, non overlapped.
 static inline void
-pkt_copy(void *_src, void *_dst, int l)
+pkt_copy(const void *_src, void *_dst, int l)
 {
-	uint64_t *src = _src;
+	const uint64_t *src = _src;
 	uint64_t *dst = _dst;
 #define likely(x)       __builtin_expect(!!(x), 1)
 #define unlikely(x)       __builtin_expect(!!(x), 0)
