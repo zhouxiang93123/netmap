@@ -10,85 +10,10 @@
  * $FreeBSD: head/tools/tools/netmap/pcap.c 227614 2011-11-17 12:17:39Z luigi $
  */
 
-#include <errno.h>
-#include <signal.h> /* signal */
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h> /* strcmp */
-#include <fcntl.h> /* open */
-#include <unistd.h> /* close */
-
-#ifdef linux
-#define ifr_flagshigh   ifr_flags
-#define ifr_curcap      ifr_flags
-#define ifr_reqcap      ifr_flags
-#define IFF_PPROMISC    IFF_PROMISC
-#define __unused __attribute__((__unused__))
-#include <linux/ethtool.h>
-#include <linux/sockios.h>
-//#include <linux/if.h>
-#else /* __FreeBSD__ */
-#include <sys/endian.h> /* le64toh */
-#include <machine/param.h>
-#endif /* __FreeBSD__ */
-
-#include <sys/mman.h> /* PROT_* */
-#include <sys/ioctl.h> /* ioctl */
-#include <sys/poll.h>
-#include <sys/socket.h> /* sockaddr.. */
-#include <arpa/inet.h> /* ntohs */
-
-#include <net/if.h>	/* ifreq */
-#include <net/ethernet.h>
-#include <net/netmap.h>
-#include <net/netmap_user.h>
-
-#include <netinet/in.h> /* sockaddr_in */
-
-#include <sys/socket.h>
-#include <ifaddrs.h>
-
-#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#include "nm_util.h"
 
 char *version = "$Id$";
 int verbose = 0;
-
-/* debug support */
-#define ND(format, ...) do {} while (0)
-#define D(format, ...) do {				\
-    if (verbose)					\
-        fprintf(stderr, "--- %s [%d] " format "\n",	\
-        __FUNCTION__, __LINE__, ##__VA_ARGS__);		\
-	} while (0)
-
-inline void prefetch (const void *x)
-{
-	__asm volatile("prefetcht0 %0" :: "m" (*(const unsigned long *)x));
-}
-
-// XXX only for multiples of 64 bytes, non overlapped.
-static inline void
-pkt_copy(const void *_src, void *_dst, int l)
-{
-        const uint64_t *src = _src;
-        uint64_t *dst = _dst;
-#define likely(x)       __builtin_expect(!!(x), 1)
-#define unlikely(x)       __builtin_expect(!!(x), 0)
-        if (unlikely(l >= 1024)) {
-                bcopy(src, dst, l);
-                return;
-        }
-        for (; l > 0; l-=64) {
-                *dst++ = *src++;
-                *dst++ = *src++;
-                *dst++ = *src++;
-                *dst++ = *src++;
-                *dst++ = *src++;
-                *dst++ = *src++;
-                *dst++ = *src++;
-                *dst++ = *src++;
-        }
-}
 
 /*
  * We redefine here a number of structures that are in pcap.h
@@ -233,15 +158,19 @@ do_ioctl(struct my_ring *me, int what, __unused int subcmd)
 	switch (what) {
 	case SIOCSIFFLAGS:
 		D("call SIOCSIFFLAGS 0x%x", me->if_flags);
+#ifndef __APPLE__
 		ifr.ifr_flagshigh = (me->if_flags >> 16) & 0xffff;
+#endif
 		ifr.ifr_flags = me->if_flags & 0xffff;
 		break;
-#ifndef linux
+#ifdef __FreeBSD__
 	case SIOCSIFCAP:
 		ifr.ifr_reqcap = me->if_reqcap;
 		ifr.ifr_curcap = me->if_curcap;
 		break;
-#else /* linux */
+#endif
+
+#ifdef linux
 	case SIOCETHTOOL:
 		eval.cmd = subcmd;
 		eval.data = 0; // subvalue;
@@ -264,7 +193,7 @@ do_ioctl(struct my_ring *me, int what, __unused int subcmd)
 			(uint16_t)ifr.ifr_flagshigh, me->if_flags);
 		break;
 
-#ifndef linux
+#ifdef __FreeBSD__
 	case SIOCGIFCAP:
 		me->if_reqcap = ifr.ifr_reqcap;
 		me->if_curcap = ifr.ifr_curcap;

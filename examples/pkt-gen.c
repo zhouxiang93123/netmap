@@ -39,120 +39,11 @@
 const char *default_payload="netmap pkt-gen Luigi Rizzo and Matteo Landi\n"
 	"http://info.iet.unipi.it/~luigi/netmap/ ";
 
-#include <errno.h>
-#include <pthread.h>	/* pthread_* */
-#include <signal.h>	/* signal */
-#include <stdlib.h>
-#include <stdio.h>
-#include <inttypes.h>	/* PRI* macros */
-#include <string.h>	/* strcmp */
-#include <fcntl.h>	/* open */
-#include <unistd.h>	/* close */
-#include <ifaddrs.h>	/* getifaddrs */
-
-#include <sys/mman.h>	/* PROT_* */
-#include <sys/ioctl.h>	/* ioctl */
-#include <sys/poll.h>
-#include <sys/socket.h>	/* sockaddr.. */
-#include <arpa/inet.h>	/* ntohs */
-#include <sys/param.h>
-#include <sys/sysctl.h>	/* sysctl */
-#include <sys/time.h>	/* timersub */
-
-#include <net/ethernet.h>
-#include <net/if.h>	/* ifreq */
-
-#include <netinet/in.h>
-#include <netinet/ip.h>
-#include <netinet/udp.h>
-
-#include <net/netmap.h>
-#include <net/netmap_user.h>
-#include <pcap/pcap.h>
-
-#ifdef __FreeBSD__
-#include <pthread_np.h> /* pthread w/ affinity */
-#include <sys/cpuset.h> /* cpu_set */
-#include <net/if_dl.h>  /* LLADDR */
-#else /* linux */
-#define CLOCK_REALTIME_PRECISE CLOCK_REALTIME
-#include <netinet/ether.h>      /* ether_aton */
-#include <linux/if_packet.h>    /* sockaddr_ll */
-#define __unused __attribute__((__unused__))
-#endif /* linux */
-
-static inline int min(int a, int b) { return a < b ? a : b; }
-
-/* debug support */
-#define D(format, ...)				\
-	fprintf(stderr, "%s [%d] " format "\n", 	\
-	__FUNCTION__, __LINE__, ##__VA_ARGS__)
-
-#ifndef EXPERIMENTAL
-#define EXPERIMENTAL 0
-#endif
+#include "nm_util.h"
 
 int verbose = 0;
 
 #define SKIP_PAYLOAD 1 /* do not check payload. */
-
-// XXX does it work on 32-bit machines ?
-inline void prefetch (const void *x)
-{
-        __asm volatile("prefetcht0 %0" :: "m" (*(const unsigned long *)x));
-}
-
-// XXX only for multiples of 64 bytes, non overlapped.
-static inline void
-pkt_copy(void *_src, void *_dst, int l)
-{
-	uint64_t *src = _src;
-	uint64_t *dst = _dst;
-#define likely(x)       __builtin_expect(!!(x), 1)
-#define unlikely(x)       __builtin_expect(!!(x), 0)
-	if (unlikely(l >= 1024)) {
-		bcopy(src, dst, l);
-		return;
-	}
-	for (; l > 0; l-=64) {
-		*dst++ = *src++;
-		*dst++ = *src++;
-		*dst++ = *src++;
-		*dst++ = *src++;
-		*dst++ = *src++;
-		*dst++ = *src++;
-		*dst++ = *src++;
-		*dst++ = *src++;
-	}
-}
-
-#if EXPERIMENTAL
-/* Wrapper around `rdtsc' to take reliable timestamps flushing the pipeline */ 
-#define netmap_rdtsc(t) \
-	do { \
-		u_int __regs[4];					\
-		do_cpuid(0, __regs);					\
-		(t) = rdtsc();						\
-	} while (0)
-
-static __inline void
-do_cpuid(u_int ax, u_int *p)
-{
-	__asm __volatile("cpuid"
-			 : "=a" (p[0]), "=b" (p[1]), "=c" (p[2]), "=d" (p[3])
-			 :  "0" (ax));
-}
-
-static __inline uint64_t
-rdtsc(void)
-{
-	uint64_t rv;
-
-	__asm __volatile("rdtsc" : "=A" (rv));
-	return (rv);
-}
-#endif /* EXPERIMENTAL */
-
 
 struct pkt {
 	struct ether_header eh;
@@ -361,6 +252,9 @@ setaffinity(pthread_t me, int i)
 		D("Unable to set affinity");
 		return 1;
 	}
+#else
+	me = NULL;
+	i=0;
 #endif /* __FreeBSD__ */
 	return 0;
 }

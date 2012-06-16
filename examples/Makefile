@@ -7,7 +7,7 @@ PROGS	+= testlock testcsum test_select kern_test
 CLEANFILES = $(PROGS) pcap.o
 NO_MAN=
 CFLAGS = -O2 -pipe
-CFLAGS += -Werror -Wall -I/home/luigi/FreeBSD/head/sys # -I../sys
+CFLAGS += -Werror -Wall -I/home/luigi/FreeBSD/head/sys -I../sys
 CFLAGS += -Wextra
 
 LDFLAGS += -lpthread -lpcap
@@ -23,6 +23,7 @@ testpcap: pcap.c libnetmap.so
 
 kern_test: testmod/kern_test.c
 
+pkt-gen bridge libnetmap.so pcap: nm_util.h
 libnetmap.so:	pcap.c
 	$(CC) $(CFLAGS) -fpic -c ${.ALLSRC}
 	$(CC) -shared -o ${.TARGET} ${.ALLSRC:.c=.o}

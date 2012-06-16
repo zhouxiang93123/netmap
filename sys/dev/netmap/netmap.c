@@ -57,7 +57,11 @@
 #ifdef linux
 #include "bsd_glue.h"
 static netdev_tx_t netmap_start_linux(struct sk_buff *skb, struct net_device *dev);
-#else /* !linux */
+#endif
+#ifdef __APPLE__
+#include "osx_glue.h"
+#endif
+#ifdef __FreeBSD__
 #include <sys/cdefs.h> /* prerequisite */
 __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 234986 2012-05-03 21:16:53Z luigi $");
 
@@ -245,8 +249,10 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
 #else
 #define	ADD_BDG_REF(ifp)	(ifp)->if_refcount++
 #define	DROP_BDG_REF(ifp)	refcount_release(&(ifp)->if_refcount)
+#ifdef __FreeBSD__
 #include <sys/endian.h>
 #include <sys/refcount.h>
+#endif
 #endif /* !linux */
 
 static void bdg_netmap_attach(struct ifnet *ifp);

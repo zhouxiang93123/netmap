@@ -9,56 +9,10 @@
  * $FreeBSD: head/tools/tools/netmap/bridge.c 228975 2011-12-30 00:04:11Z uqs $
  */
 
-#include <errno.h>
-#include <signal.h> /* signal */
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h> /* strcmp */
-#include <fcntl.h> /* open */
-#include <unistd.h> /* close */
+#include "nm_util.h"
 
-#ifdef __linux__
-#define ifr_flagshigh  ifr_flags
-#define ifr_curcap     ifr_flags
-#define ifr_reqcap     ifr_flags
-#define IFF_PPROMISC   IFF_PROMISC
-#define __unused __attribute__((__unused__))
-#include <linux/ethtool.h>
-#include <linux/sockios.h>
-#else
-#include <sys/endian.h> /* le64toh */
-#include <machine/param.h>
-#endif
-
-#include <sys/mman.h> /* PROT_* */
-#include <sys/ioctl.h> /* ioctl */
-#include <sys/poll.h>
-#include <sys/socket.h> /* sockaddr.. */
-#include <arpa/inet.h> /* ntohs */
-
-#include <net/if.h>	/* ifreq */
-#include <net/ethernet.h>
-#include <net/netmap.h>
-#include <net/netmap_user.h>
-#include <sys/time.h>  // gettimeofday
-
-#include <netinet/in.h> /* sockaddr_in */
-
-#define MIN(a, b) ((a) < (b) ? (a) : (b))
 
 int verbose = 0;
-
-/* debug support */
-#define ND(format, ...) {}
-#define D(format, ...) do {					\
-	if (!verbose) break;					\
-	struct timeval _xxts;					\
-	gettimeofday(&_xxts, NULL);				\
-        fprintf(stderr, "%03d.%06d %s [%d] " format "\n",	\
-	(int)_xxts.tv_sec %1000, (int)_xxts.tv_usec,		\
-        __FUNCTION__, __LINE__, ##__VA_ARGS__);			\
-	} while (0)
-
 
 char *version = "$Id$";
 
@@ -95,9 +49,10 @@ do_ioctl(struct my_ring *me, int what, __unused int subcmd)
 {
 	struct ifreq ifr;
 	int error;
-#ifdef __FreeBSD__
+#if defined( __FreeBSD__ ) || defined (__APPLE__)
 	int fd = me->fd;
-#else  /* linux */
+#endif
+#ifdef linux 
 	struct ethtool_value eval;
 	int fd;
 	fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -105,21 +60,25 @@ do_ioctl(struct my_ring *me, int what, __unused int subcmd)
 		printf("Error: cannot get device control socket.\n");
 		return -1;
 	}
-#endif /* !linux */
+#endif /* linux */
 
 	bzero(&ifr, sizeof(ifr));
 	strncpy(ifr.ifr_name, me->ifname, sizeof(ifr.ifr_name));
 	switch (what) {
 	case SIOCSIFFLAGS:
+#ifndef __APPLE__
 		ifr.ifr_flagshigh = me->if_flags >> 16;
+#endif
 		ifr.ifr_flags = me->if_flags & 0xffff;
 		break;
-#ifdef __FreeBSD__
+
+#if defined( __FreeBSD__ )
 	case SIOCSIFCAP:
 		ifr.ifr_reqcap = me->if_reqcap;
 		ifr.ifr_curcap = me->if_curcap;
 		break;
-#else /* linux */
+#endif
+#ifdef linux
 	case SIOCETHTOOL:
 		eval.cmd = subcmd;
 		eval.data = 0;
@@ -132,13 +91,15 @@ do_ioctl(struct my_ring *me, int what, __unused int subcmd)
 		goto done;
 	switch (what) {
 	case SIOCGIFFLAGS:
+#ifndef __APPLE__
 		me->if_flags = (ifr.ifr_flagshigh << 16) |
 			(0xffff & ifr.ifr_flags);
+#endif
 		if (verbose)
 			D("flags are 0x%x", me->if_flags);
 		break;
 
-#ifdef __FreeBSD__
+#if defined( __FreeBSD__ )
 	case SIOCGIFCAP:
 		me->if_reqcap = ifr.ifr_reqcap;
 		me->if_curcap = ifr.ifr_curcap;
@@ -325,7 +286,7 @@ move(struct my_ring *src, struct my_ring *dst, u_int limit)
  * how many packets on this set of queues ?
  */
 static int
-howmany(struct my_ring *me, int tx)
+pkt_queued(struct my_ring *me, int tx)
 {
 	u_int i, tot = 0;
 
@@ -459,7 +420,9 @@ main(int argc, char **argv)
 		do_ioctl(me, SIOCGIFCAP, 0);
 		me[0].if_reqcap = me[0].if_curcap;
 		me[0].if_reqcap &= ~(IFCAP_HWCSUM | IFCAP_TSO | IFCAP_TOE);
-#else /* !__FreeBSD__ */
+		do_ioctl(me+0, SIOCSIFCAP, 0);
+#endif
+#ifdef linux
 		/* disable:
 		 * - generic-segmentation-offload
 		 * - tcp-segmentation-offload
@@ -471,8 +434,7 @@ main(int argc, char **argv)
 		do_ioctl(me, SIOCETHTOOL, ETHTOOL_STSO);
 		do_ioctl(me, SIOCETHTOOL, ETHTOOL_SRXCSUM);
 		do_ioctl(me, SIOCETHTOOL, ETHTOOL_STXCSUM);
-#endif /* !__FreeBSD__ */
-		do_ioctl(me+0, SIOCSIFCAP, 0);
+#endif /* linux */
 	}
 	do_ioctl(me+1, SIOCGIFFLAGS, 0);
 	if ((me[1].if_flags & IFF_UP) == 0) {
@@ -486,12 +448,13 @@ main(int argc, char **argv)
 	me[1].if_reqcap = me[1].if_curcap;
 	me[1].if_reqcap &= ~(IFCAP_HWCSUM | IFCAP_TSO | IFCAP_TOE);
 	do_ioctl(me+1, SIOCSIFCAP, 0);
-#else /* linux */
+#endif
+#ifdef linux
 	do_ioctl(me+1, SIOCETHTOOL, ETHTOOL_SGSO);
 	do_ioctl(me+1, SIOCETHTOOL, ETHTOOL_STSO);
 	do_ioctl(me+1, SIOCETHTOOL, ETHTOOL_SRXCSUM);
 	do_ioctl(me+1, SIOCETHTOOL, ETHTOOL_STXCSUM);
-#endif /* !__FreeBSD__ */
+#endif /* linux */
 
 	/* setup poll(2) variables. */
 	memset(pollfd, 0, sizeof(pollfd));
@@ -512,8 +475,8 @@ main(int argc, char **argv)
 		int n0, n1, ret;
 		pollfd[0].events = pollfd[1].events = 0;
 		pollfd[0].revents = pollfd[1].revents = 0;
-		n0 = howmany(me, 0);
-		n1 = howmany(me + 1, 0);
+		n0 = pkt_queued(me, 0);
+		n1 = pkt_queued(me + 1, 0);
 		if (n0)
 			pollfd[1].events |= POLLOUT;
 		else
@@ -529,14 +492,14 @@ main(int argc, char **argv)
 				ret <= 0 ? "timeout" : "ok",
 				pollfd[0].events,
 				pollfd[0].revents,
-				howmany(me, 0),
+				pkt_queued(me, 0),
 				me[0].rx->cur,
-				howmany(me, 1),
+				pkt_queued(me, 1),
 				pollfd[1].events,
 				pollfd[1].revents,
-				howmany(me+1, 0),
+				pkt_queued(me+1, 0),
 				me[1].rx->cur,
-				howmany(me+1, 1)
+				pkt_queued(me+1, 1)
 			);
 		if (ret < 0)
 			continue;
