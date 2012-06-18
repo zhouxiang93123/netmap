@@ -23,7 +23,7 @@ testpcap: pcap.c libnetmap.so
 
 kern_test: testmod/kern_test.c
 
-pkt-gen bridge libnetmap.so pcap: nm_util.h
+pkt-gen.o bridge.o libnetmap.so pcap.o: nm_util.h
 libnetmap.so:	pcap.c
 	$(CC) $(CFLAGS) -fpic -c ${.ALLSRC}
 	$(CC) -shared -o ${.TARGET} ${.ALLSRC:.c=.o}

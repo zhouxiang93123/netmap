@@ -10,6 +10,7 @@
  * $FreeBSD: head/tools/tools/netmap/pcap.c 227614 2011-11-17 12:17:39Z luigi $
  */
 
+#define MY_PCAP
 #include "nm_util.h"
 
 char *version = "$Id$";

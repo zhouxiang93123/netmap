@@ -77,7 +77,9 @@
 
 #include <net/netmap.h>
 #include <net/netmap_user.h>
-// #include <pcap/pcap.h> // XXX do we need it ?
+#ifndef MY_PCAP
+#include <pcap/pcap.h> // XXX do we need it ?
+#endif // XXX hack
 
 #include <pthread.h>	/* pthread_* */
 #if defined(__FreeBSD__)
