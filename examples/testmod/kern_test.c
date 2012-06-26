@@ -161,7 +161,7 @@ test_run(SYSCTL_HANDLER_ARGS)
 		i->fn(&a);
 		t_end = rdtsc();
 		t_delta = t_end - t_start;
-		printf("%s took %lu ticks\n", test_name, t_delta);
+		printf("%s took %lu ticks\n", test_name, (u_long)t_delta);
 	}
         return (0);
 }

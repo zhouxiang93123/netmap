@@ -100,7 +100,7 @@ struct eproto {
 };
 #endif /* !PCAP_ERRBUF_SIZE */
 
-#if 1 //def __PIC__
+#ifndef TEST
 /*
  * build as a shared library
  */
@@ -550,7 +550,8 @@ pcap_open_live(const char *device, __unused int snaplen,
         me->if_reqcap &= ~(IFCAP_HWCSUM | IFCAP_TSO | IFCAP_TOE);
         if (do_ioctl(me, SIOCSIFCAP, 0))
 		D("SIOCSIFCAP failed");
-#else /* linux */
+#endif
+#ifdef linux
 	/* disable:
 	 * - generic-segmentation-offload
 	 * - tcp-segmentation-offload
@@ -561,7 +562,7 @@ pcap_open_live(const char *device, __unused int snaplen,
 	do_ioctl(me, SIOCETHTOOL, ETHTOOL_STSO);
 	do_ioctl(me, SIOCETHTOOL, ETHTOOL_SRXCSUM);
 	do_ioctl(me, SIOCETHTOOL, ETHTOOL_STXCSUM);
-#endif /* !FreeBSD */
+#endif /* linux */
 
 	return (pcap_t *)me;
 }
@@ -714,9 +715,9 @@ pcap_loop(pcap_t *p, int cnt, pcap_handler callback, u_char *user)
 	return 0;
 }
 
-#endif /* __PIC__ */
+#endif /* !TEST */
 
-#ifndef __PIC__
+#ifdef TEST	/* build test code */
 void do_send(u_char *user, const struct pcap_pkthdr *h, const u_char *buf)
 {
 	pcap_inject((pcap_t *)user, buf, h->caplen);
@@ -779,4 +780,4 @@ main(int argc, char **argv)
 
 	return (0);
 }
-#endif /* !__PIC__ */
+#endif /* TEST */

@@ -64,12 +64,12 @@
 #ifdef __APPLE__
 #define ifr_flagshigh  ifr_flags	// XXX
 #define IFF_PPROMISC   IFF_PROMISC
-#endif
+#endif /* __APPLE__ */
 
 #ifdef __FreeBSD__
 #include <sys/endian.h> /* le64toh */
 #include <machine/param.h>
-#endif
+#endif /* __FreeBSD__ */
 
 #include <netinet/in.h>
 #include <netinet/ip.h>

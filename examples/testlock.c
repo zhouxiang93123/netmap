@@ -40,6 +40,7 @@
 
 #include <libkern/OSAtomic.h>
 #define atomic_add_int(p, n) OSAtomicAdd32(n, (int *)p)
+#define	atomic_cmpset_32(p, o, n)	OSAtomicCompareAndSwap32(o, n, (int *)p)
 
 #elif defined(linux)
 
@@ -413,9 +414,11 @@ void
 test_time(struct targ *t)
 {
         int m;
-	struct timespec ts;
         for (m = 0; m < t->g->m_cycles; m++) {
+#ifndef __APPLE__
+		struct timespec ts;
 		clock_gettime(t->g->arg, &ts);
+#endif
 		t->count++;
         }
 }
