@@ -253,8 +253,8 @@ setaffinity(pthread_t me, int i)
 		return 1;
 	}
 #else
-	me = NULL;
-	i=0;
+	(void)me; /* suppress 'unused' warnings */
+	(void)i;
 #endif /* __FreeBSD__ */
 	return 0;
 }
@@ -501,7 +501,7 @@ pinger_body(void *data)
 				}
 				if (0) D("seq %d/%d delta %d.%09d", seq, sent,
 					(int)ts.tv_sec, (int)ts.tv_nsec);
-				if (ts.tv_nsec < min)
+				if (ts.tv_nsec < (int)min)
 					min = ts.tv_nsec;
 				count ++;
 				av += ts.tv_nsec;
