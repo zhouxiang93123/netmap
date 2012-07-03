@@ -29,6 +29,8 @@
  * Some utilities to build netmap-based programs.
  */
 
+#ifndef _NM_UTIL_H
+#define _NM_UTIL_H
 #include <errno.h>
 #include <signal.h>	/* signal */
 #include <stdlib.h>
@@ -51,7 +53,7 @@
 #include <net/ethernet.h>
 #include <net/if.h>	/* ifreq */
 
-#ifdef __linux__
+#ifdef linux
 #define ifr_flagshigh  ifr_flags
 #define ifr_curcap     ifr_flags
 #define ifr_reqcap     ifr_flags
@@ -82,16 +84,19 @@
 #endif // XXX hack
 
 #include <pthread.h>	/* pthread_* */
+
 #if defined(__FreeBSD__)
 #include <pthread_np.h> /* pthread w/ affinity */
 #include <sys/cpuset.h> /* cpu_set */
 #include <net/if_dl.h>  /* LLADDR */
 #endif
+
 #if defined(__APPLE__)
 #include <net/if_dl.h>  /* LLADDR */
 #define clock_gettime(a,b)	\
 	do {struct timespec t0 = {0,0};	*(b) = t0; } while (0)
 #endif
+
 #ifdef linux
 #define CLOCK_REALTIME_PRECISE CLOCK_REALTIME
 #include <netinet/ether.h>      /* ether_aton */
@@ -169,7 +174,7 @@ rdtsc(void)
 }
 #endif /* EXPERIMENTAL */
 
-struct my_ring;
+//struct my_ring;
 /*
  * info on a ring we handle
  */
@@ -189,4 +194,5 @@ struct my_ring {
 };
 int netmap_open(struct my_ring *me, int ringid, int promisc);
 int netmap_close(struct my_ring *me);
-int nm_do_ioctl(struct my_ring *me, int what, __unused int subcmd);
+int nm_do_ioctl(struct my_ring *me, int what, int subcmd);
+#endif /* _NM_UTIL_H */

@@ -32,6 +32,7 @@ pkt-gen: pkt-gen.o nm_util.o
 bridge: bridge.o nm_util.o
 	$(CC) $(LDFLAGS) -o ${.TARGET} ${.ALLSRC}
 
-libnetmap.so:	pcap.c nm_util.o
+libnetmap.so:	pcap.c nm_util.c
 	$(CC) $(CFLAGS) -fpic -c pcap.c
+	$(CC) $(CFLAGS) -fpic -c nm_util.c
 	$(CC) -shared -o ${.TARGET} pcap.o nm_util.o

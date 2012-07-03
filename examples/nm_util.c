@@ -34,11 +34,10 @@
 
 #include "nm_util.h"
 
-
 extern int verbose;
 
 int
-nm_do_ioctl(struct my_ring *me, int what, __unused int subcmd)
+nm_do_ioctl(struct my_ring *me, int what, int subcmd)
 {
 	struct ifreq ifr;
 	int error;
@@ -55,6 +54,7 @@ nm_do_ioctl(struct my_ring *me, int what, __unused int subcmd)
 	}
 #endif /* linux */
 
+	(void)subcmd;	// unused
 	bzero(&ifr, sizeof(ifr));
 	strncpy(ifr.ifr_name, me->ifname, sizeof(ifr.ifr_name));
 	switch (what) {
