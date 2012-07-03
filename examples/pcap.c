@@ -110,8 +110,12 @@ char pcap_version[] = "libnetmap version 0.3";
 /*
  * Our equivalent of pcap_t
  */
-struct my_ring {
-	struct nmreq nmr;
+struct pcap_ring {
+	struct my_ring me;
+#if 0
+	const char *ifname;
+
+	//struct nmreq nmr;
 
 	int fd;
 	char *mem;			/* userspace mmap address */
@@ -120,6 +124,10 @@ struct my_ring {
 	u_int begin, end;		/* first..last+1 rings to check */
 	struct netmap_if *nifp;
 
+	uint32_t if_flags;
+	uint32_t if_reqcap;
+	uint32_t if_curcap;
+#endif
 	int snaplen;
 	char *errbuf;
 	int promisc;
@@ -127,9 +135,6 @@ struct my_ring {
 
 	struct pcap_pkthdr hdr;
 
-	uint32_t if_flags;
-	uint32_t if_reqcap;
-	uint32_t if_curcap;
 
 	struct pcap_stat st;
 
@@ -137,6 +142,7 @@ struct my_ring {
 };
 
 
+#if 0 // defined in nm_util.c
 static int
 do_ioctl(struct my_ring *me, int what, __unused int subcmd)
 {
@@ -271,6 +277,7 @@ error:
 	close(me->fd);
 	return -1;
 }
+#endif // XXX defined in nm_util.c
 
 /*
  * There is a set of functions that tcpdump expects even if probably
@@ -404,7 +411,7 @@ pcap_can_set_rfmon(__unused pcap_t *p)
 int
 pcap_set_snaplen(pcap_t *p, int snaplen)
 {
-	struct my_ring *me = p;
+	struct pcap_ring *me = p;
 
 	D("len %d", snaplen);
 	me->snaplen = snaplen;
@@ -414,7 +421,7 @@ pcap_set_snaplen(pcap_t *p, int snaplen)
 int
 pcap_snapshot(pcap_t *p)
 {
-	struct my_ring *me = p;
+	struct pcap_ring *me = p;
 
 	D("len %d", me->snaplen);
 	return me->snaplen;
@@ -434,17 +441,17 @@ pcap_lookupnet(const char *device, uint32_t *netp,
 int
 pcap_set_promisc(pcap_t *p, int promisc)
 {
-	struct my_ring *me = p;
+	struct pcap_ring *me = p;
 
 	D("promisc %d", promisc);
-        if (do_ioctl(me, SIOCGIFFLAGS, 0))
+        if (nm_do_ioctl(&me->me, SIOCGIFFLAGS, 0))
 		D("SIOCGIFFLAGS failed");
 	if (promisc) {
-		me->if_flags |= IFF_PPROMISC;
+		me->me.if_flags |= IFF_PPROMISC;
 	} else {
-		me->if_flags &= ~IFF_PPROMISC;
+		me->me.if_flags &= ~IFF_PPROMISC;
 	}
-	if (do_ioctl(me, SIOCSIFFLAGS, 0))
+	if (nm_do_ioctl(&me->me, SIOCSIFFLAGS, 0))
 		D("SIOCSIFFLAGS failed");
 	return 0;
 }
@@ -452,7 +459,7 @@ pcap_set_promisc(pcap_t *p, int promisc)
 int
 pcap_set_timeout(pcap_t *p, int to_ms)
 {
-	struct my_ring *me = p;
+	struct pcap_ring *me = p;
 
 	D("%d ms", to_ms);
 	me->to_ms = to_ms;
@@ -501,7 +508,7 @@ struct pcap_stat;
 int
 pcap_stats(pcap_t *p, struct pcap_stat *ps)
 {
-	struct my_ring *me = p;
+	struct pcap_ring *me = p;
 	ND("");
 
 	*ps = me->st;
@@ -511,7 +518,7 @@ pcap_stats(pcap_t *p, struct pcap_stat *ps)
 char *
 pcap_geterr(pcap_t *p)
 {
-	struct my_ring *me = p;
+	struct pcap_ring *me = p;
 
 	D("");
 	return me->msg;
@@ -521,48 +528,29 @@ pcap_t *
 pcap_open_live(const char *device, __unused int snaplen,
                int promisc, int to_ms, __unused char *errbuf)
 {
-	struct my_ring *me;
+	struct pcap_ring *me;
+	int l;
+	if (!device) {
+		D("missing device name");
+		return NULL;
+	}
 
+	l = strlen(device) + 1;
 	D("request to open %s snaplen %d promisc %d timeout %dms",
 		device, snaplen, promisc, to_ms);
-	me = calloc(1, sizeof(*me));
+	me = calloc(1, sizeof(*me) + l);
 	if (me == NULL) {
 		D("failed to allocate struct for %s", device);
 		return NULL;
 	}
-	strncpy(me->nmr.nr_name, device, sizeof(me->nmr.nr_name));
-	if (netmap_open(me, 0)) {
+	me->me.ifname = (char *)(me + 1);
+	strcpy((char *)me->me.ifname, device);
+	if (netmap_open(&me->me, 0, promisc)) {
 		D("error opening %s", device);
 		free(me);
 		return NULL;
 	}
 	me->to_ms = to_ms;
-        if (do_ioctl(me, SIOCGIFFLAGS, 0))
-		D("SIOCGIFFLAGS failed");
-	if (promisc) {
-		me->if_flags |= IFF_PPROMISC;
-		if (do_ioctl(me, SIOCSIFFLAGS, 0))
-			D("SIOCSIFFLAGS failed");
-	}
-#ifdef __FreeBSD__
-        if (do_ioctl(me, SIOCGIFCAP, 0))
-		D("SIOCGIFCAP failed");
-        me->if_reqcap &= ~(IFCAP_HWCSUM | IFCAP_TSO | IFCAP_TOE);
-        if (do_ioctl(me, SIOCSIFCAP, 0))
-		D("SIOCSIFCAP failed");
-#endif
-#ifdef linux
-	/* disable:
-	 * - generic-segmentation-offload
-	 * - tcp-segmentation-offload
-	 * - rx-checksumming
-	 * - tx-checksumming
-	 */
-	do_ioctl(me, SIOCETHTOOL, ETHTOOL_SGSO);
-	do_ioctl(me, SIOCETHTOOL, ETHTOOL_STSO);
-	do_ioctl(me, SIOCETHTOOL, ETHTOOL_SRXCSUM);
-	do_ioctl(me, SIOCETHTOOL, ETHTOOL_STXCSUM);
-#endif /* linux */
 
 	return (pcap_t *)me;
 }
@@ -618,7 +606,8 @@ pcap_setdirection(__unused pcap_t *p, __unused pcap_direction_t d)
 int
 pcap_dispatch(pcap_t *p, int cnt, pcap_handler callback, u_char *user)
 {
-	struct my_ring *me = p;
+	struct pcap_ring *pme = p;
+	struct my_ring *me = &pme->me;
 	int got = 0;
 	u_int si;
 
@@ -631,7 +620,7 @@ pcap_dispatch(pcap_t *p, int cnt, pcap_handler callback, u_char *user)
 		ND("ring has %d pkts", ring->avail);
 		if (ring->avail == 0)
 			continue;
-		me->hdr.ts = ring->ts;
+		pme->hdr.ts = ring->ts;
 		/*
 		 * XXX a proper prefetch should be done as
 		 *	prefetch(i); callback(i-1); ...
@@ -646,15 +635,15 @@ pcap_dispatch(pcap_t *p, int cnt, pcap_handler callback, u_char *user)
 			}
 			u_char *buf = (u_char *)NETMAP_BUF(ring, idx);
 			prefetch(buf);
-			me->hdr.len = me->hdr.caplen = ring->slot[i].len;
+			pme->hdr.len = pme->hdr.caplen = ring->slot[i].len;
 			// D("call %p len %d", p, me->hdr.len);
-			callback(user, &me->hdr, buf);
+			callback(user, &pme->hdr, buf);
 			ring->cur = NETMAP_RING_NEXT(ring, i);
 			ring->avail--;
 			got++;
 		}
 	}
-	me->st.ps_recv += got;
+	pme->st.ps_recv += got;
 	return got;
 }
 
@@ -694,13 +683,13 @@ pcap_inject(pcap_t *p, const void *buf, size_t size)
 int
 pcap_loop(pcap_t *p, int cnt, pcap_handler callback, u_char *user)
 {
-	struct my_ring *me = p;
+	struct pcap_ring *me = p;
 	struct pollfd fds[1];
 	int i;
 
 	ND("cnt %d", cnt);
 	memset(fds, 0, sizeof(fds));
-	fds[0].fd = me->fd;
+	fds[0].fd = me->me.fd;
 	fds[0].events = (POLLIN);
 
 	while (cnt == -1 || cnt > 0) {

@@ -1,5 +1,8 @@
 /*
  * glue to compile netmap under FreeBSD
+ *
+ * Headers are in
+ * /System/Library/Frameworks/Kernel.framework/Headers/
  */
 #ifndef OSX_GLUE_H
 #define OSX_GLUE_H
@@ -10,6 +13,17 @@
 #include <string.h>
 #define TUNABLE_INT(name, ptr)
 
+#include <kern/locks.h>		// lock
+#include <IOKit/IOLocks.h>	// IOlock
+#include <sys/select.h>		// struct selinfo
+struct selinfo {		// private in the kernel
+	char dummy[128];
+};
+#include <sys/socket.h>
+#include <sys/mbuf.h>
+struct mbuf;	// XXX
+// #include <sys/kpi_mbuf.h>
+#include <net/kpi_interface.h>
 #include <net/if.h>
 #include <net/bpf.h>            /* BIOCIMMEDIATE */
 //#include <net/vnet.h>

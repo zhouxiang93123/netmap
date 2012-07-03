@@ -67,6 +67,15 @@
 #define IFCAP_NETMAP   0x100000
 #endif
 
+#elif defined (__APPLE__)
+#warning apple support is experimental
+#define likely(x)	__builtin_expect(!!(x), 1)
+#define unlikely(x)	__builtin_expect(!!(x), 0)
+#define	NM_LOCK_T	IOLock *
+#define	NM_SELINFO_T	struct selinfo
+#define	MBUF_LEN(m)	((m)->m_pkthdr.len)
+#define	NM_SEND_UP(ifp, m)	((ifp)->if_input)(ifp, m)
+
 #else
 #error unsupported platform
 #endif

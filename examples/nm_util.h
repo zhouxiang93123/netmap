@@ -113,7 +113,7 @@ static inline int min(int a, int b) { return a < b ? a : b; }
 
 
 // XXX does it work on 32-bit machines ?
-inline void prefetch (const void *x)
+static inline void prefetch (const void *x)
 {
         __asm volatile("prefetcht0 %0" :: "m" (*(const unsigned long *)x));
 }
@@ -169,3 +169,24 @@ rdtsc(void)
 }
 #endif /* EXPERIMENTAL */
 
+struct my_ring;
+/*
+ * info on a ring we handle
+ */
+struct my_ring {
+        const char *ifname;
+        int fd;
+        char *mem;                      /* userspace mmap address */
+        u_int memsize;
+        u_int queueid;
+        u_int begin, end;               /* first..last+1 rings to check */
+        struct netmap_if *nifp;
+        struct netmap_ring *tx, *rx;    /* shortcuts */
+
+        uint32_t if_flags;
+        uint32_t if_reqcap;
+        uint32_t if_curcap;
+};
+int netmap_open(struct my_ring *me, int ringid, int promisc);
+int netmap_close(struct my_ring *me);
+int nm_do_ioctl(struct my_ring *me, int what, __unused int subcmd);

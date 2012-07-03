@@ -18,6 +18,14 @@ char *version = "$Id$";
 
 static int do_abort = 0;
 
+static void
+sigint_h(__unused int sig)
+{
+	do_abort = 1;
+	signal(SIGINT, SIG_DFL);
+}
+
+#if 0 // XXX moved to nm_util.c
 /*
  * info on a ring we handle
  */
@@ -35,13 +43,6 @@ struct my_ring {
 	uint32_t if_reqcap;
 	uint32_t if_curcap;
 };
-
-static void
-sigint_h(__unused int sig)
-{
-	do_abort = 1;
-	signal(SIGINT, SIG_DFL);
-}
 
 
 static int
@@ -195,7 +196,7 @@ netmap_close(struct my_ring *me)
 	close(me->fd);
 	return (0);
 }
-
+#endif // XXX moved to nm_util.c
 
 /*
  * move up to 'limit' pkts from rxring to txring swapping buffers.
@@ -395,12 +396,13 @@ main(int argc, char **argv)
 		/* two different interfaces. Take all rings on if1 */
 		i = 0;	// all hw rings
 	}
-	if (netmap_open(me, i))
+	if (netmap_open(me, i, 1))
 		return (1);
 	me[1].mem = me[0].mem; /* copy the pointer, so only one mmap */
-	if (netmap_open(me+1, 0))
+	if (netmap_open(me+1, 0, 1))
 		return (1);
 
+#if 0 // XXX done in open
 	/* if bridging two interfaces, set promisc mode */
 	if (i != NETMAP_SW_RING) {
 		do_ioctl(me, SIOCGIFFLAGS, 0);
@@ -455,6 +457,8 @@ main(int argc, char **argv)
 	do_ioctl(me+1, SIOCETHTOOL, ETHTOOL_SRXCSUM);
 	do_ioctl(me+1, SIOCETHTOOL, ETHTOOL_STXCSUM);
 #endif /* linux */
+
+#endif // XXX done in open
 
 	/* setup poll(2) variables. */
 	memset(pollfd, 0, sizeof(pollfd));
