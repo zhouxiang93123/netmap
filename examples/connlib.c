@@ -1,3 +1,7 @@
+/*
+ * $Id$
+ */
+
 #include "connlib.h"
 
 static int verbose = 1;
@@ -5,8 +9,24 @@ static int verbose_arp = 1;
 
 #define TX_ALLQUEUE 1 /* if 0 send_udp_packet function will use only the first
                        * queue */
+#define STATS 1 /* print statistics on socket closure */
+
+/* reduce a 64 bit nuumber to a 16 bit checksum */
+#define CKSUM_REDUCE(d64) ({                    \
+        uint64_t tmp = (d64);                   \
+        tmp = (tmp & 0xffffffff) + (tmp >> 32); \
+        tmp = (tmp & 0xffffffff) + (tmp >> 32); \
+        tmp = (tmp & 0xffff) + (tmp >> 16);     \
+        tmp = (tmp & 0xffff) + (tmp >> 16);     \
+        (uint16_t)tmp;                          \
+})
+
+#if STATS
+static u_int numrxpoll = 0, numslothunter = 0, maxslotavail = 0;
+#endif
+
 #if !TX_ALLQUEUE
-static int poll_done = 0;
+static int sync_done = 0;
 #endif
 
 /*
@@ -123,7 +143,7 @@ find_mac_address(struct params *p)
 		st = sysctl(mib, 6, buf, &needed, NULL, 0);
 		if (st == 0 || errno != ENOMEM)
 			break;
-		needed += needed / 8;
+		needed += needed/8;
 	}
 	if (st == -1) {
 		free(buf);
@@ -184,12 +204,7 @@ nm_open(struct my_ring *me, int ringid)
 	}
 
 	if (me->mem == NULL) {
-		me->mem = mmap(0,
-		               l,
-		               PROT_WRITE | PROT_READ,
-		               MAP_SHARED,
-		               fd,
-		               0);
+		me->mem = mmap(0, l, PROT_WRITE | PROT_READ, MAP_SHARED, fd, 0);
 		if (me->mem == MAP_FAILED) {
 			D("Unable to mmap");
 			me->mem = NULL;
@@ -257,25 +272,21 @@ nm_socket(char *if_name, int domain, int protocol)
 		return(NULL);
 	}
 	/* netmap */
-	p->me[0].ifname = if_name;	/* 0: STACK */
-	p->me[1].ifname = if_name;	/* 1: NIC */
+	p->me[0].ifname = p->me[1].ifname = if_name; /* 0: stack - 1: nic */
 	if (nm_open(p->me, NETMAP_SW_RING)) {
 		D("an error occurred while opening netmap software ring");
-		free(p);
-		return(NULL);
+		goto fail;
 	}
 	if (nm_open(&p->me[1], 0)) {
 		D("an error occurred while opening netmap hardware ring");
 		D("closing software ring...");
 		nm_close(p->me);
-		free(p);
-		return(NULL);
+		goto fail;
 	}
 	if (get_if_info(p, if_name)) {
 		nm_close(&p->me[0]);
 		nm_close(&p->me[1]);
-		free(p);
-		return(NULL);
+		goto fail;
 	}
 	p->rx.sin_port = htons(55555); /* default port, will be overwritten in
 	                                * nm_bind */
@@ -296,41 +307,42 @@ nm_socket(char *if_name, int domain, int protocol)
 		                      sizeof(struct ip) -
 		                      sizeof(struct udphdr);
 	}
+	p->minlen = sizeof(struct ether_header) +
+	            sizeof(struct ip) +
+	            sizeof(struct udphdr);
+	p->stackring_idx = p->nicring_idx = -1;
 	return(p);
+fail:
+	free(p);
+	return NULL;
 }
 
 /*
- * Initialize the header of an UDP packet, which will be sent by the trasmitter.
+ * Initialize the header of an UDP packet, which will be sent by the
+ * transmitter.
  */
 static void
 build_udp_header(struct params *p)
 {
-	struct ether_header *eh;
-	struct ip *ip;
-	struct udphdr *udp;
+	struct ether_header *eh = &p->udp_pkt_hdr.eh;
+	struct ip *ip = &p->udp_pkt_hdr.ip;
+	struct udphdr *udp = &p->udp_pkt_hdr.udp;
 
 	bzero(&p->udp_pkt_hdr, sizeof(struct udp_packet_headers));
+
 	/* ethernet header */
-	eh = &p->udp_pkt_hdr.eh;
 	eh->ether_type = htons(ETHERTYPE_IP);
 	bcopy(&p->if_mac_address, eh->ether_shost, ETHER_ADDR_LEN);
 	bcopy(&p->dst_mac_address, eh->ether_dhost, ETHER_ADDR_LEN);
 
 	/* IP header */
-	ip = &p->udp_pkt_hdr.ip;
 	ip->ip_v = IPVERSION;
 	ip->ip_hl = 5;
-	ip->ip_len = htons(p->max_payload_size +
-	                   sizeof(struct udphdr) +
-	                   sizeof(struct ip));
-	ip->ip_id = 0;
 	ip->ip_p = IPPROTO_UDP;
-	/*memcpy(&ip->ip_src, &p->rx.sin_addr, sizeof(struct in_addr));*/ // XXX
 	memcpy(&ip->ip_src, &p->if_ip_address, sizeof(struct in_addr));
 	memcpy(&ip->ip_dst, &p->tx.sin_addr, sizeof(struct in_addr));
 
 	/* UDP header */
-	udp = &p->udp_pkt_hdr.udp;
 	udp->uh_sport = p->rx.sin_port;
 	udp->uh_dport = p->tx.sin_port;
 }
@@ -343,8 +355,9 @@ build_udp_header(struct params *p)
 static struct arp_packet*
 build_arp_request_packet(const struct params *p)
 {
-	struct ether_header *eh;
-	struct arphdr *arp;
+	struct arp_packet *pkt = calloc(1, 60);
+	struct ether_header *eh = &pkt->eh;
+	struct arphdr *arp = &pkt->arp;
 
 	/*
 	   sizeof(struct ether_header) +
@@ -356,7 +369,6 @@ build_arp_request_packet(const struct params *p)
 
 	   Ethernet minimum frame size = 60 bytes (+ 4 bytes CRC)
 	*/
-	struct arp_packet *pkt = calloc(1, 60);
 
 	if (pkt == NULL) {
 		D("ERROR: an error occurred while allocating packet memory");
@@ -369,12 +381,10 @@ build_arp_request_packet(const struct params *p)
 		D("***DEBUG*** p->tx.sin_addr %s", inet_ntoa(p->tx.sin_addr));
 	}
 
-	eh = &pkt->eh;
 	bcopy(&p->if_mac_address, eh->ether_shost, ETHER_ADDR_LEN);
 	bcopy(ether_aton("FF:FF:FF:FF:FF:FF"), eh->ether_dhost, ETHER_ADDR_LEN);
 	eh->ether_type = htons(ETHERTYPE_ARP);
 
-	arp = &pkt->arp;
 	arp->ar_hrd = htons(ARPHRD_ETHER);
 	arp->ar_pro = htons(ETHERTYPE_IP);
 	arp->ar_hln = ETHER_ADDR_LEN;
@@ -388,13 +398,12 @@ build_arp_request_packet(const struct params *p)
 }
 
 /*
- * Copy the packet in the first available slot of NIC tx ring.
+ * Copy the UDP packet in the first available slot of nic tx ring.
  *
  * Return 1 on success, 0 if there are no available slots.
  */
 static int
-send_udp_packet(struct params *p, const void *payload, int payload_len,
-                struct pollfd *pollfd)
+send_udp_packet(struct params *p, const void *payload, int payload_len)
 {
 	char *pnt;
 	struct netmap_ring *ring;
@@ -402,7 +411,7 @@ send_udp_packet(struct params *p, const void *payload, int payload_len,
 	u_int cur, index = p->me[1].begin;
 
 #if TX_ALLQUEUE
-	/* scroll NIC tx rings */
+	/* scroll nic tx rings */
 	while (index < p->me[1].end) {
 		ring = NETMAP_TXRING(p->me[1].nifp, index);
 		if (ring->avail == 0) {
@@ -429,13 +438,17 @@ send_udp_packet(struct params *p, const void *payload, int payload_len,
 			ring->avail--;
 			ring->cur = cur;
 #if !TX_ALLQUEUE
-			if (ring->avail < 100 && !poll_done && pollfd != NULL) {
-				/* XXX when remove this part, remove pollfd
-				 * argument in the definition as well */
-				poll(pollfd, 1, 1000);
-				poll_done = 1;	// make it only once
-			} else if (poll_done) {
-				poll_done = 0;
+			if (ring->avail < 200) {
+				if (!sync_done) {
+					/* make an ioctl to free some space in
+					 * nic tx ring */
+					ioctl(p->me[1].fd, NIOCTXSYNC, NULL);
+					sync_done = 1; /* do it only once */
+				} else if (ring->avail == 0) {
+					sync_done = 0;
+				}
+			} else if (sync_done) {
+				sync_done = 0;
 			}
 #endif
 			return(1);
@@ -455,11 +468,8 @@ send_udp_packet(struct params *p, const void *payload, int payload_len,
 static int
 is_arp_reply(struct params *p, char *packet)
 {
-	struct ether_header *eh;
-	struct arphdr *arp;
-
-	eh = (struct ether_header *) packet;
-	arp = (struct arphdr *) &eh[1];
+	struct ether_header *eh = (struct ether_header *) packet;
+	struct arphdr *arp = (struct arphdr *) &eh[1];
 
 	/* ethernet header */
 	if (memcmp(eh->ether_dhost, &p->if_mac_address, ETHER_ADDR_LEN)) {
@@ -499,9 +509,9 @@ is_arp_reply(struct params *p, char *packet)
 		if (verbose_arp) {
 			D("***DEBUG*** ARP addresses don't match");
 			D("***DEBUG*** spa %s",
-			  inet_ntoa(*((struct in_addr *) ar_spa(arp))));
+			  inet_ntoa(* ((struct in_addr *) ar_spa(arp))));
 			D("***DEBUG*** tpa %s",
-			  inet_ntoa(*((struct in_addr *) ar_tpa(arp))));
+			  inet_ntoa(* ((struct in_addr *) ar_tpa(arp))));
 		}
 		return(0);
 	}
@@ -514,7 +524,7 @@ is_arp_reply(struct params *p, char *packet)
 
 /*
  * Send an ARP request for `p->dst_ip_address', receive ARP response and route
- * it to the STACK.
+ * it to the stack.
  *
  * Return 0 on success, 1 if unable to send ARP request or ARP reply hasn't
  * been catched.
@@ -524,9 +534,9 @@ handle_arp_request(struct params *p)
 {
 	char *pkt, *pnt;
 	int sent = 0, ret, avail, received = 0, swapped, i, timeout = 30000000;
-	u_int si = p->me[1].begin, di = p->me[0].begin, j, k;
+	u_int si, di, j, k;
 	uint32_t index, cur;
-	struct netmap_ring *stackring = NULL, *nicring = NULL, *txring;
+	struct netmap_ring *stackring, *nicring;
 	struct pollfd pollfd;
 	struct arp_packet *ap;
 	struct netmap_slot *nicslot, *stackslot;
@@ -541,7 +551,7 @@ handle_arp_request(struct params *p)
 	pollfd.events |= POLLOUT;
 	for (i = 0; i < timeout;) {
 		pollfd.revents = 0;
-		ret = poll(&pollfd, 1, 1000);
+		ret = poll(&pollfd, 1, 100);
 		if (ret <= 0) {
 			if (pollfd.revents & POLLERR)
 				D("error on fd, txavail %d / txcur %d",
@@ -553,22 +563,22 @@ handle_arp_request(struct params *p)
 			continue;
 		} else if (pollfd.events & POLLOUT) {
 			/* send ARP request */
-			index = p->me[1].begin;
-			while (index < p->me[1].end) {
-				txring = NETMAP_TXRING(p->me[1].nifp, index);
-				if (txring->avail == 0) {
-					index++;
+			di = p->me[1].begin;
+			while (di < p->me[1].end) {
+				nicring = NETMAP_TXRING(p->me[1].nifp, di);
+				if (nicring->avail == 0) {
+					di++;
 					continue;
 				} else {
-					cur = txring->cur;
-					nicslot = &txring->slot[cur];
-					pnt = NETMAP_BUF(txring,
+					cur = nicring->cur;
+					nicslot = &nicring->slot[cur];
+					pnt = NETMAP_BUF(nicring,
 					                 nicslot->buf_idx);
 					memcpy(pnt, ap, 60);
 					nicslot->len = 60;
-					cur = NETMAP_RING_NEXT(txring, cur);
-					txring->avail--;
-					txring->cur = cur;
+					cur = NETMAP_RING_NEXT(nicring, cur);
+					nicring->avail--;
+					nicring->cur = cur;
 					ioctl(p->me[1].fd, NIOCTXSYNC, NULL);
 					free(ap);
 					pollfd.events = POLLIN;
@@ -589,14 +599,12 @@ handle_arp_request(struct params *p)
 				}
 			}
 		} else if (pollfd.events & POLLIN) {
-			/* get ARP reply and give it to the STACK */
+			/* get ARP reply and give it to the stack */
+			si = p->me[1].begin;
+			di = p->me[0].begin;
 			while (si < p->me[1].end && di < p->me[0].end) {
-				if (nicring == NULL || nicring->avail == 0)
-					nicring = NETMAP_RXRING(p->me[1].nifp,
-					                        si);
-				if (stackring == NULL || stackring->avail == 0)
-					stackring = NETMAP_TXRING(p->me[0].nifp,
-					                          di);
+				nicring = NETMAP_RXRING(p->me[1].nifp, si);
+				stackring = NETMAP_TXRING(p->me[0].nifp, di);
 				if (nicring->avail == 0) {
 					si++;
 					continue;
@@ -613,7 +621,7 @@ handle_arp_request(struct params *p)
 					nicslot = &nicring->slot[j];
 					stackslot = &stackring->slot[k];
 					pkt = NETMAP_BUF(nicring,
-						nicring->slot[j].buf_idx);
+					                 nicslot->buf_idx);
 					/* check if it's an ARP reply */
 					if (is_arp_reply(p, pkt)) {
 						if (verbose_arp) {
@@ -645,15 +653,12 @@ handle_arp_request(struct params *p)
 				nicring->cur = j;
 				stackring->cur = k;
 				if (received)
-					goto found;
+					return(0);
 			}
 			if (++i == timeout)
 				goto error;
 		}
 	}
-found:
-	return(0);
-
 error:
 	if (verbose_arp) {
 		if (pollfd.events & POLLOUT)
@@ -667,16 +672,14 @@ error:
 /*
  * Copy destination informations in `params' structure.
  * Eventually retrieve destination MAC address (if not known yet).
- * Set UDP header info.
+ * Set UDP header info; compute fixed part of IP and UDP checksums.
  *
  * Return 0 on success, 1 otherwise.
  */
 int
 nm_connect(struct params *p, const struct sockaddr *name, socklen_t namelen)
 {
-	struct ip *ip;
-	struct udphdr *udp;
-	uint64_t sum;
+	uint32_t *d;
 
 	if (p == NULL) {
 		D("ERROR: invalid pointer to struct params");
@@ -686,10 +689,16 @@ nm_connect(struct params *p, const struct sockaddr *name, socklen_t namelen)
 		D("ERROR: invalid pointer to struct sockaddr");
 		return(1);
 	}
-	if (memcmp(name, &p->tx, namelen)) {
-		bzero(&p->tx, sizeof(struct sockaddr_in));
-		memcpy(&p->tx, name, namelen);
+	if (namelen != sizeof(struct sockaddr_in)) {
+		D("ERROR: wrong size %d need %d", namelen,
+			sizeof(struct sockaddr_in));
+		return(1);
 	}
+	/* XXX if initialized... */
+	if (memcmp(name, &p->tx, namelen) == 0) {
+		return 0; // socket already set
+	}
+	memcpy(&p->tx, name, namelen);
 	/* retrieve destination MAC address in the ARP table */
 	if (find_mac_address(p)) {
 		D("unable to retrieve MAC address of destination from the ARP"
@@ -698,29 +707,22 @@ nm_connect(struct params *p, const struct sockaddr *name, socklen_t namelen)
 		if (handle_arp_request(p))
 			return(1);
 	}
+	/*
+	 * create a template ip and udp header for the packet.
+	 * No options, and contiguous IP and UDP.
+	 */
 	/* initialize header structure for UDP packets */
 	build_udp_header(p);
-	/* compute checksum for constant header fields */
-	ip = &p->udp_pkt_hdr.ip;
-	udp = &p->udp_pkt_hdr.udp;
-	sum = * (uint16_t *) ip +
-	      * (u_char *) &ip->ip_tos +
-	      * (uint16_t *) &ip->ip_ttl +
-	      * (uint32_t *) &ip->ip_src +
-	      * (uint32_t *) &ip->ip_dst;
-	sum = (sum & 0xffffffff) + (sum >> 32);
-	sum = (sum & 0xffffffff) + (sum >> 32);
-	sum = (sum & 0xffff) + (sum >> 16);
-	sum = (sum & 0xffff) + (sum >> 16);
-	p->ip_const_hdr = sum;
-	sum = * (uint32_t *) &ip->ip_src +
-	      * (uint32_t *) &ip->ip_dst +
-	      * (uint32_t *) &udp->uh_sport;
-	sum = (sum & 0xffffffff) + (sum >> 32);
-	sum = (sum & 0xffffffff) + (sum >> 32);
-	sum = (sum & 0xffff) + (sum >> 16);
-	sum = (sum & 0xffff) + (sum >> 16);
-	p->udp_const_hdr = sum;
+	/* compute checksum for constant header fields.
+	 * The partial ip checksum is the sum of the 20bytes with unknown
+	 * fields (len, id, ofs, csum) set to 0.
+	 * The partial udp checksum is the sum of
+	 * src, dest and src/dst port. They are contiguous
+	 * in the structure (d[3], d[4], d[5])
+	 */
+	d = (uint32_t *)&p->udp_pkt_hdr.ip;
+	p->ip_const_hdr = CKSUM_REDUCE(d[0] + d[1] + d[2] + d[3] + d[4]);
+	p->udp_const_hdr = CKSUM_REDUCE(d[3] + d[4] + d[5]);
 	return(0);
 }
 
@@ -731,30 +733,45 @@ nm_connect(struct params *p, const struct sockaddr *name, socklen_t namelen)
 void
 nm_close_socket(struct params *p)
 {
+#if STATS
 	int i, count = 0;
 	uint64_t sum = 0;
-	for (i = 0; i < NUMTS; i++) {
-		if (p->ts[i].container[0] != 0 && p->ts[i].container[1] != 0) {
-			sum += (p->ts[i].container[1] - p->ts[i].container[0]);
-			count++;
-		}
+#endif
+
+	if (p == NULL || sizeof(*p) != sizeof(struct params)) {
+		D("WARNING: invalid socket pointer");
+		return;
 	}
-	if (count) {
-		sum /= count;
-		D("average delta: %llu, count = %d",
-		  sum,
-		  count);
-	}
+	/* Send remaining packets (if any) */
 	ioctl(p->me[1].fd, NIOCTXSYNC, NULL);
+#if STATS
+	if (p->cur != 0) {
+		for (i = 0; i < NUMTS; i++) {
+			if (p->ts[i].container[0] != 0 &&
+			    p->ts[i].container[1] != 0) {
+				sum += (p->ts[i].container[1] -
+				        p->ts[i].container[0]);
+				count++;
+			}
+		}
+		if (count)
+			D("average delta: %llu, count = %d", sum/count, count);
+	}
+	if (numrxpoll != 0)
+		D("poll number %u", numrxpoll);
+	if (numslothunter != 0)
+		D("slot-hunter number %u", numslothunter);
+	if (maxslotavail != 0)
+		D("max number of available slot %u", maxslotavail);
+#endif
 	nm_close(&p->me[0]);
 	nm_close(&p->me[1]);
 	free(p);
 }
 
 static inline uint64_t
-sum32u(const unsigned char *addr, int count)
+sum32u(const unsigned char *addr, int count, uint64_t sum)
 {
-	uint64_t sum = 0;
 	const uint32_t *p = (uint32_t *) addr;
 
 	for (; count >= 32; count -= 32) {
@@ -780,25 +797,36 @@ sum32u(const unsigned char *addr, int count)
 }
 
 /*
- * If mode = 0: return the number of availabe slots in the ring.
- *
- * If mode > 0: return 1 if there is at least an available slot in the ring;
- * 0 otherwise.
+ * Scan stack and nic rings: store ring indexes and slot counts of most
+ * populated ones.
  */
-static int
-slothunter(const struct my_ring *me, int tx, int mode)
+static void
+slothunter(struct params *p)
 {
-	u_int i, tot = 0;
+	u_int i;
+	struct my_ring *stack = &p->me[0], *nic = &p->me[1];
+	struct netmap_ring *ring;
 
-	for (i = me->begin; i < me->end; i++) {
-		struct netmap_ring *ring = tx ?
-			NETMAP_TXRING(me->nifp, i) :
-			NETMAP_RXRING(me->nifp, i);
-		if (mode && ring->avail)
-			return(1);
-		tot += ring->avail;
+	/* reset indexes and counters */
+	p->stackring_idx = p->nicring_idx = -1;
+	p->stackring_avail = p->nicring_avail = 0;
+	for (i = stack->begin; i < stack->end; i++) {
+		ring = NETMAP_RXRING(stack->nifp, i);
+		if (ring->avail > p->stackring_avail) {
+			p->stackring_idx = i;
+			p->stackring_avail = ring->avail;
+		}
 	}
-	return tot;
+	for (i = nic->begin; i < nic->end; i++) {
+		ring = NETMAP_RXRING(nic->nifp, i);
+		if (ring->avail > p->nicring_avail) {
+			p->nicring_idx = i;
+			p->nicring_avail = ring->avail;
+		}
+	}
+#if STATS
+	numslothunter++;
+#endif
 }
 
 /*
@@ -810,59 +838,46 @@ slothunter(const struct my_ring *me, int tx, int mode)
 int
 nm_send(struct params *p, const void *buf, int buf_len)
 {
-	int ret, len;
+	int ret;
 	uint64_t sum;
-	struct ip *ip;
-	struct udphdr *udp;
+	struct ip *ip = &p->udp_pkt_hdr.ip;
+	struct udphdr *udp = &p->udp_pkt_hdr.udp;
 	struct pollfd pollfd;
 
-	len = MIN(p->max_payload_size, buf_len);
-
-	/* update IP header and checksum */
-	ip = &p->udp_pkt_hdr.ip;
-	ip->ip_len = htons(sizeof(struct ip) + sizeof(struct udphdr) + len);
-	ip->ip_id = htons((ntohs(ip->ip_id) + 1)%65536);
-	sum = p->ip_const_hdr + * (uint32_t *) &ip->ip_len;
-	/* wrap into 16-bit */
-	sum = (sum & 0xffffffff) + (sum >> 32);
-	sum = (sum & 0xffffffff) + (sum >> 32);
-	sum = (sum & 0xffff) + (sum >> 16);
-	sum = (sum & 0xffff) + (sum >> 16);
-	ip->ip_sum = ~sum;
-
-	/* update UDP header and checksum */
-	udp = &p->udp_pkt_hdr.udp;
-	udp->uh_ulen = htons(sizeof(struct udphdr) + len);
+	if (buf_len > p->max_payload_size){
+		D("ERROR: buffer length exceeds maximum payload size");
+		return -1;
+	}
+	/* update IP header and checksum.
+	 * We need to fill the ip_id and ip_len, and add to the
+	 * constant part we computed before.
+	 */
+	ip->ip_len = htons(sizeof(struct ip) +
+	                   sizeof(struct udphdr) +
+	                   buf_len);
+	ip->ip_id = htons(p->ip_id++);
+	sum = p->ip_const_hdr + * (uint32_t *) (void *) &ip->ip_len;
+	ip->ip_sum = ~CKSUM_REDUCE(sum);
+	/* update UDP header and checksum.
+	 * Here we need to update the udp length XXX
+	 * find a better reference RFC768
+	 */
+	udp->uh_ulen = htons(sizeof(struct udphdr) + buf_len);
 	/* pseudo header checksum */
 	sum = p->udp_const_hdr +
 	      (uint16_t) (IPPROTO_UDP << 8) +
 	      2*udp->uh_ulen;
 	/* payload checksum */
-	sum += sum32u((unsigned char *) buf, len);
-	/* wrap into 16-bit */
-	sum = (sum & 0xffffffff) + (sum >> 32);
-	sum = (sum & 0xffffffff) + (sum >> 32);
-	sum = (sum & 0xffff) + (sum >> 16);
-	sum = (sum & 0xffff) + (sum >> 16);
-	udp->uh_sum = ~sum;
+	sum = sum32u((unsigned char *) buf, buf_len, sum);
+	udp->uh_sum = ~CKSUM_REDUCE(sum);
 
-	if (send_udp_packet(p, buf, len, &pollfd))
-		return(len);
-	bzero(&pollfd, sizeof(struct pollfd));
+	if (send_udp_packet(p, buf, buf_len))
+		return(buf_len);
 	pollfd.fd = p->me[1].fd;
-	pollfd.events |= POLLOUT;
+	pollfd.events = POLLOUT;
 	for (;;) {
 		pollfd.revents = 0;
-		ret = poll(&pollfd, 1, 1000);
-#if 0
-		if (ret <= 0 || verbose)
-			D("poll %s ev %x %x tx->cur: %d howmany %d",
-			  ret <= 0 ? "timeout" : "ok",
-			  pollfd.events,
-			  pollfd.revents,
-			  p->me[1].tx->cur,
-			  slothunter(&p->me[1], 1, 0));
-#endif
+		ret = poll(&pollfd, 1, 100);
 		if (ret <= 0) {
 			if (pollfd.revents & POLLERR)
 				D("error on fd, txavail %d / txcur %d",
@@ -870,14 +885,14 @@ nm_send(struct params *p, const void *buf, int buf_len)
 				  p->me[1].tx->cur);
 			continue;
 		}
-		if (send_udp_packet(p, buf, len, &pollfd))
+		if (send_udp_packet(p, buf, buf_len))
 			break;
 	}
-	return(len);
+	return(buf_len);
 }
 
 /*
- * Compare `to' with the informations in the socket: if not equal call
+ * Compare `to' with the informations in the socket: if they don't match, call
  * nm_connect.
  * Call nm_send.
  *
@@ -889,24 +904,33 @@ nm_sendto(struct params *p, const void *buf, int buf_len,
 {
 	u_int bytes_sent;
 
-	if (((struct sockaddr_in *) to)->sin_family != AF_INET) {
-		D("ERROR: family protocol not supported: %d",
-		  ((struct sockaddr_in *) to)->sin_family);
-		return(-1);
+	/*
+	 * quick check to validate addresses. We only care about
+	 * the first 64 bits in the sockaddr.
+	 */
+	if (tolen != sizeof(struct sockaddr_in) ||
+	    * (uint64_t *) to != * (uint64_t *) &p->tx) {
+		struct sockaddr_in *sin = (struct sockaddr_in *)to;
+
+		if (sin->sin_family != AF_INET) {
+			D("ERROR: family protocol not supported: %d",
+			  sin->sin_family);
+			return(-1);
+		}
+		if (tolen != sizeof(struct sockaddr_in)) {
+			D("ERROR: bad tolen %d", tolen);
+			return(-1);
+		}
+		if (nm_connect(p, to, tolen)) {
+			D("ERROR: netmap connect returned -1");
+			return(-1);
+		}
 	}
 	if (buf == NULL) {
 		// XXX use default payload?
 		D("ERROR: buffer pointer is NULL");
 		return(-1);
 	}
-	/* connect */
-	if (memcmp(to, &p->tx, tolen)) {
-		if (nm_connect(p, to, tolen)) {
-			D("ERROR: netmap connect returned -1");
-			return(-1);
-		}
-	}
-	/* send */
 	bytes_sent = nm_send(p, buf, buf_len);
 	return(bytes_sent);
 }
@@ -917,35 +941,31 @@ nm_sendto(struct params *p, const void *buf, int buf_len,
  * Return 1 if it's an UDP packet addressed to "this" host, 0 otherwise.
  */
 static int
-check_udp_packet(struct params *p, char *pkt, int packet_size)
+check_udp_packet(struct params *p, char *pkt, uint16_t packet_size)
 {
+	uint16_t iplen, udplen;
+	uint32_t *d;
 	uint64_t sum;
-	struct ether_header *eh;
-	struct ip *ip;
-	struct udphdr *udp;
+	struct ether_header *eh = (struct ether_header *) pkt;
+	struct ip *ip = (struct ip *) &eh[1];
+	struct udphdr *udp = (struct udphdr *) &ip[1];
 
-	eh = (struct ether_header *) pkt;
-	ip = (struct ip *) &eh[1];
-	udp = (struct udphdr *) &ip[1];
-
-#if 0
-	if (packet_size < ntohs(udp->uh_ulen)) { /* minimum ethernet frame size
-	                                          * is 60 bytes */
+	if (packet_size < p->minlen) {
 		if (verbose)
 			D("***DEBUG*** wrong packet length");
 		return(0);
 	}
-#endif
 
 	/* ethernet header */
 	if (ntohs(eh->ether_type) != ETHERTYPE_IP) {
 		if (verbose)
-			D("***DEBUG*** ethernet type doesn't match");
+			D("***DEBUG*** ethernet type doesn't match %d",
+			  ntohs(eh->ether_type));
 		return(0);
 	}
-	if (memcmp(eh->ether_dhost,
-	           &p->if_mac_address,
-	           ETHER_ADDR_LEN)) {	// XXX match with broadcast ethernet?
+	// XXX try to remove the MAC address check
+	if (0 && memcmp(eh->ether_dhost, &p->if_mac_address, ETHER_ADDR_LEN)) {
+		// XXX match with broadcast ethernet?
 		if (verbose)
 			D("***DEBUG*** ethernet destination address"
 			  " doesn't match");
@@ -953,9 +973,20 @@ check_udp_packet(struct params *p, char *pkt, int packet_size)
 	}
 
 	/* IP header */
-	if (ip->ip_p != IPPROTO_UDP) {
+	/* check version, IHL, proto, len */
+	if (* (uint8_t *) ip != 0x45 || ip->ip_p != IPPROTO_UDP) {
+		if (verbose && * (uint8_t *) ip != 0x45)
+			D("IP version/header-length don't match");
+		else if (verbose)
+			D("IP protocol is not UDP");
+		return(0);
+	}
+	udplen = ntohs(udp->uh_ulen);
+	iplen = ntohs(ip->ip_len);
+	if (udplen + sizeof(struct ip) > iplen ||
+	    iplen + sizeof(struct ether_header) > packet_size) {
 		if (verbose)
-			D("***DEBUG*** IP protocol is not UDP");
+			D("***DEBUG*** short packet");
 		return(0);
 	}
 	if (!p->inaddr_any_enabled &&
@@ -980,20 +1011,12 @@ check_udp_packet(struct params *p, char *pkt, int packet_size)
 			  ntohs(p->tx.sin_port), ntohs(p->rx.sin_port));
 		return(0);
 	}
-#if 0
-	netmap_rdtsc(p->ts[p->cur].container[0]);
-	netmap_rdtsc(p->ts[p->cur].container[1]);
-	p->cur = (p->cur + 1)%NUMTS;
-#endif
 
 	/* IP checksum control */
-	sum = sum32u((unsigned char *) ip, sizeof(struct ip));
+	d = (uint32_t *)ip;
+	sum = (uint64_t) d[0] + d[1] + d[2] + d[3] + d[4];
 	/* wrap into 16-bit */
-	sum = (sum & 0xffffffff) + (sum >> 32);
-	sum = (sum & 0xffffffff) + (sum >> 32);
-	sum = (sum & 0xffff) + (sum >> 16);
-	sum = (sum & 0xffff) + (sum >> 16);
-	if ((uint16_t) ~sum) {
+	if ((uint16_t) ~CKSUM_REDUCE(sum) != 0) {
 		if (verbose)
 			D("***DEBUG*** bad IP checksum");
 		return(0);
@@ -1001,18 +1024,13 @@ check_udp_packet(struct params *p, char *pkt, int packet_size)
 
 	/* UDP checksum control */
 	/* pseudo header checksum */
-	sum = sum32u((unsigned char *) &ip->ip_src, 2*sizeof(struct in_addr));
-	sum += (uint16_t) (IPPROTO_UDP << 8) + udp->uh_ulen;
-	sum += udp->uh_sport + udp->uh_dport + udp->uh_ulen + udp->uh_sum;
-	/* payload checksum */
-	sum += sum32u((unsigned char *) &udp[1],
-	              ntohs(udp->uh_ulen) - sizeof(struct udphdr));
+	sum = (uint64_t) d[3] + d[4] + d[5] + d[6] +
+	      (uint16_t) (IPPROTO_UDP << 8) + udp->uh_ulen ;
+	sum = sum32u((unsigned char *) &udp[1],
+	             udplen - sizeof(struct udphdr),
+	             sum);
 	/* wrap into 16-bit */
-	sum = (sum & 0xffffffff) + (sum >> 32);
-	sum = (sum & 0xffffffff) + (sum >> 32);
-	sum = (sum & 0xffff) + (sum >> 16);
-	sum = (sum & 0xffff) + (sum >> 16);
-	if ((uint16_t) ~sum) {
+	if ((uint16_t) ~CKSUM_REDUCE(sum) != 0) {
 		if (verbose)
 			D("***DEBUG*** bad UDP checksum");
 		return(0);
@@ -1022,88 +1040,67 @@ check_udp_packet(struct params *p, char *pkt, int packet_size)
 }
 
 /*
- * Copy payload into `buf'.
- *
- * Return the number of bytes copied.
- */
-static int
-get_udp_payload(char *pkt, void *buf, int len, struct sockaddr_in *from)
-{
-	uint16_t payload_length;
-	struct ether_header *eh;
-	struct ip *ip;
-	struct udphdr *udp;
-
-	eh = (struct ether_header *) pkt;
-	ip = (struct ip *) &eh[1];
-	udp = (struct udphdr *) &ip[1];
-
-	bzero(from, sizeof(struct sockaddr_in));
-	memcpy(&from->sin_addr, &ip->ip_src, sizeof (struct in_addr));
-	from->sin_port = udp->uh_sport;
-	payload_length = ntohs(udp->uh_ulen) - sizeof(struct udphdr);
-	payload_length = MIN(len, payload_length);
-	// XXX erase buffer before copy?
-	memcpy(buf, &udp[1], payload_length);
-	return(payload_length);
-}
-
-/*
  * Move packets from `src' to `dst' swapping their slots.
  *
- * Return ring pointer if find an UDP packet coming from the NIC; 0 otherwise.
+ * Return ring pointer if find an UDP packet coming from the nic; NULL
+ * otherwise.
  *
- * `direction' = 0 STACK -> NIC
- * `direction' = 1 NIC -> STACK
+ * `direction' = 0 stack -> nic
+ * `direction' = 1 nic -> stack
  */
 static struct netmap_ring*
 process_rings(struct params *p, struct my_ring *src, struct my_ring *dst)
 {
-	int direction = (src->queueid & NETMAP_SW_RING) ?  0 : 1;
-	u_int j, k, count, swapped = 0, si = src->begin, di = dst->begin;
+	int direction = (src->queueid & NETMAP_SW_RING) ? 0 : 1;
+	u_int j, k, count, swapped, bookmark, si, di = dst->begin;
 	uint32_t index;
 	char *pkt;
 	struct netmap_slot *rs, *ts;
 	struct netmap_ring *txring, *rxring;
 
-	while (si < src->end && di < dst->end) {
+	if (direction)
+		/* nic -> stack */
+		bookmark = (p->nicring_idx > -1) ?
+			(u_int) p->nicring_idx : src->begin;
+	else
+		/* stack -> nic */
+		bookmark = (p->stackring_idx > -1) ?
+			(u_int) p->stackring_idx : src->begin;
+	si = bookmark;
+	for (;;) {
 		rxring = NETMAP_RXRING(src->nifp, si);
 		txring = NETMAP_TXRING(dst->nifp, di);
 		/* find available slot in rx and tx ring */
 		if (rxring->avail == 0) {
-			si++;
+			si = (si + 1)%src->end;
+			if (si == bookmark)
+				break;
 			continue;
 		}
 		if (txring->avail == 0) {
-			di++;
+			if (++di == dst->end)
+				break;
 			continue;
 		}
+		j = rxring->cur;
+		k = txring->cur;
+		swapped = 0;
 		/* number of slot we can process with this pair of ring */
 		count = MIN(rxring->avail, txring->avail);
 		/* scroll every available slot in the ring */
 		while (count-- > 0) {
-			j = rxring->cur;
-			k = txring->cur;
 			rs = &rxring->slot[j];
-			ts = &txring->slot[k];
 			if (direction) {
-				/* NIC -> STACK */
-				pkt = NETMAP_BUF(rxring,
-				                 rxring->slot[j].buf_idx);
-				if (check_udp_packet(p, pkt, rs->len)) {
-					/* indexes of this slot will be updated
-					 * in the function `nm_recvfrom' */
-					/* update ring info */
-					rxring->avail -= swapped;
-					txring->avail -= swapped;
-					rxring->cur = j;
-					txring->cur = k;
-					return(rxring);
-				} else {
-					/* forward the packet to the STACK */
+				/* nic -> stack */
+				pkt = NETMAP_BUF(rxring, rs->buf_idx);
+				prefetch(pkt);
+				if (check_udp_packet(p, pkt, rs->len))
+					goto packet_found;
+				else
+					/* forward the packet to the stack */
 					p->exchanges++;
-				}
 			}
+			ts = &txring->slot[k];
 			/* swap slot index */
 			index = ts->buf_idx;
 			ts->buf_idx = rs->buf_idx;
@@ -1115,9 +1112,9 @@ process_rings(struct params *p, struct my_ring *src, struct my_ring *dst)
 				  j,
 				  k);
 #endif
-			/* copy the packet length */
+			/* copy packet length */
 			ts->len = rs->len;
-			/* report the buffer change */
+			/* report buffer change */
 			ts->flags |= NS_BUF_CHANGED;
 			rs->flags |= NS_BUF_CHANGED;
 			j = NETMAP_RING_NEXT(rxring, j);
@@ -1129,8 +1126,47 @@ process_rings(struct params *p, struct my_ring *src, struct my_ring *dst)
 		txring->avail -= swapped;
 		rxring->cur = j;
 		txring->cur = k;
+		if (direction) {
+			if ((p->count += swapped) > SYNC_LIM) {
+				/* gradually make usable freed slots */
+				ioctl(p->me[1].fd, NIOCRXSYNC, NULL);
+				p->count = 0;
+			}
+			if ((p->nicring_avail = rxring->avail) == 0)
+				p->nicring_idx = -1;
+			else
+				p->nicring_idx = si;
+		} else {
+			if ((p->stackring_avail = rxring->avail) == 0)
+				p->stackring_idx = -1;
+			else
+				p->stackring_idx = si;
+		}
 	}
 	return(NULL);
+
+packet_found:
+	/* update ring info */
+	rxring->avail -= swapped;
+	txring->avail -= swapped;
+	rxring->cur = j;
+	txring->cur = k;
+	if ((p->count += (swapped + 1)) > SYNC_LIM) {
+		/* gradually make usable freed slots */
+		ioctl(p->me[1].fd, NIOCRXSYNC, NULL);
+		p->count = 0;
+	}
+	if ((p->nicring_avail = (rxring->avail - 1)) == 0)
+		p->nicring_idx = -1;
+	else
+		p->nicring_idx = si;
+#if STATS
+	if (rxring->avail > maxslotavail)
+		maxslotavail = rxring->avail;
+#endif
+	/* the packet is now in the slot cur of rxring, indexes will be updated
+	 * in the function `nm_recvfrom' after the copy of its payload */
+	return(rxring);
 }
 
 /*
@@ -1141,7 +1177,7 @@ process_rings(struct params *p, struct my_ring *src, struct my_ring *dst)
 int
 nm_bind(struct params *p, const struct sockaddr *addr, socklen_t addrlen)
 {
-	if (p == NULL) {
+	if (p == NULL || sizeof(*p) != sizeof(struct params)) {
 		D("ERROR: invalid pointer to struct params");
 		return(1);
 	}
@@ -1167,64 +1203,61 @@ nm_bind(struct params *p, const struct sockaddr *addr, socklen_t addrlen)
 }
 
 /*
- * Wait for an UDP packet coming from the NIC and copy its payload in the
+ * Wait for an UDP packet coming from the nic and copy its payload in the
  * user-supplied buffer. Slots contatining other kind of packets both from the
- * STACK and the NIC will be swapped.
+ * stack and the nic will be swapped.
  *
- * Return the number of received bytes.
+ * Return the number of bytes received.
+ *
+ * TODO check `from' if sockaddr_in*
  */
 int
 nm_recvfrom(struct params *p, void *buf, int len,
             struct sockaddr *from, socklen_t fromlen)
 {
-	int nic, stack, ret, bytes = 0;
-	u_int cur;
+	int bytes;
 	char *packet;
 	struct pollfd pollfd[2];
 	struct netmap_ring *ring;
 	struct netmap_slot *slot;
+	struct ip *ip;
+	struct udphdr *udp;
 
-	bzero(pollfd, 2*sizeof(struct pollfd));
-	pollfd[0].fd = p->me[0].fd;	/* STACK */
-	pollfd[1].fd = p->me[1].fd;	/* NIC */
+	pollfd[0].events = pollfd[1].events = POLLIN;
+	pollfd[0].fd = p->me[0].fd;	/* stack */
+	pollfd[1].fd = p->me[1].fd;	/* nic */
 
-	for (;;) {
-		pollfd[0].revents = pollfd[1].revents = 0;
-		/* search for "readable" slots in STACK and NIC rings */
-		nic = slothunter(&p->me[1], 0, 1);
-		stack = slothunter(&p->me[0], 0, 1);
-		if (p->exchanges > 0 || (!nic && !stack)) {
-			/* there are no packets in STACK / NIC rings or I have
-			 * swapped NIC slots with STACK ones */
-			pollfd[0].events = pollfd[1].events = 0;
-			if (!nic)
-				pollfd[1].events |= POLLIN;
-			if (!stack)
-				pollfd[0].events |= POLLIN;
-make_poll:
-			ret = poll(pollfd, 2, 1000);
-			p->exchanges = 0;
 #if 0
-			if (ret <= 0 || verbose) {
-				D("poll %s\n"
-				  "\t[0] ev %x %x {RX} homany: %d;"
-				  " cur: %d {TX} howmany %d\n"
-				  "\t[1] ev %x %x {RX} homany: %d;"
-				  " cur: %d {TX} howmany %d",
-				  ret <= 0 ? "timeout" : "ok",
-				  pollfd[0].events,
-				  pollfd[0].revents,
-				  slothunter(&p->me[0], 0, 0),
-				  p->me[0].rx->cur,
-				  slothunter(&p->me[0], 1, 0),
-				  pollfd[1].events,
-				  pollfd[1].revents,
-				  slothunter(&p->me[1], 0, 0),
-				  p->me[1].rx->cur,
-				  slothunter(&p->me[1], 1, 0));
-			}
+	if (p->cur < NUMTS)
+		netmap_rdtsc(p->ts[p->cur].container[0]);
+	if (p->cur < NUMTS) {
+		netmap_rdtsc(p->ts[p->cur].container[1]);
+		p->cur++;
+	}
 #endif
-			if (ret <= 0) {
+	if (fromlen < sizeof(struct sockaddr_in)) {
+		// XXX nuttcp uses `sockaddr_storage'
+		// removing this check will trigger warning on unused `fromlen'
+		// parameter
+		D("ERROR: wrong fromlen");
+		return(-1);
+	}
+	for (;;) {
+		/* look for "readable" slots in stack and nic rings */
+		if (p->stackring_idx == -1 && p->nicring_idx == -1)
+			slothunter(p);
+		if ((p->stackring_idx == -1 && p->nicring_idx == -1) ||
+		    p->exchanges > 0) {
+			/* there are no packets in stack/nic rings or nic slots
+			 * have been swapped with stack ones */
+			pollfd[0].events = POLLIN;
+make_poll:
+			pollfd[0].revents = pollfd[1].revents = 0;
+			p->count = p->exchanges = 0;
+#if STATS
+			numrxpoll++;
+#endif
+			if (poll(pollfd, 2, 100) <= 0) {
 				if (pollfd[0].revents & POLLERR)
 					D("error on fd0, rxcur %d@%d",
 					  p->me[0].rx->avail,
@@ -1236,39 +1269,45 @@ make_poll:
 				continue;
 			}
 		}
-		/* STACK -> NIC */
-		if (stack || (pollfd[0].revents & POLLIN)) {
+		/* stack -> nic */
+		if (p->stackring_idx > -1 || (pollfd[0].revents & POLLIN)) {
 			process_rings(p, &p->me[0], &p->me[1]);
-			pollfd[0].revents = pollfd[0].events = 0;
-			if ((nic = slothunter(&p->me[1], 0, 1)))
-				stack = 0; /* may occur starvation if there's
-				            * high traffic coming from the
-				            * stack */
-			else
-				stack = slothunter(&p->me[0], 0, 1);
+			if (p->nicring_idx > -1) {
+				/* may occur starvation if there's high traffic
+				 * coming from the stack */
+				p->stackring_idx = -1;
+				p->stackring_avail = 0;
+				pollfd[0].events = 0;
+			} else {
+				pollfd[0].events = POLLIN;
+			}
 			goto make_poll;
 		}
-		/* NIC -> STACK */
-		if (nic || (pollfd[1].revents & POLLIN)) {
+		/* nic -> stack */
+		if (p->nicring_idx > -1 || (pollfd[1].revents & POLLIN)) {
 			if ((ring = process_rings(p,
 			                          &p->me[1],
 			                          &p->me[0])) != NULL) {
-				cur = ring->cur;
-				slot = &ring->slot[cur];
+				slot = &ring->slot[ring->cur];
 				/* get packet from slot */
 				packet = NETMAP_BUF(ring, slot->buf_idx);
-				bytes = get_udp_payload(packet,
-				                        buf,
-				                        len,
-				                        (struct sockaddr_in *)
-				                        from);
-				/* update ring indexes */
-				ring->avail--;
-				ring->cur = NETMAP_RING_NEXT(ring, cur);
-				break;
+				goto payload_copy;
 			}
 		}
 	}
+
+payload_copy:
+	ip = (struct ip *) (packet + sizeof(struct ether_header));
+	udp = (struct udphdr *) &ip[1];
+
+	((struct sockaddr_in *) from)->sin_addr.s_addr = ip->ip_src.s_addr;
+	((struct sockaddr_in *) from)->sin_port = udp->uh_sport;
+	bytes = MIN((u_int) len, (ntohs(udp->uh_ulen) - sizeof(struct udphdr)));
+	// XXX erase buffer before copy?
+	memcpy(buf, &udp[1], bytes);
+	/* update ring indexes */
+	ring->avail--;
+	ring->cur = NETMAP_RING_NEXT(ring, ring->cur);
 	return(bytes);
 }
 

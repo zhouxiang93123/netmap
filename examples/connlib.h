@@ -1,30 +1,30 @@
+/*
+ * $Id: connlib.h 208 2012-03-26 16:44:33Z 27148317-unipi $
+ */
+
 #include <signal.h>
 #include <fcntl.h>	/* open */
 #include <stdio.h>	/* fprintf */
 #include <stdlib.h>	/* exit */
 #include <unistd.h>	/* close */
-#include <strings.h>	/* bzero */
 #include <string.h>	/* strncpy */
+#include <strings.h>	/* bzero */
 #include <ifaddrs.h>	/* getifaddrs */
 #include <errno.h>
-#include <pthread.h>
 
-#include <sys/socket.h>
 #include <sys/mman.h>	/* PROT_* */
 #include <sys/ioctl.h>
 #include <sys/poll.h>
-#include <sys/types.h>	/* getifaddrs, inet_ntoa */
+#include <sys/types.h>
 #include <sys/sysctl.h>
 
 #include <arpa/inet.h>	/* inet_ntoa */
 
 #include <net/if.h>		/* ifreq */
-#include <net/ethernet.h>
 #include <net/netmap.h>
 #include <net/netmap_user.h>
 #include <net/if_dl.h>		/* LLADDR */
-#include <net/if_arp.h>
-#include <net/route.h>		/* RTF_LLINFO XXX */
+#include <net/route.h>		/* RTF_LLINFO */
 
 #include <netinet/in.h>		/* inet_ntoa */
 #include <netinet/ip.h>
@@ -104,7 +104,7 @@ struct udp_packet_headers {
 struct params {
 	struct my_ring me[2];	/* 0: STACK; 1: NIC */
 	struct ether_addr if_mac_address, dst_mac_address;
-	struct sockaddr_in rx, tx; /* IP addresses and ports of the
+	struct sockaddr_in rx, tx; /* IP addresses and ports of
 	                            * ingoing / outgoing connections */
 	struct in_addr if_ip_address; /* IP address of the interface passed
 	                               * to nm_socket() function (needed for
@@ -113,20 +113,42 @@ struct params {
 	                         * destination address field */
 	u_int exchanges; /* number of NIC slots swapped with STACK slots in
 	                  * nm_recvfrom() loop */
-	int max_payload_size;
+	int max_payload_size, minlen; /* maximum payload size and
+	                               * minimum packet length */
 	struct udp_packet_headers udp_pkt_hdr;
 	uint16_t udp_const_hdr; /* checksum of constant fields of the UDP
 	                         * header */
 	uint16_t ip_const_hdr; /* checksum of constant fields of the IP
 	                        * header */
+	uint16_t ip_id;		/* pseudo random... */
+
+	int stackring_idx, nicring_idx; /* indexes of ring with usable slots
+	                                 * (-1 if there aren't) */
+	u_int stackring_avail, nicring_avail; /* number of usable slot in
+	                                       * `stackring_idx' and
+	                                       * `nicring_idx' */
+	u_int count; /* number of slot freed in nic rings since last
+	              * poll/ioctl */
+#define SYNC_LIM 500 /* counter limit (of nic freed slots) to next
+                      * synchronization ioctl */
 
 	// XXX rdtsc debug
-#define NUMTS 20000000
+#define NUMTS 10000000
 	struct stats {
 		uint64_t container[2];
 	} ts[NUMTS];
-	int cur;
+	u_int cur;
 };
+
+#if defined(__i386__) || defined(__amd64__)
+static __inline
+void prefetch(void *x)
+{
+        __asm volatile("prefetcht0 %0" :: "m" (*(unsigned long *)x));
+}
+#else
+#define prefetch(x)
+#endif
 
 struct params* nm_socket(char *, int, int);
 int nm_connect(struct params *, const struct sockaddr *, socklen_t);
