@@ -18,13 +18,15 @@ cpu		HAMMER	# I686_CPU
 ident		PICOBSD
 
 #makeoptions	CCOPTS=-O3
-options	SMP
+#options	SMP
 device	acpi	# more frequencies ?
 # device	apic	# kern_et ?
 device	cpufreq
 
 #option	INVARIANTS
 #option	INVARIANT_SUPPORT
+#options         WITNESS   
+
 # XXX i find that SCHED_4BSD+PREEMPTION seems to work better.
 #options		SCHED_ULE		# mandatory to have one scheduler
 options		SCHED_4BSD		# mandatory to have one scheduler
@@ -146,6 +148,8 @@ device		da
 device          umass           # Disks/Mass storage - Requires scbus and da
 device          ums             # Mouse
 #device		hwpmc		# not good as compiled in.
+
+device vtnet	#XXX for virtio
 
 device	kbdmux
 options         KBD_INSTALL_CDEV

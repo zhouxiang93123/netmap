@@ -28,15 +28,18 @@ do_copyfiles_user() {
 	cp -p ${u_progs} ${dst}/bin
 	cp -p ${u_libs} ${dst}/usr/lib
 
-	find_progs -L / -P /usr/local/bin trafshow
+	find_progs -L / -P /usr/local/bin trafshow netperf netserver
 	cp -p ${u_progs} ${dst}/bin
 	cp -p ${u_libs} ${dst}/usr/lib
 
+
 	# XXX change this to head/tools/tools/netmap
 	local d=/usr/ports-luigi/netmap-release/examples
-	find_progs -L $d -P $d pkt-gen bridge testpcap testlock # pingd 
+	find_progs -L $d -P $d pkt-gen bridge testpcap testlock libnetmap.so # pingd 
 	cp -p ${u_progs} ${dst}/bin
 	cp -p ${u_libs} ${dst}/usr/lib
+	cp -p $d/testmod/test.ko ${dst}	 # XXX
+	cp -rp /tmp/boot/modules ${dst}	 # XXX
 
 	find_progs -L $d /tmp/click
 	cp -p ${u_progs} ${dst}/bin
@@ -47,7 +50,8 @@ do_copyfiles_user() {
 #	cp -p ${u_libs} ${dst}/usr/lib
 
 #	cp -p /tmp/tcpreplay ${dst}/root
-	cp -p /tmp/netsend ${dst}/bin
+	cp -p /tmp/netsend /tmp/netreceive ${dst}/bin
+	cp -p /tmp/if_vtnet.ko ${dst}/bin
 #	cp -p /tmp/a.pcap ${dst}/root
 #	cp -p /tmp/open_key/* ${dst}/root
 
