@@ -1,0 +1,99 @@
+.\" Copyright (c) 2012 Luigi Rizzo, Universita` di Pisa
+.\" All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\" 
+.\" This document is derived in part from the enet man page (enet.4)
+.\" distributed with 4.3BSD Unix.
+.\"
+.\" $FreeBSD: head/share/man/man4/vale.4 228017 2011-11-27 06:55:57Z gjb $
+.\" $Id: $
+.\"
+.Dd July 27, 2012
+.Dt VALE 4
+.Os
+.Sh NAME
+.Nm vale
+.Nd a very fast Virtual Local Ethernet using the netmap API
+.Sh SYNOPSIS
+.Cd device netmap
+.Sh DESCRIPTION
+.Nm
+is a feature of the
+.Nm netmap
+module that implements multiple Virtual switches that can
+be used to interconnect netmap clients, including traffic
+sources and sinks, packet forwarders, userspace firewalls,
+and so on.
+.Pp
+.Nm
+is implemented completely in software, and is extremely fast.
+On a modern machine it can move almost 20 million packets per
+second (Mpps) per core with small frames, and about 70 Gbit/s
+with 1500 byte frames.
+.Pp
+.Sh OPERATION
+.Nm
+dynamically creates switches and ports as client connect
+to it using the
+.Xr netmap 4
+API.
+.Pp
+The "interface name" dictates the aggregation.
+The name has the form
+.Pa vale[bdg:][port]
+where
+.Pa vale
+is the prefix indicating a VALE bridge rather than a standard interface,
+.Pa bdg
+indicates a specific bridge (the colon is a separator),
+and
+.Pa port
+indicates the port to use.
+.Pp
+.Ss SYSCTL VARIABLES
+.Nm
+uses
+.Nm select
+and
+.Nm poll
+to wake up processes when significant events occur.
+.Sh EXAMPLES
+The following code implements a traffic generator
+.Pp
+The following example creates two instances of a switch,
+each connected to two qemu machines on different ports.
+.Bd -literal -compact
+qemu -net nic -net netmap,ifname=vale-1:a ... &
+qemu -net nic -net netmap,ifname=vale-1:b ... &
+qemu -net nic -net netmap,ifname=vale-2:c ... &
+qemu -net nic -net netmap,ifname=vale-2:d ... &
+.Ed
+.Sh AUTHORS
+The
+.Nm
+switch  has been designed and implemented in 2012 by
+.An Luigi Rizzo
+and
+.An Giuseppe Lettieri
+at the Universita` di Pisa, supported by the
+European Projects CHANGE and OPENLAB.
