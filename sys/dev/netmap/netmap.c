@@ -57,7 +57,7 @@
 #ifdef linux
 #include "bsd_glue.h"
 static netdev_tx_t netmap_start_linux(struct sk_buff *skb, struct net_device *dev);
-#endif
+#endif /* linux */
 #ifdef __APPLE__
 #include "osx_glue.h"
 #endif
@@ -93,7 +93,7 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 234986 2012-05-03 21:16:53Z lui
 #include <machine/bus.h>	/* bus_dmamap_* */
 
 MALLOC_DEFINE(M_NETMAP, "netmap", "Network memory map");
-#endif /* !linux */
+#endif /* __FreeBSD__ */
 
 /*
  * lock and unlock for the netmap memory allocator
@@ -240,19 +240,19 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, copy, CTLFLAG_RW, &netmap_copy, 0 , "");
 #define NM_BRIDGE_RINGSIZE	1024	/* in the device */
 #define NM_BDG_HASH		1024	/* forwarding table entries */
 #define NM_BDG_BATCH		1024	/* entries in the forwarding buffer */
-
+#define	NM_BRIDGES		4	/* number of bridges */
 int netmap_bridge = NM_BDG_BATCH; /* bridge batch size */
 SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
 #ifdef linux
 #define	ADD_BDG_REF(ifp)	(NA(ifp)->if_refcount++)
 #define	DROP_BDG_REF(ifp)	(NA(ifp)->if_refcount-- <= 1)
-#else
+#else /* !linux */
 #define	ADD_BDG_REF(ifp)	(ifp)->if_refcount++
 #define	DROP_BDG_REF(ifp)	refcount_release(&(ifp)->if_refcount)
 #ifdef __FreeBSD__
 #include <sys/endian.h>
 #include <sys/refcount.h>
-#endif
+#endif /* __FreeBSD__ */
 #endif /* !linux */
 
 static void bdg_netmap_attach(struct ifnet *ifp);
@@ -291,9 +291,12 @@ struct nm_bridge {
 
 	/* the forwarding table, MAC+ports */
 	struct nm_hash_ent ht[NM_BDG_HASH];
+
+	int namelen;	/* 0 means free */
+	char basename[IFNAMSIZ];
 };
 
-struct nm_bridge nm_bridge;
+struct nm_bridge nm_bridges[NM_BRIDGES];
 
 #define BDG_LOCK(b)	mtx_lock(&(b)->bdg_lock)
 #define BDG_UNLOCK(b)	mtx_unlock(&(b)->bdg_lock)
@@ -331,6 +334,53 @@ pkt_copy(void *_src, void *_dst, int l)
         }
 }
 
+/*
+ * locate a bridge among the existing ones.
+ * a : in the name identifies the end. Otheriwse, just NM_NAME.
+ */
+static struct nm_bridge *
+nm_find_bridge(const char *name)
+{
+	int i, l, namelen, e;
+	struct nm_bridge *b = NULL;
+
+	namelen = strlen(NM_NAME);
+	l = strlen(name);
+	for (i = namelen+1; i < l; i++) {
+		if (name[i] == ':')
+			break;
+	}
+	if (i != l)
+		namelen = i;
+	if (namelen >= IFNAMSIZ)
+		namelen = IFNAMSIZ;
+	D("--- prefix is '%.*s' ---", namelen, name);
+
+	/* use the first entry for locking */
+	BDG_LOCK(nm_bridges);
+	for (e = 0, i = 1; i < NM_BRIDGES; i++) {
+		b = nm_bridges + i;
+		if (strncmp(name, b->basename, namelen) == 0) {
+			D("found ''%.*s' at %d", namelen, name, i);
+			break;
+		}
+		if (b->namelen == 0)
+			e = i;
+	}
+	if (i == NM_BRIDGES) { /* all full */
+		if (e == 0) { /* no empty slot */
+			D("no bridge available");
+			b = NULL;
+		} else {
+			D("create new bridge at %d", e);
+			b = nm_bridges + e;
+			strncpy(b->basename, name, namelen);
+			b->namelen = namelen;
+		}
+	}
+	BDG_UNLOCK(nm_bridges);
+	return b;
+}
 #endif /* NM_BRIDGE */
 
 /*------------- memory allocator -----------------*/
@@ -424,7 +474,7 @@ nm_if_rele(struct ifnet *ifp)
 	if_rele(ifp);
 #else /* NM_BRIDGE */
 	int i;
-	struct nm_bridge *b = &nm_bridge;
+	struct nm_bridge *b;
 
 	if (strncmp(ifp->if_xname, NM_NAME, sizeof(NM_NAME) - 1)) {
 		if_rele(ifp);
@@ -432,6 +482,7 @@ nm_if_rele(struct ifnet *ifp)
 	}
 	if (!DROP_BDG_REF(ifp))
 		return;
+	b = ifp->if_bridge;
 	BDG_LOCK(b);
 	ND("want to disconnect %s from the bridge", ifp->if_xname);
 	for (i = 0; i < NM_BDG_MAXPORTS; i++) {
@@ -614,14 +665,19 @@ get_ifp(const char *name, struct ifnet **ifp)
 {
 #ifdef NM_BRIDGE
 	struct ifnet *iter = NULL;
-	struct nm_bridge *b = &nm_bridge;
 
 	do {
+		struct nm_bridge *b;
 		int i, l, cand = -1;
 
 		if (strncmp(name, NM_NAME, sizeof(NM_NAME) - 1))
 			break;
 		D("looking for a virtual bridge %s", name);
+		b = nm_find_bridge(name);
+		if (b == NULL) {
+			D("no bridges available");
+			return (ENXIO);
+		}
 		/* XXX locking */
 		BDG_LOCK(b);
 		/* lookup in the local list of bridges */
@@ -658,9 +714,10 @@ no_port:
 		strcpy(iter->if_xname, name);
 		bdg_netmap_attach(iter);
 		b->bdg_ports[cand] = iter;
+		iter->if_bridge = b;
 		ADD_BDG_REF(iter);
 		BDG_UNLOCK(b);
-		D("attaching virtual bridge");
+		D("attaching virtual bridge %p", b);
 	} while (0);
 	*ifp = iter;
 	if (! *ifp)
@@ -1612,7 +1669,7 @@ static int
 bdg_netmap_reg(struct ifnet *ifp, int onoff)
 {
 	int i, err = 0;
-	struct nm_bridge *b = &nm_bridge;
+	struct nm_bridge *b = ifp->if_bridge;
 
 	BDG_LOCK(b);
 	if (onoff) {
@@ -1647,7 +1704,7 @@ done:
 
 
 static int
-nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *b)
+nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp)
 {
 	int i, ifn;
 	uint64_t all_dst, dst;
@@ -1655,6 +1712,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, struct nm_bridge *
 	uint64_t mysrc = 1 << NA(ifp)->bdg_port;
 	uint64_t smac, dmac;
 	struct netmap_slot *slot;
+	struct nm_bridge *b = ifp->if_bridge;
 
 	ND("prepare to send %d packets, act_ports 0x%x", n, b->act_ports);
 	/* only consider valid destinations */
@@ -1799,10 +1857,10 @@ bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		if (unlikely(len < 14))
 			continue;
 		if (unlikely(++ft_i == netmap_bridge))
-			ft_i = nm_bdg_flush(ft, ft_i, ifp, &nm_bridge);
+			ft_i = nm_bdg_flush(ft, ft_i, ifp);
 	}
 	if (ft_i)
-		ft_i = nm_bdg_flush(ft, ft_i, ifp, &nm_bridge);
+		ft_i = nm_bdg_flush(ft, ft_i, ifp);
 	/* count how many packets we sent */
 	i = k - j;
 	if (i < 0)
@@ -1926,7 +1984,11 @@ netmap_init(void)
 			      "netmap");
 
 #ifdef NM_BRIDGE
-	mtx_init(&nm_bridge.bdg_lock, "bdg lock", "bdg_lock", MTX_DEF);
+	{
+	int i;
+	for (i = 0; i < NM_BRIDGES; i++)
+		mtx_init(&nm_bridges[i].bdg_lock, "bdg lock", "bdg_lock", MTX_DEF);
+	}
 #endif
 	return (error);
 }
