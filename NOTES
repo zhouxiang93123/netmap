@@ -1,4 +1,6 @@
 --- status and other development notes ---
+20120724 barelli	svn+ssh://27148317-unipi@onelab3.iet.unipi.it/usr/home/PPM10/27148317/thesis
+
 20120528 NM_BRIDGE
 	error on initialization order for locks.
 	Not a problem on linux, but it is on FreeBSD with witnesses.

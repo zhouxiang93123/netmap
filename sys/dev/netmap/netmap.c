@@ -1531,6 +1531,9 @@ netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
 }
 
 
+#ifdef linux	/* linux-specific routines */
+#else /* __FreeBSD__ */
+
 static struct cdevsw netmap_cdevsw = {
 	.d_version = D_VERSION,
 	.d_name = "netmap",
@@ -1538,6 +1541,7 @@ static struct cdevsw netmap_cdevsw = {
 	.d_ioctl = netmap_ioctl,
 	.d_poll = netmap_poll,
 };
+#endif /* __FreeBSD__ */
 
 #ifdef NM_BRIDGE
 /*
