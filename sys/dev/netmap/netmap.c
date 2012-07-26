@@ -355,7 +355,7 @@ nm_find_bridge(const char *name)
 	}
 	if (namelen >= IFNAMSIZ)
 		namelen = IFNAMSIZ;
-	D("--- prefix is '%.*s' ---", namelen, name);
+	ND("--- prefix is '%.*s' ---", namelen, name);
 
 	/* use the first entry for locking */
 	BDG_LOCK(nm_bridges); // XXX do better
@@ -364,7 +364,7 @@ nm_find_bridge(const char *name)
 		if (b->namelen == 0)
 			e = i;	/* record empty slot */
 		else if (strncmp(name, b->basename, namelen) == 0) {
-			D("found '%.*s' at %d", namelen, name, i);
+			ND("found '%.*s' at %d", namelen, name, i);
 			break;
 		}
 	}
@@ -697,7 +697,7 @@ get_ifp(const char *name, struct ifnet **ifp)
 			}
 			if (!strcmp(iter->if_xname, name)) {
 				ADD_BDG_REF(iter);
-				D("found existing interface");
+				ND("found existing interface");
 				BDG_UNLOCK(b);
 				break;
 			}
@@ -711,7 +711,7 @@ no_port:
 			*ifp = NULL;
 			return EINVAL;
 		}
-		D("create new bridge port %s", name);
+		ND("create new bridge port %s", name);
 		/* space for forwarding list after the ifnet */
 		l = sizeof(*iter) +
 			 sizeof(struct nm_bdg_fwd)*NM_BDG_BATCH ;
@@ -1405,7 +1405,7 @@ netmap_attach(struct netmap_adapter *na, int num_queues)
 
 		na = buf;
 		if (na->nm_lock == NULL) {
-			D("using default locks for %s", ifp->if_xname);
+			ND("using default locks for %s", ifp->if_xname);
 			na->nm_lock = netmap_lock_wrapper;
 			/* core lock initialized here.
 			 * others initialized after netmap_if_new
@@ -1693,7 +1693,7 @@ bdg_netmap_reg(struct ifnet *ifp, int onoff)
 			err = EINVAL;
 			goto done;
 		}
-		D("setting %s in netmap mode", ifp->if_xname);
+		ND("setting %s in netmap mode", ifp->if_xname);
 		ifp->if_capenable |= IFCAP_NETMAP;
 		NA(ifp)->bdg_port = i;
 		b->act_ports |= (1<<i);
@@ -1950,7 +1950,7 @@ bdg_netmap_attach(struct ifnet *ifp)
 {
 	struct netmap_adapter na;
 
-	D("attaching virtual bridge");
+	ND("attaching virtual bridge");
 	bzero(&na, sizeof(na));
 
 	na.ifp = ifp;
