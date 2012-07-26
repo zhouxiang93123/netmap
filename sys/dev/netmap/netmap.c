@@ -336,7 +336,8 @@ pkt_copy(void *_src, void *_dst, int l)
 
 /*
  * locate a bridge among the existing ones.
- * a : in the name identifies the end. Otheriwse, just NM_NAME.
+ * a ':' in the name terminates the bridge name. Otherwise, just NM_NAME.
+ * We assume that this is called with a name of at least NM_NAME chars.
  */
 static struct nm_bridge *
 nm_find_bridge(const char *name)
@@ -344,35 +345,33 @@ nm_find_bridge(const char *name)
 	int i, l, namelen, e;
 	struct nm_bridge *b = NULL;
 
-	namelen = strlen(NM_NAME);
-	l = strlen(name);
-	for (i = namelen+1; i < l; i++) {
-		if (name[i] == ':')
+	namelen = strlen(NM_NAME);	/* base length */
+	l = strlen(name);		/* actual length */
+	for (i = namelen + 1; i < l; i++) {
+		if (name[i] == ':') {
+			namelen = i;
 			break;
+		}
 	}
-	if (i != l)
-		namelen = i;
 	if (namelen >= IFNAMSIZ)
 		namelen = IFNAMSIZ;
 	D("--- prefix is '%.*s' ---", namelen, name);
 
 	/* use the first entry for locking */
-	BDG_LOCK(nm_bridges);
-	for (e = 0, i = 1; i < NM_BRIDGES; i++) {
+	BDG_LOCK(nm_bridges); // XXX do better
+	for (e = -1, i = 1; i < NM_BRIDGES; i++) {
 		b = nm_bridges + i;
-		if (strncmp(name, b->basename, namelen) == 0) {
-			D("found ''%.*s' at %d", namelen, name, i);
+		if (b->namelen == 0)
+			e = i;	/* record empty slot */
+		else if (strncmp(name, b->basename, namelen) == 0) {
+			D("found '%.*s' at %d", namelen, name, i);
 			break;
 		}
-		if (b->namelen == 0)
-			e = i;
 	}
 	if (i == NM_BRIDGES) { /* all full */
-		if (e == 0) { /* no empty slot */
-			D("no bridge available");
+		if (e == -1) { /* no empty slot */
 			b = NULL;
 		} else {
-			D("create new bridge at %d", e);
 			b = nm_bridges + e;
 			strncpy(b->basename, name, namelen);
 			b->namelen = namelen;
@@ -473,7 +472,7 @@ nm_if_rele(struct ifnet *ifp)
 #ifndef NM_BRIDGE
 	if_rele(ifp);
 #else /* NM_BRIDGE */
-	int i;
+	int i, full;
 	struct nm_bridge *b;
 
 	if (strncmp(ifp->if_xname, NM_NAME, sizeof(NM_NAME) - 1)) {
@@ -483,17 +482,26 @@ nm_if_rele(struct ifnet *ifp)
 	if (!DROP_BDG_REF(ifp))
 		return;
 	b = ifp->if_bridge;
+	BDG_LOCK(nm_bridges);
 	BDG_LOCK(b);
 	ND("want to disconnect %s from the bridge", ifp->if_xname);
+	full = 0;
 	for (i = 0; i < NM_BDG_MAXPORTS; i++) {
 		if (b->bdg_ports[i] == ifp) {
 			b->bdg_ports[i] = NULL;
 			bzero(ifp, sizeof(*ifp));
 			free(ifp, M_DEVBUF);
 			break;
-		}
+		} 
+		else if (b->bdg_ports[i] != NULL)
+			full = 1;
 	}
 	BDG_UNLOCK(b);
+	if (full == 0) {
+		ND("freeing bridge %d", b - nm_bridges);
+		b->namelen = 0;
+	}
+	BDG_UNLOCK(nm_bridges);
 	if (i == NM_BDG_MAXPORTS)
 		D("ouch, cannot find ifp to remove");
 #endif /* NM_BRIDGE */
@@ -668,19 +676,18 @@ get_ifp(const char *name, struct ifnet **ifp)
 
 	do {
 		struct nm_bridge *b;
-		int i, l, cand = -1;
+		int i, l, namelen, cand = -1;
 
 		if (strncmp(name, NM_NAME, sizeof(NM_NAME) - 1))
 			break;
-		D("looking for a virtual bridge %s", name);
 		b = nm_find_bridge(name);
 		if (b == NULL) {
-			D("no bridges available");
+			D("no bridges available for '%s'", name);
 			return (ENXIO);
 		}
 		/* XXX locking */
 		BDG_LOCK(b);
-		/* lookup in the local list of bridges */
+		/* lookup in the local list of ports */
 		for (i = 0; i < NM_BDG_MAXPORTS; i++) {
 			iter = b->bdg_ports[i];
 			if (iter == NULL) {
@@ -717,7 +724,7 @@ no_port:
 		iter->if_bridge = b;
 		ADD_BDG_REF(iter);
 		BDG_UNLOCK(b);
-		D("attaching virtual bridge %p", b);
+		ND("attaching virtual bridge %p", b);
 	} while (0);
 	*ifp = iter;
 	if (! *ifp)
@@ -885,6 +892,7 @@ netmap_ioctl(__unused struct cdev *dev, u_long cmd, caddr_t data,
 	}
 
 	error = 0;	/* Could be ENOENT */
+	nmr->nr_name[sizeof(nmr->nr_name) - 1] = '\0';	/* truncate name */
 	switch (cmd) {
 	case NIOCGINFO:		/* return capabilities etc */
 		/* memsize is always valid */
@@ -1676,7 +1684,7 @@ bdg_netmap_reg(struct ifnet *ifp, int onoff)
 		/* the interface must be already in the list.
 		 * only need to mark the port as active
 		 */
-		D("should attach %s to the bridge", ifp->if_xname);
+		ND("should attach %s to the bridge", ifp->if_xname);
 		for (i=0; i < NM_BDG_MAXPORTS; i++)
 			if (b->bdg_ports[i] == ifp)
 				break;
@@ -1692,7 +1700,7 @@ bdg_netmap_reg(struct ifnet *ifp, int onoff)
 		b->bdg_ports[i] = ifp;
 	} else {
 		/* should be in the list, too -- remove from the mask */
-		D("removing %s from netmap mode", ifp->if_xname);
+		ND("removing %s from netmap mode", ifp->if_xname);
 		ifp->if_capenable &= ~IFCAP_NETMAP;
 		i = NA(ifp)->bdg_port;
 		b->act_ports &= ~(1<<i);
