@@ -676,7 +676,7 @@ get_ifp(const char *name, struct ifnet **ifp)
 
 	do {
 		struct nm_bridge *b;
-		int i, l, namelen, cand = -1;
+		int i, l, cand = -1;
 
 		if (strncmp(name, NM_NAME, sizeof(NM_NAME) - 1))
 			break;
