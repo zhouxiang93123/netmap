@@ -329,7 +329,7 @@ netmap_reload_map(bus_dma_tag_t tag, bus_dmamap_t map, void *buf)
 	dma_unmap_single(&adapter->pdev->dev, buffer_info->dma,
 			NETMAP_BUF_SIZE, DMA_TO_DEVICE);
 	buffer_info->dma = dma_map_single(&adapter->pdev->dev,
-		addr, NETMAP_BUF_SIZE, DMA_TO_DEVICE);
+			addr, NETMAP_BUF_SIZE, DMA_TO_DEVICE);
 
 	if (dma_mapping_error(&adapter->pdev->dev, buffer_info->dma)) {
 		D("dma mapping error");
