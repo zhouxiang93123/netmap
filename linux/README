@@ -1,3 +1,0 @@
-This directory contains a port of netmap to linux.
-As usual we try to define stub routines to build unmodified
-bsd stuff on linux
