@@ -94,9 +94,6 @@ MALLOC_DECLARE(M_NETMAP);
 		__FUNCTION__, __LINE__, ##__VA_ARGS__);		\
 	} while (0)
  
-#ifndef IFF_NETMAP	/* XXX is it really needed ? */
-#define IFF_NETMAP	0x20000
-#endif
 struct netmap_adapter;
 
 /*
