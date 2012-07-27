@@ -24,7 +24,7 @@ EXTRA_CFLAGS += -I$(M) -I$(M)/../sys -I$(M)/../sys/dev/netmap
 # with a local variable.
 #
 
-KSRC = /usr/src/linux-3.0.3
+KSRC ?= /lib/modules/$(shell uname -r)/build
 
 all:
 	make -C $(KSRC) M=$(PWD) modules # EXTRA_CFLAGS="$(EXTRA_CFLAGS)" modules
@@ -33,7 +33,9 @@ clean:
 	make -C $(KSRC) M=$(PWD) clean
 
 # the source is not here so we need to specify a dependency
-$(obj)/netmap.o: $(M)/../sys/dev/netmap/netmap.c
-	$(call cmd,cc_o_c)
+#$(obj)/netmap.o: $(M)/../sys/dev/netmap/netmap.c
+	@# $(call cmd,cc_o_c)
+	@# $(call cmd,modversions)
+#	$(call quiet_cmd,cc_o_c)
 
 # we could also instead the source with $(call cmd,shipped)
