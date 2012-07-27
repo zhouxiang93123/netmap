@@ -165,6 +165,7 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
 #include <sys/endian.h>
 #include <sys/refcount.h>
 #endif /* __FreeBSD__ */
+#define prefetch(x)    __builtin_prefetch(x)
 #endif /* !linux */
 
 static void bdg_netmap_attach(struct ifnet *ifp);
@@ -216,13 +217,6 @@ struct nm_bridge nm_bridges[NM_BRIDGES];
 /*
  * NA(ifp)->bdg_port	port index
  */
-
-#ifndef linux
-static inline void prefetch (const void *x)
-{
-        __asm volatile("prefetcht0 %0" :: "m" (*(const unsigned long *)x));
-}
-#endif /* !linux */
 
 // XXX only for multiples of 64 bytes, non overlapped.
 static inline void
