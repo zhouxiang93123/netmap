@@ -101,7 +101,6 @@
 #define CLOCK_REALTIME_PRECISE CLOCK_REALTIME
 #include <netinet/ether.h>      /* ether_aton */
 #include <linux/if_packet.h>    /* sockaddr_ll */
-#define __unused __attribute__((__unused__))
 #endif /* linux */
 
 static inline int min(int a, int b) { return a < b ? a : b; }
