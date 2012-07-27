@@ -33,9 +33,9 @@ clean:
 	make -C $(KSRC) M=$(PWD) clean
 
 # the source is not here so we need to specify a dependency
-#$(obj)/netmap.o: $(M)/../sys/dev/netmap/netmap.c
-	@# $(call cmd,cc_o_c)
-	@# $(call cmd,modversions)
+$(obj)/netmap.o: $(M)/../sys/dev/netmap/netmap.c
+	$(call cmd,cc_o_c)
+	$(call cmd,modversions)
 #	$(call quiet_cmd,cc_o_c)
 
 # we could also instead the source with $(call cmd,shipped)
