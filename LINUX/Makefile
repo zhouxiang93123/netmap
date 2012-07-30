@@ -46,7 +46,7 @@ SRC ?= $(KSRC)
 
 # extract version number and filter with the available patches.
 LIN_VER = $(shell grep LINUX_VERSION_CODE $(KSRC)/include/linux/version.h | \
-	awk '{printf "%x", $$3} ')
+	awk '{printf "%03x%02d", $$3/256, $$3%256} ')
 
 PATCHES = $(shell ls diff-* | awk -v v=$(LIN_VER) -F - '{ \
 	    if ((!$$2 || $$2 <= v) && (!$$3 || v < $$3)) print $0; }')
