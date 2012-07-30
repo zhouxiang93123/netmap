@@ -38,14 +38,8 @@ PATCHFILES = net-e1000.diff net-e1000e.diff net-forcedeth.diff \
 # Additional compile flags (e.g. header location)
 EXTRA_CFLAGS += -I$(M) -I$(M)/../sys -I$(M)/../sys/dev/netmap
 
-#EXTRA_CFLAGS += -DCONFIG_NETMAP=m
-# The following variable is normally set inside the kernel configuration file
-# and is visible to all specific module Makefiles. If you want to build your
-# module without modifying the kernel configuration, than you must simulate it
-# with a local variable.
-#
-
-
+# We use KSRC for the kernel configuration and sources.
+# If the sources are elsewhere, then use SRC to point to them.
 KSRC ?= /lib/modules/$(shell uname -r)/build
 SRC ?= $(KSRC)
 
@@ -87,7 +81,7 @@ get-drivers:
 	    [ -d ethernet ] && cd ethernet && s="$(DRIVER_SUBDIRS)" ;	\
 	    for i in $$s; do (cd $$i ;					\
 	    	cp -Rp $(DRIVER_SRCS) $(PWD) 2>/dev/null ); done )
-	(echo "we are in `pwd`"; for i in $(PATCHES) ; do patch --posix -p1 < $$i; done )
+	-@(for i in $(PATCHES) ; do patch --posix --quiet --force -p1 < $$i; done )
 
 # copy and patch files from the source tree
 #$(obj)/r8169.c: $(srctree)/drivers/net/r8169.c 
