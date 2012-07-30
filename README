@@ -1,11 +1,20 @@
-Netmap - a framework for fast packet I/O
+    	Netmap - a framework for fast packet I/O
+    VALE -  a Virtual Local Ethernet using the netmap API
 ===================================================================
 
-This directory contains sources for "netmap", a framework to give direct
-access to network devices to userland programs. Details on the system
-are given at
+Netmap is a framework to give direct access to network devices to userland
+programs. Details on the system are given at
 
 	http://info.iet.unipi.it/~luigi/netmap/
+
+VALE implements a very fast software switch using the netmap API, see
+
+	http://info.iet.unipi.it/~luigi/vale/
+
+In this directory you can find source code for FreeBSD and Linux.
+The code is distributed under a BSD Copyright.
+Recent FreeBSD distributions already include both netmap and VALE
+so you should not need to use these sources.
 
 Install
 -------
@@ -35,7 +44,12 @@ The directory examples/ contains some programs that use the netmap API
 
 Credits
 -------
-netmap is a project of the Universita` di Pisa, partially supported
-by Intel Research Berkeley and EU FP7 project CHANGE.
-The code has been entirely developed by Luigi Rizzo and Matteo Landi,
-and is distributed under a BSD Copyright.
+netmap and VALE are projects of the Universita` di Pisa,
+partially supported by Intel Research Berkeley, EU FP7 projects CHANGE
+and OPENLAB.
+
+Developers include:
+Luigi Rizzo
+Matteo Landi
+Gaetano Catalli
+Giuseppe Lettieri

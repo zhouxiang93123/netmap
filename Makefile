@@ -1,17 +1,22 @@
 SUBDIR= examples test
 
-.include <bsd.subdir.mk>
+# .include <bsd.subdir.mk>
 
 # build a distribution
-DIST_NAME := netmap-0.5-20111108.tar.gz
-DIST_SRCS := ./sys/net ./sys/modules ./Makefile ./Makefile.linux ./LINUX
+DIST_NAME := netmap-0.9-20120730.tar.gz
+DIST_SRCS := ./sys/net ./sys/modules ./Makefile ./LINUX
 DIST_SRCS += ./sys/dev
 DIST_SRCS += ./examples ./test
 
 RELEASE_SRCS := ./sys/net ./sys/modules ./examples
 RELEASE_SRCS += ./sys/dev
-RELEASE_SRCS += ./README ./LINUX ./Makefile.linux # ./NOTES
+RELEASE_SRCS += ./README ./LINUX
 RELEASE_EXCL := --exclude .svn --exclude sys/dev/\*/i\*.c --exclude examples/testmod
+
+# default: build for the current platform
+
+all:
+	@echo "What to you want to do ?"
 
 tgz:
 	tar cvzf /usr/ports/distfiles/${DIST_NAME} \
