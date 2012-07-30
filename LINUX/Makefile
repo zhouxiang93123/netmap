@@ -70,7 +70,7 @@ get-drivers:
 	    [ -d ethernet ] && cd ethernet && s="$(DRIVER_SUBDIRS)" ;	\
 	    for i in $$s; do (cd $$i ;					\
 	    	cp -Rp $(DRIVER_SRCS) $(PWD) 2>/dev/null ); done )
-	# for i in $(PATCHFILES) ; do patch -p0 < $$i; done
+	for i in $(PATCHFILES) ; do patch -p0 < $$i; done
 
 # copy and patch files from the source tree
 #$(obj)/r8169.c: $(srctree)/drivers/net/r8169.c 
