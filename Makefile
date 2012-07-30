@@ -4,13 +4,13 @@ SUBDIR= examples test
 
 # build a distribution
 DIST_NAME := netmap-0.5-20111108.tar.gz
-DIST_SRCS := ./sys/net ./sys/modules ./Makefile 
+DIST_SRCS := ./sys/net ./sys/modules ./Makefile ./Makefile.linux ./LINUX
 DIST_SRCS += ./sys/dev
 DIST_SRCS += ./examples ./test
 
 RELEASE_SRCS := ./sys/net ./sys/modules ./examples
 RELEASE_SRCS += ./sys/dev
-RELEASE_SRCS += ./README # ./NOTES
+RELEASE_SRCS += ./README ./LINUX ./Makefile.linux # ./NOTES
 RELEASE_EXCL := --exclude .svn --exclude sys/dev/\*/i\*.c --exclude examples/testmod
 
 tgz:
