@@ -47,6 +47,7 @@ EXTRA_CFLAGS += -I$(M) -I$(M)/../sys -I$(M)/../sys/dev/netmap
 
 
 KSRC ?= /lib/modules/$(shell uname -r)/build
+SRC ?= $(KSRC)
 
 #LIN_VER = $(shell echo $(KSRC) | sed -r 's/\./-/g;s/[^0-9\-]//g;s/(^-+)|(--.*)//g;')
 #LIN_VER = $(shell echo $(KSRC) | sed -r 's/[.]/ /g;s/[^0-9 ]//g;s/^-+//;s/(--.*)//;')
@@ -81,12 +82,12 @@ $(obj)/netmap.o: $(M)/../sys/dev/netmap/netmap.c
 #-- copy and patch initial files
 # The location changes depending on the OS version, so ...
 get-drivers:
-	-@( cd $(KSRC); [ -d source ] && cd source;			\
+	-@( cd $(SRC); [ -d source ] && cd source;			\
 	    cd drivers/net; s=. ;					\
 	    [ -d ethernet ] && cd ethernet && s="$(DRIVER_SUBDIRS)" ;	\
 	    for i in $$s; do (cd $$i ;					\
 	    	cp -Rp $(DRIVER_SRCS) $(PWD) 2>/dev/null ); done )
-	(echo "we are in `pwd`"; for i in $(PATCHES) ; do patch < $$i; done )
+	(echo "we are in `pwd`"; for i in $(PATCHES) ; do patch --posix -p1 < $$i; done )
 
 # copy and patch files from the source tree
 #$(obj)/r8169.c: $(srctree)/drivers/net/r8169.c 

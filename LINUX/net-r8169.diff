@@ -1,5 +1,5 @@
---- /usr/src/linux-3.0.3/drivers/net/r8169.c	2011-08-18 09:37:02.000000000 +0200
-+++ r8169.c	2012-07-30 09:38:46.893085706 +0200
+--- net/r8169.c	2011-08-18 09:37:02.000000000 +0200
++++ net/r8169.c	2012-02-17 11:16:41.408764449 +0100
 @@ -705,6 +705,10 @@ static int rtl8169_poll(struct napi_stru
  static const unsigned int rtl8169_rx_config =
  	(RX_FIFO_THRESH << RxCfgFIFOShift) | (RX_DMA_BURST << RxCfgDMAShift);

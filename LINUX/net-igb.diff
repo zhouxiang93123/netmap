@@ -1,6 +1,6 @@
-diff -urp /usr/src/linux-3.0.3/drivers/net/igb/igb_main.c /home/luigi/netmap/netmap-linux/net/igb/igb_main.c
---- /usr/src/linux-3.0.3/drivers/net/igb/igb_main.c	2011-08-05 06:59:21.000000000 +0200
-+++ igb/igb_main.c	2012-04-12 12:02:14.360023460 +0200
+diff -urp net/igb/igb_main.c net/igb/igb_main.c
+--- net/igb/igb_main.c	2011-08-05 06:59:21.000000000 +0200
++++ net/igb/igb_main.c	2012-04-12 12:02:14.360023460 +0200
 @@ -214,6 +214,10 @@ MODULE_DESCRIPTION("Intel(R) Gigabit Eth
  MODULE_LICENSE("GPL");
  MODULE_VERSION(DRV_VERSION);

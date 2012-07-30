@@ -1,6 +1,6 @@
-diff -urp /usr/src/linux-3.0.3/drivers/net/e1000/e1000_main.c /home/luigi/netmap/netmap-linux/net/e1000/e1000_main.c
---- /usr/src/linux-3.0.3/drivers/net/e1000/e1000_main.c	2011-08-05 06:59:21.000000000 +0200
-+++ e1000/e1000_main.c	2012-02-21 04:23:42.439098126 +0100
+diff -urp net/e1000/e1000_main.c net/e1000/e1000_main.c
+--- net/e1000/e1000_main.c	2011-08-05 06:59:21.000000000 +0200
++++ net/e1000/e1000_main.c	2012-02-21 04:23:42.439098126 +0100
 @@ -222,6 +222,10 @@ static int debug = NETIF_MSG_DRV | NETIF
  module_param(debug, int, 0);
  MODULE_PARM_DESC(debug, "Debug level (0=none,...,16=all)");

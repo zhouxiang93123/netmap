@@ -1,6 +1,6 @@
-diff -urp /usr/src/linux-3.0.3/drivers/net/ixgbe/ixgbe_main.c /home/luigi/netmap/netmap-linux/net/ixgbe/ixgbe_main.c
---- /usr/src/linux-3.0.3/drivers/net/ixgbe/ixgbe_main.c	2011-08-05 06:59:21.000000000 +0200
-+++ ixgbe/ixgbe_main.c	2012-02-17 11:55:06.740825826 +0100
+diff -urp net/ixgbe/ixgbe_main.c net/ixgbe/ixgbe_main.c
+--- net/ixgbe/ixgbe_main.c	2011-08-05 06:59:21.000000000 +0200
++++ net/ixgbe/ixgbe_main.c	2012-02-17 11:55:06.740825826 +0100
 @@ -247,6 +247,22 @@ static const struct ixgbe_reg_info ixgbe
  	{}
  };
