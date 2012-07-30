@@ -48,14 +48,25 @@ EXTRA_CFLAGS += -I$(M) -I$(M)/../sys -I$(M)/../sys/dev/netmap
 
 KSRC ?= /lib/modules/$(shell uname -r)/build
 
-LIN_VER = $(shell echo $(KSRC) | sed -r 's/\./-/g;s/[^0-9\-]//g;s/(^-+)|(--.*)//g;')
+#LIN_VER = $(shell echo $(KSRC) | sed -r 's/\./-/g;s/[^0-9\-]//g;s/(^-+)|(--.*)//g;')
+#LIN_VER = $(shell echo $(KSRC) | sed -r 's/[.]/ /g;s/[^0-9 ]//g;s/^-+//;s/(--.*)//;')
+# compute an version number AABBCC.DDD and compare with the available patches.
+LIN_VER = $(shell echo $(KSRC) | \
+	sed -r 's/.*([0-9]+\.[0-9]+\.[0-9]+([.-][0-9]+)?).*/\1/;s/[^0-9]/ /g;' | \
+	awk '{printf "%02d%02d%02d.%03d", $$1, $$2, $$3, $$4} ')
 
-all:	get-drivers
+PATCHES = $(shell ls net*diff* | awk -v v=$(LIN_VER) -F _ '{ \
+	    if ((!$$2 || $$2 <= v) && (!$$3 || v < $$3)) print $0; }')
+
+all:	get-drivers build
+
+build:
 	make -C $(KSRC) M=$(PWD) CONFIG_E1000=m CONFIG_E1000E=m \
 		CONFIG_IXGBE=m CONFIG_IGB=m modules
 
 test:
-	echo "version $(LIN_VER)"
+	@echo "version $(LIN_VER)"
+	@echo "patches $(PATCHES)"
 
 clean:
 	-@ make -C $(KSRC) M=$(PWD) clean
@@ -75,7 +86,7 @@ get-drivers:
 	    [ -d ethernet ] && cd ethernet && s="$(DRIVER_SUBDIRS)" ;	\
 	    for i in $$s; do (cd $$i ;					\
 	    	cp -Rp $(DRIVER_SRCS) $(PWD) 2>/dev/null ); done )
-	for i in $(PATCHFILES) ; do patch -p0 < $$i; done
+	(echo "we are in `pwd`"; for i in $(PATCHES) ; do patch < $$i; done )
 
 # copy and patch files from the source tree
 #$(obj)/r8169.c: $(srctree)/drivers/net/r8169.c 
