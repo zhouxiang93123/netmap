@@ -46,9 +46,8 @@ SRC ?= $(KSRC)
 #LIN_VER = $(shell echo $(KSRC) | sed -r 's/\./-/g;s/[^0-9\-]//g;s/(^-+)|(--.*)//g;')
 #LIN_VER = $(shell echo $(KSRC) | sed -r 's/[.]/ /g;s/[^0-9 ]//g;s/^-+//;s/(--.*)//;')
 # compute an version number AABBCC.DDD and compare with the available patches.
-LIN_VER = $(shell echo $(KSRC) | \
-	sed -r 's/.*([0-9]+\.[0-9]+\.[0-9]+([.-][0-9]+)?).*/\1/;s/[^0-9]/ /g;' | \
-	awk '{printf "%02d%02d%02d.%03d", $$1, $$2, $$3, $$4} ')
+LIN_VER = $(shell grep LINUX_VERSION_CODE $(KSRC)/include/linux/version.h | \
+	awk '{printf "%x", $$3} ')
 
 PATCHES = $(shell ls net*diff* | awk -v v=$(LIN_VER) -F _ '{ \
 	    if ((!$$2 || $$2 <= v) && (!$$3 || v < $$3)) print $0; }')
@@ -81,7 +80,7 @@ get-drivers:
 	    [ -d ethernet ] && cd ethernet && s="$(DRIVER_SUBDIRS)" ;	\
 	    for i in $$s; do (cd $$i ;					\
 	    	cp -Rp $(DRIVER_SRCS) $(PWD) 2>/dev/null ); done )
-	-@(for i in $(PATCHES) ; do patch --posix --quiet --force -p1 < $$i; done )
+	@(for i in $(PATCHES) ; do patch --posix --quiet --force -p1 < $$i; done )
 
 # copy and patch files from the source tree
 #$(obj)/r8169.c: $(srctree)/drivers/net/r8169.c 
