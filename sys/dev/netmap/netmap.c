@@ -97,6 +97,7 @@ MALLOC_DEFINE(M_NETMAP, "netmap", "Network memory map");
 
 #include <net/netmap.h>
 #include <dev/netmap/netmap_kern.h>
+
 /*
  * lock and unlock for the netmap memory allocator
  */
