@@ -1,0 +1,43 @@
+#
+# $Id$
+# GNU Makefile to build the linux modules and apps for netmap and VALE
+
+# all configured as modules
+CONFIG_NETMAP:=m
+CONFIG_R8169:=m
+CONFIG_E1000:=m
+CONFIG_E1000E:=m
+CONFIG_IXGBE:=m
+CONFIG_IGB:=m
+CONFIG_FORCEDETH:=m
+
+obj-$(CONFIG_NETMAP) += LINUX/
+
+ifeq (0,1)
+obj-$(CONFIG_E1000) += e1000/
+obj-$(CONFIG_E1000E) += e1000e/
+obj-$(CONFIG_IXGBE) += ixgbe/
+obj-$(CONFIG_IGB) += igb/
+obj-$(CONFIG_R8169) += r8169.o
+obj-$(CONFIG_FORCEDETH) += forcedeth.o
+endif
+
+#r8169-objs := r8169.o
+
+# this is needed to access symbols exported by netmap module. It wouldn't be
+# necessary if the module was built in-tree.
+# XXX where ?
+KBUILD_EXTRA_SYMBOLS=$(PWD)/Module.symvers
+
+#KSRC ?= /usr/src/linux-headers-$(shell uname -r)
+KSRC ?= /usr/src/linux-3.0.3
+# build in this directory
+EXTRA_CFLAGS += -I$(PWD) -I$(PWD)/include -DAA=_____________________________
+EXTRA_CFLAGS += -DCONFIG_NETMAP=m -Werror -Wall
+
+all:
+	make -C $(KSRC) M=$(PWD) EXTRA_CFLAGS="$(EXTRA_CFLAGS)" -f Makefile.linux modules
+
+clean:
+	make -C $(KSRC) M=$(PWD) clean
+	rm -rf */Module.symvers */.tmp_versions
