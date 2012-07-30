@@ -7,9 +7,25 @@
 # and then the corresponding foo-objs
 
 CONFIG_NETMAP=m
+CONFIG_R8169:=m
+CONFIG_FORCEDETH:=m
+CONFIG_E1000:=m
+CONFIG_E1000E:=m
+CONFIG_IXGBE:=m
+CONFIG_IGB:=m
 
 netmap_lin-objs := netmap.o
 obj-$(CONFIG_NETMAP) += netmap_lin.o
+
+obj-$(CONFIG_R8169) += r8169.o
+obj-$(CONFIG_FORCEDETH) += forcedeth.o
+#obj-$(CONFIG_E1000) += e1000/
+#obj-$(CONFIG_E1000E) += e1000e/
+#obj-$(CONFIG_IXGBE) += ixgbe/
+#obj-$(CONFIG_IGB) += igb/
+
+DRIVER_SRCS = r8169.c forcedeth.c e1000/ e1000e/ ixgbe/ igb/
+PATCHFILES = net-r8169.diff net-forcedeth.diff
 
 # The following commands are needed to build the modules as out-of-tree, in
 # fact the kernel sources path must be specified.
@@ -24,13 +40,15 @@ EXTRA_CFLAGS += -I$(M) -I$(M)/../sys -I$(M)/../sys/dev/netmap
 # with a local variable.
 #
 
+
 KSRC ?= /lib/modules/$(shell uname -r)/build
 
-all:
+all:	get-drivers
 	make -C $(KSRC) M=$(PWD) modules # EXTRA_CFLAGS="$(EXTRA_CFLAGS)" modules
 
 clean:
 	make -C $(KSRC) M=$(PWD) clean
+	-@ (rm -rf $(DRIVER_SRCS))
 
 # the source is not here so we need to specify a dependency
 $(obj)/netmap.o: $(M)/../sys/dev/netmap/netmap.c
@@ -38,4 +56,19 @@ $(obj)/netmap.o: $(M)/../sys/dev/netmap/netmap.c
 	$(call cmd,modversions)
 #	$(call quiet_cmd,cc_o_c)
 
+#-- copy and patch initial files
+get-drivers:
+	( cd $(KSRC)/drivers/net; cp -Rp $(DRIVER_SRCS) $(PWD) )
+	for i in $(PATCHFILES) ; do patch < $$i; done
+
+# copy and patch files from the source tree
+#$(obj)/r8169.c: $(srctree)/drivers/net/r8169.c 
+#	# net-r8169.diff
+#	$(call cmd,shipped)
+#	(cd $(obj); patch < net-r8169.diff )
+#
+#$(obj)/forcedeth.c: $(srctree)/drivers/net/forcedeth.c 
+#	$(call cmd,shipped)
+#	(cd $(obj); patch < net-forcedeth.diff )
+#
 # we could also instead the source with $(call cmd,shipped)
