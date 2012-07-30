@@ -4,7 +4,7 @@ PROGS	=	pkt-gen bridge testpcap libnetmap.so
 #PROGS += pingd
 PROGS	+= testlock testcsum test_select kern_test
 
-CLEANFILES = $(PROGS) pcap.o nm_util.o
+CLEANFILES = $(PROGS) pcap.o nm_util.o *.o
 NO_MAN=
 CFLAGS = -O2 -pipe
 CFLAGS += -Werror -Wall
@@ -14,9 +14,6 @@ CFLAGS += -Wextra
 LDFLAGS += -lpthread -lpcap
 LDFLAGS += -lrt	# on linux
 #SRCS = pkt-gen.c
-
-#.include <bsd.prog.mk>
-#.include <bsd.lib.mk>
 
 all: $(PROGS)
 
@@ -28,10 +25,8 @@ kern_test: testmod/kern_test.c
 nm_util.o pkt-gen.o bridge.o libnetmap.so pcap.o: nm_util.h
 
 pkt-gen: pkt-gen.o nm_util.o
-#	$(CC) $(LDFLAGS) -o pkt-
 
 bridge: bridge.o nm_util.o
-#	$(CC) $(LDFLAGS) -o ${.TARGET} ${.ALLSRC}
 
 libnetmap.so:	pcap.c nm_util.c
 	$(CC) $(CFLAGS) -fpic -c pcap.c
