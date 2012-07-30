@@ -6,22 +6,22 @@
 # The list of targets is derived from obj-m
 # and then the corresponding foo-objs
 
-#CONFIG_NETMAP=m
-#CONFIG_R8169:=m
-#CONFIG_FORCEDETH:=m
+CONFIG_NETMAP=m
+CONFIG_R8169:=m
+CONFIG_FORCEDETH:=m
 CONFIG_E1000:=m
-#CONFIG_E1000E:=m
-#CONFIG_IXGBE:=m
-#CONFIG_IGB:=m
+CONFIG_E1000E:=m
+CONFIG_IXGBE:=m
+CONFIG_IGB:=m
 
 netmap_lin-objs := netmap.o
 obj-$(CONFIG_NETMAP) += netmap_lin.o
 
-#obj-$(CONFIG_R8169) += r8169.o
-#obj-$(CONFIG_FORCEDETH) += forcedeth.o
-#obj-$(CONFIG_E1000) += e1000/
-#obj-$(CONFIG_E1000E) += e1000e/
-#obj-$(CONFIG_IXGBE) += ixgbe/
+obj-$(CONFIG_R8169) += r8169.o
+obj-$(CONFIG_FORCEDETH) += forcedeth.o
+obj-$(CONFIG_E1000) += e1000/
+obj-$(CONFIG_E1000E) += e1000e/
+obj-$(CONFIG_IXGBE) += ixgbe/
 obj-$(CONFIG_IGB) += igb/
 
 DRIVER_SRCS = r8169.c forcedeth.c e1000/ e1000e/ ixgbe/ igb/
