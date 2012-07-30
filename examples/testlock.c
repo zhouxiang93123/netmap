@@ -144,6 +144,7 @@ rdtsc(void)
 {
 	uint64_t rv;
 
+	// XXX does not work on linux-64 bit
 	__asm __volatile("rdtscp" : "=A" (rv) : : "%rax");
 	return (rv);
 }
@@ -352,6 +353,7 @@ test_rdtsc1(struct targ *t)
 {
         int m, i;
 	uint64_t v;
+	(void)v;
         for (m = 0; m < t->g->m_cycles; m++) {
 		for (i = 0; i < ONE_MILLION; i++) {
                 	my_rdtsc(v);
@@ -365,6 +367,7 @@ test_rdtsc(struct targ *t)
 {
         int m, i;
 	volatile uint64_t v;
+	(void)v;
         for (m = 0; m < t->g->m_cycles; m++) {
 		for (i = 0; i < ONE_MILLION; i++) {
                 	v = rdtsc();

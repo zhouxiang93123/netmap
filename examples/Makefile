@@ -25,6 +25,7 @@ kern_test: testmod/kern_test.c
 nm_util.o pkt-gen.o bridge.o libnetmap.so pcap.o: nm_util.h
 
 pkt-gen: pkt-gen.o nm_util.o
+	$(CC) $(CFLAGS) -o pkt-gen pkt-gen.o nm_util.o $(LDFLAGS)
 
 bridge: bridge.o nm_util.o
 
