@@ -48,12 +48,17 @@ EXTRA_CFLAGS += -I$(M) -I$(M)/../sys -I$(M)/../sys/dev/netmap
 
 KSRC ?= /lib/modules/$(shell uname -r)/build
 
+LIN_VER = $(shell echo $(KSRC) | sed -r 's/\./-/g;s/[^0-9\-]//g;s/(^-+)|(--.*)//g;')
+
 all:	get-drivers
 	make -C $(KSRC) M=$(PWD) CONFIG_E1000=m CONFIG_E1000E=m \
 		CONFIG_IXGBE=m CONFIG_IGB=m modules
 
+test:
+	echo "version $(LIN_VER)"
+
 clean:
-	make -C $(KSRC) M=$(PWD) clean
+	-@ make -C $(KSRC) M=$(PWD) clean
 	-@ (rm -rf $(DRIVER_SRCS))
 
 # the source is not here so we need to specify a dependency
@@ -78,8 +83,5 @@ get-drivers:
 #	$(call cmd,shipped)
 #	(cd $(obj); patch < net-r8169.diff )
 #
-#$(obj)/forcedeth.c: $(srctree)/drivers/net/forcedeth.c 
-#	$(call cmd,shipped)
-#	(cd $(obj); patch < net-forcedeth.diff )
-#
-# we could also instead the source with $(call cmd,shipped)
+
+apps:
