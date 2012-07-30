@@ -90,3 +90,4 @@ get-drivers:
 #
 
 apps:
+	(cd ../examples; make)
