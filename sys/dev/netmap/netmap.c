@@ -764,8 +764,8 @@ netmap_set_ringid(struct netmap_priv_d *priv, u_int ringid)
  * Return 0 on success, errno otherwise.
  */
 static int
-netmap_ioctl(__unused struct cdev *dev, u_long cmd, caddr_t data,
-	__unused int fflag, struct thread *td)
+netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
+	int fflag, struct thread *td)
 {
 	struct netmap_priv_d *priv = NULL;
 	struct ifnet *ifp;
@@ -775,6 +775,8 @@ netmap_ioctl(__unused struct cdev *dev, u_long cmd, caddr_t data,
 	u_int i, lim;
 	struct netmap_if *nifp;
 
+	(void)dev;	/* UNUSED */
+	(void)fflag;	/* UNUSED */
 #ifdef linux
 #define devfs_get_cdevpriv(pp)				\
 	({ *(struct netmap_priv_d **)pp = ((struct file *)td)->private_data; 	\
@@ -1551,7 +1553,7 @@ linux_netmap_poll(struct file * file, struct poll_table_struct *pwait)
 }
 
 static int
-netmap_mmap(__unused struct file *f, struct vm_area_struct *vma)
+netmap_mmap(struct file *f, struct vm_area_struct *vma)
 {
 	int lut_skip, i, j;
 	int user_skip = 0;
@@ -1565,6 +1567,7 @@ netmap_mmap(__unused struct file *f, struct vm_area_struct *vma)
 	 * vma->vm_end: end of the mapping user address space
 	 */
 
+	(void)f;	/* UNUSED */
 	// XXX security checks
 
 	for (i = 0; i < 3; i++) {  /* loop through obj_pools */
@@ -1623,8 +1626,9 @@ linux_netmap_ioctl(struct file *file, u_int cmd, u_long data /* arg */)
 
 
 static int
-netmap_release(__unused struct inode *inode, struct file *file)
+netmap_release(struct inode *inode, struct file *file)
 {
+	(void)inode;	/* UNUSED */
 	if (file->private_data)
 		netmap_dtor(file->private_data);
 	return (0);

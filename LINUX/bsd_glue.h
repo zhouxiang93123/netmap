@@ -52,7 +52,7 @@
 
 #define printf(fmt, arg...)	printk(KERN_ERR fmt, ##arg)
 #define KASSERT(a, b)		BUG_ON(!(a))
-#define __unused		__attribute__((__unused__))
+// #define __unused		__attribute__((__unused__))
 
 /* Type redefinitions. XXX check them */
 typedef	void *			bus_dma_tag_t;

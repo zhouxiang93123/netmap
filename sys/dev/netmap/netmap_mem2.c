@@ -300,12 +300,13 @@ netmap_obj_free_va(struct netmap_obj_pool *p, void *vaddr)
 
 
 static void
-netmap_new_bufs(struct netmap_if *nifp __unused,
+netmap_new_bufs(struct netmap_if *nifp,
                 struct netmap_slot *slot, u_int n)
 {
 	struct netmap_obj_pool *p = nm_mem->nm_buf_pool;
 	uint32_t i = 0;	/* slot counter */
 
+	(void)nifp;	/* UNUSED */
 	for (i = 0; i < n; i++) {
 		void *vaddr = netmap_buf_malloc();
 		if (vaddr == NULL) {
