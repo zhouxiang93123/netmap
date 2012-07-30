@@ -59,7 +59,7 @@ test:
 
 clean:
 	-@ make -C $(KSRC) M=$(PWD) clean
-	-@ (rm -rf $(DRIVER_SRCS))
+	-@ (rm -rf $(DRIVER_SRCS) *.orig *.rej)
 
 # the source is not here so we need to specify a dependency
 $(obj)/netmap.o: $(M)/../sys/dev/netmap/netmap.c
