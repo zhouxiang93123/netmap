@@ -6,7 +6,7 @@
 # The list of targets is derived from obj-m
 # and then the corresponding foo-objs
 
-CONFIG_NETMAP=m
+CONFIG_NETMAP:=m
 CONFIG_R8169:=m
 CONFIG_FORCEDETH:=m
 CONFIG_E1000:=m
@@ -15,14 +15,15 @@ CONFIG_IXGBE:=m
 CONFIG_IGB:=m
 
 netmap_lin-objs := netmap.o
-obj-$(CONFIG_NETMAP) += netmap_lin.o
 
-obj-$(CONFIG_R8169) += r8169.o
-obj-$(CONFIG_FORCEDETH) += forcedeth.o
-obj-$(CONFIG_E1000) += e1000/
-obj-$(CONFIG_E1000E) += e1000e/
-obj-$(CONFIG_IXGBE) += ixgbe/
-obj-$(CONFIG_IGB) += igb/
+obj-$(CONFIG_NETMAP) = netmap_lin.o
+obj-m += $(DRIVERS)
+# obj-$(CONFIG_R8169) += r8169.o
+# obj-$(CONFIG_FORCEDETH) += forcedeth.o
+# obj-$(CONFIG_E1000) += e1000/
+# obj-$(CONFIG_E1000E) += e1000e/
+# obj-$(CONFIG_IXGBE) += ixgbe/
+# obj-$(CONFIG_IGB) += igb/
 
 # names of the driver sources. In old linuxes are under
 # KSRC/drivers/net, but depending on where you build they
@@ -43,24 +44,27 @@ EXTRA_CFLAGS += -I$(M) -I$(M)/../sys -I$(M)/../sys/dev/netmap
 KSRC ?= /lib/modules/$(shell uname -r)/build
 SRC ?= $(KSRC)
 
-#LIN_VER = $(shell echo $(KSRC) | sed -r 's/\./-/g;s/[^0-9\-]//g;s/(^-+)|(--.*)//g;')
-#LIN_VER = $(shell echo $(KSRC) | sed -r 's/[.]/ /g;s/[^0-9 ]//g;s/^-+//;s/(--.*)//;')
-# compute an version number AABBCC.DDD and compare with the available patches.
+# extract version number and filter with the available patches.
 LIN_VER = $(shell grep LINUX_VERSION_CODE $(KSRC)/include/linux/version.h | \
 	awk '{printf "%x", $$3} ')
 
-PATCHES = $(shell ls net*diff* | awk -v v=$(LIN_VER) -F _ '{ \
+PATCHES = $(shell ls diff-* | awk -v v=$(LIN_VER) -F - '{ \
 	    if ((!$$2 || $$2 <= v) && (!$$3 || v < $$3)) print $0; }')
+
+DRIVERS = $(shell ls diff-* | awk -v v=$(LIN_VER) -F - '{ \
+	    if ((!$$2 || $$2 <= v) && (!$$3 || v < $$3)) { ; \
+	    if (match($$4, ".c")) print $$4 ; else print $$4 "/" } }' )
 
 all:	get-drivers build
 
 build:
 	make -C $(KSRC) M=$(PWD) CONFIG_E1000=m CONFIG_E1000E=m \
-		CONFIG_IXGBE=m CONFIG_IGB=m modules
+		CONFIG_IXGBE=m CONFIG_IGB=m DRIVERS="$(DRIVERS:%.c=%.o)" modules
 
 test:
 	@echo "version $(LIN_VER)"
 	@echo "patches $(PATCHES)"
+	@echo "drivers $(DRIVERS)"
 
 clean:
 	-@ make -C $(KSRC) M=$(PWD) clean
@@ -79,8 +83,9 @@ get-drivers:
 	    cd drivers/net; s=. ;					\
 	    [ -d ethernet ] && cd ethernet && s="$(DRIVER_SUBDIRS)" ;	\
 	    for i in $$s; do (cd $$i ;					\
-	    	cp -Rp $(DRIVER_SRCS) $(PWD) 2>/dev/null ); done )
+	    	cp -Rp $(DRIVERS) $(PWD) 2>/dev/null ); done )
 	@(for i in $(PATCHES) ; do patch --posix --quiet --force -p1 < $$i; done )
+	@echo "Building the following drivers: $(obj-m)"
 
 # copy and patch files from the source tree
 #$(obj)/r8169.c: $(srctree)/drivers/net/r8169.c 
