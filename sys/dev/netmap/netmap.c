@@ -90,13 +90,13 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 234986 2012-05-03 21:16:53Z lui
 #include <net/if.h>
 #include <net/bpf.h>		/* BIOCIMMEDIATE */
 #include <net/vnet.h>
-#include <net/netmap.h>
-#include <dev/netmap/netmap_kern.h>
 #include <machine/bus.h>	/* bus_dmamap_* */
 
 MALLOC_DEFINE(M_NETMAP, "netmap", "Network memory map");
 #endif /* __FreeBSD__ */
 
+#include <net/netmap.h>
+#include <dev/netmap/netmap_kern.h>
 /*
  * lock and unlock for the netmap memory allocator
  */

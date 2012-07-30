@@ -55,26 +55,26 @@
 #define __unused		__attribute__((__unused__))
 
 /* Type redefinitions. XXX check them */
-typedef	void *		bus_dma_tag_t;
-typedef	void *		bus_dmamap_t;
-typedef	int		bus_size_t;
-typedef	int		bus_dma_segment_t;
-typedef void *		bus_addr_t;
-#define vm_paddr_t	phys_addr_t
+typedef	void *			bus_dma_tag_t;
+typedef	void *			bus_dmamap_t;
+typedef	int			bus_size_t;
+typedef	int			bus_dma_segment_t;
+typedef void *			bus_addr_t;
+#define vm_paddr_t		phys_addr_t
 /* XXX the 'off_t' on Linux corresponds to a 'long' */
-#define vm_offset_t	uint32_t
+#define vm_offset_t		uint32_t
 struct thread;
 
 /* endianness macros/functions */
-#define le16toh		le16_to_cpu
-#define le32toh		le32_to_cpu
-#define le64toh		le64_to_cpu
-#define be64toh		be64_to_cpu
-#define htole32		cpu_to_le32
-#define htole64		cpu_to_le64
+#define le16toh			le16_to_cpu
+#define le32toh			le32_to_cpu
+#define le64toh			le64_to_cpu
+#define be64toh			be64_to_cpu
+#define htole32			cpu_to_le32
+#define htole64			cpu_to_le64
 
-#define bzero(a, len)	memset(a, 0, len)
-#define bcopy(_s, _d, len) memcpy(_d, _s, len)
+#define bzero(a, len)		memset(a, 0, len)
+#define bcopy(_s, _d, len) 	memcpy(_d, _s, len)
 
 
 // XXX maybe implement it as a proper function somewhere
@@ -88,9 +88,9 @@ struct thread;
 	}							\
 	s; } )
 
-#define	mbuf		sk_buff
-#define	m_nextpkt	next			// chain of mbufs
-#define m_freem(m)	dev_kfree_skb_any(m)	// free a sk_buff
+#define	mbuf			sk_buff
+#define	m_nextpkt		next			// chain of mbufs
+#define m_freem(m)		dev_kfree_skb_any(m)	// free a sk_buff
 
 /*
  * m_copydata() copies from mbuf to buffer following the mbuf chain.
@@ -121,13 +121,13 @@ struct thread;
  * in linux we have no spares so we overload ax25_ptr
  */
 
-#define ifnet           net_device      /* remap */
-#define	if_xname	name		/* field ifnet-> net_device */
-#define	if_capabilities	flags		/* IFCAP_NETMAP */
-#define	if_capenable	priv_flags	/* IFCAP_NETMAP */
-#define	if_bridge	atalk_ptr	/* remap, only for VALE ports */
-#define ifunit_ref(_x)	dev_get_by_name(&init_net, _x);
-#define if_rele(ifp)	dev_put(ifp)
+#define ifnet           	net_device      /* remap */
+#define	if_xname		name		/* field ifnet-> net_device */
+#define	if_capabilities		flags		/* IFCAP_NETMAP */
+#define	if_capenable		priv_flags	/* IFCAP_NETMAP */
+#define	if_bridge		atalk_ptr	/* remap, only for VALE ports */
+#define ifunit_ref(_x)		dev_get_by_name(&init_net, _x);
+#define if_rele(ifp)		dev_put(ifp)
 #define CURVNET_SET(x)
 #define CURVNET_RESTORE(x)
 
@@ -136,18 +136,18 @@ struct thread;
  * We need a pointer from the net_device to the struct netmap_adapter.
  * FreeBSD has if_pspare, on linux ax25_ptr is probably seldom used
  */
-#define WNA(_ifp)        (_ifp)->ax25_ptr
+#define WNA(_ifp)		(_ifp)->ax25_ptr
 
 
 /*
  * XXX Unclear whether we should use spin_lock_irq or spin_lock_bh.
  * I think the former is better as we may use the lock in the interrupt.
  */
-//#define mtx		mutex      /* remap */
-#define mtx_lock	spin_lock_irq
-#define mtx_unlock	spin_unlock_irq
+//#define mtx			mutex      /* remap */
+#define mtx_lock		spin_lock_irq
+#define mtx_unlock		spin_unlock_irq
 #define mtx_init(a, b, c, d)	spin_lock_init(a)
-#define mtx_destroy(a)	// XXX spin_lock_destroy(a)
+#define mtx_destroy(a)		// XXX spin_lock_destroy(a)
 
 /* use volatile to fix a probable compiler error on 2.6.25 */
 #define malloc(_size, type, flags)                      \
@@ -159,18 +159,18 @@ struct thread;
 // XXX do we need GFP_DMA for slots ?
 // http://www.mjmwired.net/kernel/Documentation/DMA-API.txt
 
-#define contigmalloc(sz, ty, flags, a, b, pgsz, c)	\
-	(char *) __get_free_pages(GFP_KERNEL |  __GFP_ZERO,		\
-			ilog2(roundup_pow_of_two((sz)/PAGE_SIZE)))
-#define contigfree(va, sz, ty)	free_pages((unsigned long)va,		\
-		ilog2(roundup_pow_of_two(sz)/PAGE_SIZE))
+#define contigmalloc(sz, ty, flags, a, b, pgsz, c)		\
+	(char *) __get_free_pages(GFP_KERNEL |  __GFP_ZERO,	\
+		    ilog2(roundup_pow_of_two((sz)/PAGE_SIZE)))
+#define contigfree(va, sz, ty)	free_pages((unsigned long)va,	\
+		    ilog2(roundup_pow_of_two(sz)/PAGE_SIZE))
 
 #define vtophys		virt_to_phys
 
 /*--- selrecord and friends ---*/
 /* wake_up() or wake_up_interruptible() ? */
 #define	selwakeuppri(sw, pri)	wake_up(sw)
-#define selrecord(x, y)	poll_wait((struct file *)x, y, pwait)
+#define selrecord(x, y)		poll_wait((struct file *)x, y, pwait)
 #define knlist_destroy(x)	// XXX todo
 
 /* we use tsleep/wakeup to sleep a bit. */
@@ -182,14 +182,7 @@ struct thread;
 /*
  * The following trick is to map a struct cdev into a struct miscdevice
  */
-#define	cdev	miscdevice
-
-
-/*
- * Tail queue declarations (crippled)
- */
-// #define	TAILQ_ENTRY(type)	struct list_head
-// #define TAILQ_HEAD(name, type)
+#define	cdev			miscdevice
 
 
 /*
@@ -252,10 +245,5 @@ struct sysctl_req;
         struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *req
 int sysctl_handle_int(SYSCTL_HANDLER_ARGS);
 int sysctl_handle_long(SYSCTL_HANDLER_ARGS);
-
-
-#include <net/netmap.h>
-#include "netmap_kern.h"
-
 
 #endif /* _BSD_GLUE_H */
