@@ -3,11 +3,13 @@
 NETMAP FOR LINUX
 ----------------
 
-This directory contains a version of the "netmap" code for Linux.
+This directory contains a version of the "netmap" and "VALE" code for Linux.
 
 Netmap is a BSD-licensed framework that supports line-rate direct packet
 I/O even on 10GBit/s interfaces (14.88Mpps) with limited system load,
-and includes a libpcap emulation library to port applications.  See
+and includes a libpcap emulation library to port applications.
+
+See
 
 	http://info.iet.unipi.it/~luigi/netmap/
 
@@ -16,9 +18,7 @@ of the code and documentation as well as pre-built TinyCore
 images based on linux 3.0.3 and containing the netmap modules
 and some test applications.
 
-This is a preliminary version supporting the ixgbe and e1000/e1000e
-driver. Patches for other devices (r8169, forcedeth) are
-untested and probably not working yet.
+This version supports r8169, ixgbe, igb, e1000, e1000e and forcedeth.
 
 Netmap relies on a kernel module (netmap_lin.ko) and slightly modified
 device drivers. Userspace programs can use the native API (documented
