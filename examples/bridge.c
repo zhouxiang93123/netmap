@@ -19,8 +19,9 @@ char *version = "$Id$";
 static int do_abort = 0;
 
 static void
-sigint_h(__unused int sig)
+sigint_h(int sig)
 {
+	(void)sig;	/* UNUSED */
 	do_abort = 1;
 	signal(SIGINT, SIG_DFL);
 }

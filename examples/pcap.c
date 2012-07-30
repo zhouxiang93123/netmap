@@ -142,142 +142,6 @@ struct pcap_ring {
 };
 
 
-#if 0 // defined in nm_util.c
-static int
-do_ioctl(struct my_ring *me, int what, __unused int subcmd)
-{
-	struct ifreq ifr;
-	int error;
-	int fd = me->fd;
-#ifdef linux
-	struct ethtool_value eval;
-	fd = socket(AF_INET, SOCK_DGRAM, 0);
-	if (fd == -1) {
-		D("socket failed");
-		return -1;
-	}
-#endif /* linux */
-
-
-	bzero(&ifr, sizeof(ifr));
-	strncpy(ifr.ifr_name, me->nmr.nr_name, sizeof(ifr.ifr_name));
-	switch (what) {
-	case SIOCSIFFLAGS:
-		D("call SIOCSIFFLAGS 0x%x", me->if_flags);
-#ifndef __APPLE__
-		ifr.ifr_flagshigh = (me->if_flags >> 16) & 0xffff;
-#endif
-		ifr.ifr_flags = me->if_flags & 0xffff;
-		break;
-#ifdef __FreeBSD__
-	case SIOCSIFCAP:
-		ifr.ifr_reqcap = me->if_reqcap;
-		ifr.ifr_curcap = me->if_curcap;
-		break;
-#endif
-
-#ifdef linux
-	case SIOCETHTOOL:
-		eval.cmd = subcmd;
-		eval.data = 0; // subvalue;
-		ifr.ifr_data = (caddr_t)&eval;
-		break;
-#endif /* linux */
-	}
-	error = ioctl(fd, what, &ifr);
-	if (error) {
-		D("ioctl 0x%x error %d", what, error);
-		return error;
-	}
-	switch (what) {
-	case SIOCSIFFLAGS:
-	case SIOCGIFFLAGS:
-		me->if_flags = (ifr.ifr_flagshigh << 16) |
-			(0xffff & ifr.ifr_flags);
-		D("flags are L 0x%x H 0x%x 0x%x",
-			(uint16_t)ifr.ifr_flags,
-			(uint16_t)ifr.ifr_flagshigh, me->if_flags);
-		break;
-
-#ifdef __FreeBSD__
-	case SIOCGIFCAP:
-		me->if_reqcap = ifr.ifr_reqcap;
-		me->if_curcap = ifr.ifr_curcap;
-		D("curcap are 0x%x", me->if_curcap);
-		break;
-#endif /* !linux */
-	}
-	if (fd != me->fd)
-		close(fd);
-	return 0;
-}
-
-
-/*
- * open a device. if me->mem is null then do an mmap.
- */
-static int
-netmap_open(struct my_ring *me, int ringid)
-{
-	int fd, err, l;
-	u_int i;
-	struct nmreq req;
-
-	me->fd = fd = open("/dev/netmap", O_RDWR);
-	if (fd < 0) {
-		D("Unable to open /dev/netmap");
-		return (-1);
-	}
-	bzero(&req, sizeof(req));
-	strncpy(req.nr_name, me->nmr.nr_name, sizeof(req.nr_name));
-	req.nr_ringid = ringid;
-	req.nr_version = NETMAP_API;
-	err = ioctl(fd, NIOCGINFO, &req);
-	if (err) {
-		D("cannot get info on %s", me->nmr.nr_name);
-		goto error;
-	}
-	me->memsize = l = req.nr_memsize;
-	ND("memsize is %d MB", l>>20);
-	err = ioctl(fd, NIOCREGIF, &req);
-	if (err) {
-		D("Unable to register %s", me->nmr.nr_name);
-		goto error;
-	}
-
-	if (me->mem == NULL) {
-		me->mem = mmap(0, l, PROT_WRITE | PROT_READ, MAP_SHARED, fd, 0);
-		if (me->mem == MAP_FAILED) {
-			D("Unable to mmap");
-			me->mem = NULL;
-			goto error;
-		}
-	}
-
-	me->nifp = NETMAP_IF(me->mem, req.nr_offset);
-	me->queueid = ringid;
-	if (ringid & NETMAP_SW_RING) {
-		me->begin = req.nr_rx_rings;
-		me->end = me->begin + 1;
-	} else if (ringid & NETMAP_HW_RING) {
-		me->begin = ringid & NETMAP_RING_MASK;
-		me->end = me->begin + 1;
-	} else {
-		me->begin = 0;
-		me->end = req.nr_rx_rings;
-	}
-	/* request timestamps for packets */
-	for (i = me->begin; i < me->end; i++) {
-		struct netmap_ring *ring = NETMAP_RXRING(me->nifp, i);
-		ring->flags = NR_TIMESTAMP;
-	}
-	//me->tx = NETMAP_TXRING(me->nifp, 0);
-	return (0);
-error:
-	close(me->fd);
-	return -1;
-}
-#endif // XXX defined in nm_util.c
 
 /*
  * There is a set of functions that tcpdump expects even if probably
@@ -296,7 +160,7 @@ const char *pcap_lib_version(void)
 }
 
 int
-pcap_findalldevs(pcap_if_t **alldevsp, __unused char *errbuf)
+pcap_findalldevs(pcap_if_t **alldevsp, char *errbuf)
 {
 	pcap_if_t *top = NULL;
 #ifndef linux
@@ -371,12 +235,14 @@ pcap_findalldevs(pcap_if_t **alldevsp, __unused char *errbuf)
 	}
 	freeifaddrs(i_head);
 #endif /* !linux */
+	(void)errbuf;	/* UNUSED */
 	*alldevsp = top;
 	return 0;
 }
 
-void pcap_freealldevs(__unused pcap_if_t *alldevs)
+void pcap_freealldevs(pcap_if_t *alldevs)
 {
+	(void)alldevs;	/* UNUSED */
 	D("unimplemented");
 }
 
@@ -403,8 +269,9 @@ pcap_activate(pcap_t *p)
 }
 
 int
-pcap_can_set_rfmon(__unused pcap_t *p)
+pcap_can_set_rfmon(pcap_t *p)
 {
+	(void)p;	/* UNUSED */
 	D("");
 	return 0;	/* no we can't */
 }
@@ -430,9 +297,10 @@ pcap_snapshot(pcap_t *p)
 
 int
 pcap_lookupnet(const char *device, uint32_t *netp,
-	uint32_t *maskp, __unused char *errbuf)
+	uint32_t *maskp, char *errbuf)
 {
 
+	(void)errbuf;	/* UNUSED */
 	D("device %s", device);
 	inet_aton("10.0.0.255", (struct in_addr *)netp);
 	inet_aton("255.255.255.0",(struct in_addr *) maskp);
@@ -470,23 +338,30 @@ pcap_set_timeout(pcap_t *p, int to_ms)
 struct bpf_program;
 
 int
-pcap_compile(__unused pcap_t *p, __unused struct bpf_program *fp,
-	const char *str, __unused int optimize, __unused uint32_t netmask)
+pcap_compile(pcap_t *p, struct bpf_program *fp,
+	const char *str, int optimize, uint32_t netmask)
 {
+	(void)p;	/* UNUSED */
+	(void)fp;	/* UNUSED */
+	(void)optimize;	/* UNUSED */
+	(void)netmask;	/* UNUSED */
 	D("%s", str);
 	return 0;
 }
 
 int
-pcap_setfilter(__unused pcap_t *p, __unused  struct bpf_program *fp)
+pcap_setfilter(pcap_t *p, struct bpf_program *fp)
 {
+	(void)p;	/* UNUSED */
+	(void)fp;	/* UNUSED */
 	D("");
 	return 0;
 }
 
 int
-pcap_datalink(__unused pcap_t *p)
+pcap_datalink(pcap_t *p)
 {
+	(void)p;	/* UNUSED */
 	D("returns 1");
 	return 1;	// ethernet
 }
@@ -526,11 +401,14 @@ pcap_geterr(pcap_t *p)
 }
 
 pcap_t *
-pcap_open_live(const char *device, __unused int snaplen,
-               int promisc, int to_ms, __unused char *errbuf)
+pcap_open_live(const char *device, int snaplen,
+               int promisc, int to_ms, char *errbuf)
 {
 	struct pcap_ring *me;
 	int l;
+
+	(void)snaplen;	/* UNUSED */
+	(void)errbuf;	/* UNUSED */
 	if (!device) {
 		D("missing device name");
 		return NULL;
@@ -591,15 +469,19 @@ pcap_get_selectable_fd(pcap_t *p)
 }
 
 int
-pcap_setnonblock(__unused pcap_t *p, int nonblock, __unused char *errbuf)
+pcap_setnonblock(pcap_t *p, int nonblock, char *errbuf)
 {
+	(void)p;	/* UNUSED */
+	(void)errbuf;	/* UNUSED */
 	D("mode is %d", nonblock);
 	return 0;	/* ignore */
 }
 
 int
-pcap_setdirection(__unused pcap_t *p, __unused pcap_direction_t d)
+pcap_setdirection(pcap_t *p, pcap_direction_t d)
 {
+	(void)p;	/* UNUSED */
+	(void)d;	/* UNUSED */
 	D("");
 	return 0;	/* ignore */
 };

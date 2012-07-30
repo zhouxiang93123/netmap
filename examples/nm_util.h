@@ -58,7 +58,6 @@
 #define ifr_curcap     ifr_flags
 #define ifr_reqcap     ifr_flags
 #define IFF_PPROMISC   IFF_PROMISC
-#define __unused __attribute__((__unused__))
 #include <linux/ethtool.h>
 #include <linux/sockios.h>
 #endif /* linux */

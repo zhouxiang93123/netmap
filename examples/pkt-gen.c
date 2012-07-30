@@ -155,10 +155,11 @@ static int global_nthreads;
 
 /* control-C handler */
 static void
-sigint_h(__unused int sig)
+sigint_h(int sig)
 {
 	int i;
 
+	(void)sig;	/* UNUSED */
 	for (i = 0; i < global_nthreads; i++) {
 		/* cancel active threads. */
 		if (targs[i].used == 0)
@@ -683,10 +684,12 @@ quit:
 
 
 static void
-receive_pcap(u_char *user, __unused const struct pcap_pkthdr * h,
-	__unused const u_char * bytes)
+receive_pcap(u_char *user, const struct pcap_pkthdr * h,
+	const u_char * bytes)
 {
 	int *count = (int *)user;
+	(void)h;	/* UNUSED */
+	(void)bytes;	/* UNUSED */
 	(*count)++;
 }
 

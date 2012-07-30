@@ -34,8 +34,6 @@
 #include <sys/types.h>
 #include <pthread.h>	/* pthread_* */
 
-#define MY_UNUSED __attribute__ ((__unused__))
-
 #if defined(__APPLE__)
 
 #include <libkern/OSAtomic.h>
@@ -189,10 +187,11 @@ static int global_nthreads;
 
 /* control-C handler */
 static void
-sigint_h(int MY_UNUSED sig)
+sigint_h(int sig)
 {
 	int i;
 
+	(void)sig;	/* UNUSED */
 	for (i = 0; i < global_nthreads; i++) {
 		/* cancel active threads. */
 		if (ta[i].completed)
