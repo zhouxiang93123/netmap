@@ -24,7 +24,11 @@ obj-$(CONFIG_E1000E) += e1000e/
 obj-$(CONFIG_IXGBE) += ixgbe/
 obj-$(CONFIG_IGB) += igb/
 
+# names of the driver sources. In old linuxes are under
+# KSRC/drivers/net, but depending on where you build they
+# can be in $(KSRC)/source/drivers/net/ethernet/$(manufacturer)
 DRIVER_SRCS = r8169.c forcedeth.c e1000/ e1000e/ ixgbe/ igb/
+DRIVER_SUBDIRS= nvidia realtek intel
 PATCHFILES = net-e1000.diff net-e1000e.diff net-forcedeth.diff \
 		net-igb.diff net-ixgbe.diff net-r8169.diff
 
@@ -45,7 +49,8 @@ EXTRA_CFLAGS += -I$(M) -I$(M)/../sys -I$(M)/../sys/dev/netmap
 KSRC ?= /lib/modules/$(shell uname -r)/build
 
 all:	get-drivers
-	make -C $(KSRC) M=$(PWD) modules # EXTRA_CFLAGS="$(EXTRA_CFLAGS)" modules
+	make -C $(KSRC) M=$(PWD) CONFIG_E1000=m CONFIG_E1000E=m \
+		CONFIG_IXGBE=m CONFIG_IGB=m modules
 
 clean:
 	make -C $(KSRC) M=$(PWD) clean
@@ -58,9 +63,14 @@ $(obj)/netmap.o: $(M)/../sys/dev/netmap/netmap.c
 #	$(call quiet_cmd,cc_o_c)
 
 #-- copy and patch initial files
+# The location changes depending on the OS version, so ...
 get-drivers:
-	( cd $(KSRC)/drivers/net; cp -Rp $(DRIVER_SRCS) $(PWD) )
-	for i in $(PATCHFILES) ; do patch -p0 < $$i; done
+	-@( cd $(KSRC); [ -d source ] && cd source;			\
+	    cd drivers/net; s=. ;					\
+	    [ -d ethernet ] && cd ethernet && s="$(DRIVER_SUBDIRS)" ;	\
+	    for i in $$s; do (cd $$i ;					\
+	    	cp -Rp $(DRIVER_SRCS) $(PWD) 2>/dev/null ); done )
+	# for i in $(PATCHFILES) ; do patch -p0 < $$i; done
 
 # copy and patch files from the source tree
 #$(obj)/r8169.c: $(srctree)/drivers/net/r8169.c 
