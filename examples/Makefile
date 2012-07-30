@@ -12,27 +12,31 @@ CFLAGS += -I ../sys # -I/home/luigi/FreeBSD/head/sys -I../sys
 CFLAGS += -Wextra
 
 LDFLAGS += -lpthread -lpcap
+LDFLAGS += -lrt	# on linux
 #SRCS = pkt-gen.c
 
-.include <bsd.prog.mk>
-.include <bsd.lib.mk>
+#.include <bsd.prog.mk>
+#.include <bsd.lib.mk>
 
 all: $(PROGS)
 
 testpcap: pcap.c libnetmap.so nm_util.o
-	$(CC) $(CFLAGS) -DTEST -o ${.TARGET} pcap.c nm_util.o $(LDFLAGS)
+	$(CC) $(CFLAGS) -DTEST -o testpcap pcap.c nm_util.o $(LDFLAGS)
 
 kern_test: testmod/kern_test.c
 
 nm_util.o pkt-gen.o bridge.o libnetmap.so pcap.o: nm_util.h
 
 pkt-gen: pkt-gen.o nm_util.o
-	$(CC) $(LDFLAGS) -o ${.TARGET} ${.ALLSRC}
+#	$(CC) $(LDFLAGS) -o pkt-
 
 bridge: bridge.o nm_util.o
-	$(CC) $(LDFLAGS) -o ${.TARGET} ${.ALLSRC}
+#	$(CC) $(LDFLAGS) -o ${.TARGET} ${.ALLSRC}
 
 libnetmap.so:	pcap.c nm_util.c
 	$(CC) $(CFLAGS) -fpic -c pcap.c
 	$(CC) $(CFLAGS) -fpic -c nm_util.c
 	$(CC) -shared -o ${.TARGET} pcap.o nm_util.o
+
+clean:
+	-@rm -rf $(CLEANFILES)

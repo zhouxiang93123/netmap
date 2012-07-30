@@ -298,8 +298,10 @@ const char *pcap_lib_version(void)
 int
 pcap_findalldevs(pcap_if_t **alldevsp, __unused char *errbuf)
 {
+	pcap_if_t *top = NULL;
+#ifndef linux
 	struct ifaddrs *i_head, *i;
-	pcap_if_t *top = NULL, *cur;
+	pcap_if_t *cur;
 	struct pcap_addr *tail = NULL;
 	int l;
 
@@ -307,7 +309,6 @@ pcap_findalldevs(pcap_if_t **alldevsp, __unused char *errbuf)
 	*alldevsp = NULL;
 	i_head = NULL;
 
-#ifndef linux
 	if (getifaddrs(&i_head)) {
 		D("cannot get if addresses");
 		return -1;

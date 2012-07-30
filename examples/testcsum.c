@@ -66,8 +66,10 @@ volatile uint16_t res;
 	x; } )
 
 uint32_t
-dummy(const unsigned char *addr __unused, int count __unused)
+dummy(const unsigned char *addr, int count)
 {
+	(void)addr;
+	(void)count;
 	return 0;
 }
 
