@@ -56,7 +56,7 @@
 
 #ifdef linux
 #include "bsd_glue.h"
-static netdev_tx_t netmap_start_linux(struct sk_buff *skb, struct net_device *dev);
+static netdev_tx_t linux_netmap_start(struct sk_buff *skb, struct net_device *dev);
 #endif /* linux */
 
 #ifdef __APPLE__
@@ -1331,7 +1331,7 @@ netmap_attach(struct netmap_adapter *na, int num_queues)
 		/* prepare a clone of the netdev ops */
 		na->nm_ndo = *ifp->netdev_ops;
 	}
-	na->nm_ndo.ndo_start_xmit = netmap_start_linux;
+	na->nm_ndo.ndo_start_xmit = linux_netmap_start;
 #endif
 	D("%s for %s", buf ? "ok" : "failed", ifp->if_xname);
 
@@ -1596,7 +1596,7 @@ netmap_mmap(struct file *f, struct vm_area_struct *vma)
 }
 
 static netdev_tx_t
-netmap_start_linux(struct sk_buff *skb, struct net_device *dev)
+linux_netmap_start(struct sk_buff *skb, struct net_device *dev)
 {
 	netmap_start(dev, skb);
 	return (NETDEV_TX_OK);
@@ -1652,13 +1652,13 @@ static struct miscdevice netmap_cdevsw = {	/* same name as FreeBSD */
 static int netmap_init(void);
 static void netmap_fini(void);
 
-// the convention for the return value is reversed in Linux
-static int netmap_init_linux(void)
+/* the convention for the return value is reversed in Linux */
+static int linux_netmap_init(void)
 {
 	return -netmap_init();
 }
 
-module_init(netmap_init_linux);
+module_init(linux_netmap_init);
 module_exit(netmap_fini);
 /* export certain symbols to other modules */
 EXPORT_SYMBOL(netmap_attach);		// driver attach routines

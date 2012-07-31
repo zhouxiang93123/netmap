@@ -30,8 +30,6 @@ obj-m += $(DRIVERS)
 # can be in $(KSRC)/source/drivers/net/ethernet/$(manufacturer)
 DRIVER_SRCS = r8169.c forcedeth.c e1000/ e1000e/ ixgbe/ igb/
 DRIVER_SUBDIRS= nvidia realtek intel
-PATCHFILES = net-e1000.diff net-e1000e.diff net-forcedeth.diff \
-		net-igb.diff net-ixgbe.diff net-r8169.diff
 
 # The following commands are needed to build the modules as out-of-tree, in
 # fact the kernel sources path must be specified.
@@ -48,10 +46,12 @@ SRC ?= $(KSRC)
 LIN_VER = $(shell grep LINUX_VERSION_CODE $(KSRC)/include/linux/version.h | \
 	awk '{printf "%03x%02d", $$3/256, $$3%256} ')
 
-PATCHES = $(shell cd patches; ls diff--* | awk -v v=$(LIN_VER) -F -- '{ \
+PATCHES := $(shell	\
+	    cd patches; ls diff--* | awk -v v=$(LIN_VER) -F -- '{ \
 	    if ((!$$3 || $$3 <= v) && (!$$4 || v < $$4)) print $0; }')
 
-DRIVERS = $(shell cd patches; ls diff--* | awk -v v=$(LIN_VER) -F -- '{ \
+DRIVERS := $(shell	\
+	    cd patches; ls diff--* | awk -v v=$(LIN_VER) -F -- '{ \
 	    if ((!$$3 || $$3 <= v) && (!$$4 || v < $$4)) { ; \
 	    if (match($$2, ".c")) print $$2 ; else print $$2 "/" } }' )
 
@@ -59,7 +59,8 @@ all:	get-drivers build
 
 build:
 	make -C $(KSRC) M=$(PWD) CONFIG_E1000=m CONFIG_E1000E=m \
-		CONFIG_IXGBE=m CONFIG_IGB=m DRIVERS="$(DRIVERS:%.c=%.o)" modules
+		CONFIG_IXGBE=m CONFIG_IGB=m \
+			DRIVERS="$(DRIVERS:%.c=%.o)" modules
 	@ls -l `find . -name \*.ko`
 
 test:
@@ -68,7 +69,7 @@ test:
 	@echo "drivers $(DRIVERS)"
 
 clean:
-	-@ make -C $(KSRC) M=$(PWD) clean
+# -@ make -C $(KSRC) M=$(PWD) clean
 	-@ (rm -rf $(DRIVER_SRCS) *.orig *.rej *.ko get-drivers)
 
 # the source is not here so we need to specify a dependency
@@ -80,14 +81,15 @@ $(obj)/netmap.o: $(M)/../sys/dev/netmap/netmap.c
 #-- copy and patch initial files
 # The location changes depending on the OS version, so ...
 get-drivers:
-	@echo "subdirs $(DRIVER_SUBDIRS) files $(DRIVERS)"
-	-@( cd $(SRC); [ -d source ] && cd source;			\
+	@echo "LIN_VER $(LIN_VER) subdirs $(DRIVER_SUBDIRS) files $(DRIVERS)"
+	-@(								\
+	cd $(SRC); [ -d source ] && cd source;			\
 	    cd drivers/net; s=. ;					\
 	    [ -d ethernet ] && cd ethernet && s="$(DRIVER_SUBDIRS)" ;	\
 	    for i in $$s; do (cd $$i ;					\
 	    	cp -Rp $(DRIVERS) $(PWD) 2>/dev/null ); done )
-	@(for i in $(PATCHES) ; do echo "** use patches/$$i";		\
-		patch --posix --force -p1 < patches/$$i; done )
+	-@(for i in $(PATCHES) ; do echo "** use patches/$$i";		\
+		patch --posix --quiet --force -p1 < patches/$$i; done )
 	@touch get-drivers
 	@echo "Building the following drivers: $(obj-m)"
 
