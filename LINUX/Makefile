@@ -80,6 +80,7 @@ $(obj)/netmap.o: $(M)/../sys/dev/netmap/netmap.c
 #-- copy and patch initial files
 # The location changes depending on the OS version, so ...
 get-drivers:
+	@echo "subdirs $(DRIVER_SUBDIRS) files $(DRIVERS)"
 	-@( cd $(SRC); [ -d source ] && cd source;			\
 	    cd drivers/net; s=. ;					\
 	    [ -d ethernet ] && cd ethernet && s="$(DRIVER_SUBDIRS)" ;	\
