@@ -60,6 +60,7 @@ all:	get-drivers build
 build:
 	make -C $(KSRC) M=$(PWD) CONFIG_E1000=m CONFIG_E1000E=m \
 		CONFIG_IXGBE=m CONFIG_IGB=m DRIVERS="$(DRIVERS:%.c=%.o)" modules
+	@ls -l `find . -name \*.ko`
 
 test:
 	@echo "version $(LIN_VER)"
@@ -68,7 +69,7 @@ test:
 
 clean:
 	-@ make -C $(KSRC) M=$(PWD) clean
-	-@ (rm -rf $(DRIVER_SRCS) *.orig *.rej)
+	-@ (rm -rf $(DRIVER_SRCS) *.orig *.rej *.ko)
 
 # the source is not here so we need to specify a dependency
 $(obj)/netmap.o: $(M)/../sys/dev/netmap/netmap.c

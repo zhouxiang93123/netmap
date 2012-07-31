@@ -2,35 +2,41 @@
     VALE -  a Virtual Local Ethernet using the netmap API
 ===================================================================
 
-Netmap is a framework to give direct access to network devices to userland
-programs. Details on the system are given at
+NETMAP is a framework for very fast packet I/O from userspace.
+VALE implements a very fast software switch using the netmap API.
+Both can deal with line rate on real or emulated 10 Gbit ports.
+See details at
 
 	http://info.iet.unipi.it/~luigi/netmap/
-
-VALE implements a very fast software switch using the netmap API, see
-
 	http://info.iet.unipi.it/~luigi/vale/
 
-In this directory you can find source code for FreeBSD and Linux.
-The code is distributed under a BSD Copyright.
-Recent FreeBSD distributions already include both netmap and VALE
-so you should not need to use these sources.
+In this directory you can find source code (BSD-Copyright)
+for FreeBSD and Linux. Note that recent FreeBSD distributions
+already include both NETMAP and VALE.
 
-Install
--------
-Assuming your kernel source tree is in ${BASE}, to build netmap
-you should do the following:
+Installation instructions
+-------------------------
+You need to install a kernel module (netmap.ko or netmap_lin.ko)
+which is all you need to use the VALE switch.
+If you want to use netmap applications on your network devices you need
+to build and load netmap-enabled device drivers.
 
-   + copy the sources for the the netmap module from sys/ into ${BASE}/sys
-     excluding .svn directories (e.g. rsync -aC sys/ ${BASE}/sys)
+  FreeBSD
+  --------
+  + add 'device netmap' to your kernel config file and rebuild a kernel.
+    Alternatively, you can build the relevanto modules
 
-   + apply the patch in head-netmap.diff
-     (it updates some device drivers and config files. Currently tested
-     are ixgbe, em, lem and re.
-     The patch is for HEAD, but it *might* work also for RELENG_8.
+  Linux
+  -------
+  + make sure you have kernel sources matching your installed kernel,
+    say they are in /a/b/c/linux-A.B.C/ , then you should do
 
-Then you can build kernel adding "device netmap" to the kernel config.
-and modules and reinstall it.
+	cd netmap/LINUX
+	make KSRC=/a/b/c/linux-A.B.C/		# builds the kernel modules
+	make KSRC=/a/b/c/linux-A.B.C/ apps	# builds sample applications
+
+    You can omit KSRC if your kernel sources are in a standard place.
+  
 
 The directory examples/ contains some programs that use the netmap API
 
