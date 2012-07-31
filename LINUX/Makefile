@@ -69,7 +69,7 @@ test:
 
 clean:
 	-@ make -C $(KSRC) M=$(PWD) clean
-	-@ (rm -rf $(DRIVER_SRCS) *.orig *.rej *.ko)
+	-@ (rm -rf $(DRIVER_SRCS) *.orig *.rej *.ko get-drivers)
 
 # the source is not here so we need to specify a dependency
 $(obj)/netmap.o: $(M)/../sys/dev/netmap/netmap.c
@@ -86,6 +86,7 @@ get-drivers:
 	    for i in $$s; do (cd $$i ;					\
 	    	cp -Rp $(DRIVERS) $(PWD) 2>/dev/null ); done )
 	@(for i in $(PATCHES) ; do patch --posix --quiet --force -p1 < $$i; done )
+	@touch get-drivers
 	@echo "Building the following drivers: $(obj-m)"
 
 # copy and patch files from the source tree
