@@ -1652,7 +1652,13 @@ static struct miscdevice netmap_cdevsw = {	/* same name as FreeBSD */
 static int netmap_init(void);
 static void netmap_fini(void);
 
-module_init(netmap_init);
+// the convention for the return value is reversed in Linux
+static int netmap_init_linux(void)
+{
+	return -netmap_init();
+}
+
+module_init(netmap_init_linux);
 module_exit(netmap_fini);
 /* export certain symbols to other modules */
 EXPORT_SYMBOL(netmap_attach);		// driver attach routines
@@ -2038,7 +2044,7 @@ netmap_init(void)
 
 	error = netmap_memory_init();
 	if (error != 0) {
-		printf("netmap: unable to initialize the memory allocator.");
+		printf("netmap: unable to initialize the memory allocator.\n");
 		return (error);
 	}
 	printf("netmap: loaded module with %d Mbytes\n",
