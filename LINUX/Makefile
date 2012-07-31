@@ -48,12 +48,12 @@ SRC ?= $(KSRC)
 LIN_VER = $(shell grep LINUX_VERSION_CODE $(KSRC)/include/linux/version.h | \
 	awk '{printf "%03x%02d", $$3/256, $$3%256} ')
 
-PATCHES = $(shell ls diff-* | awk -v v=$(LIN_VER) -F - '{ \
-	    if ((!$$2 || $$2 <= v) && (!$$3 || v < $$3)) print $0; }')
+PATCHES = $(shell cd patches; ls diff--* | awk -v v=$(LIN_VER) -F -- '{ \
+	    if ((!$$3 || $$3 <= v) && (!$$4 || v < $$4)) print $0; }')
 
-DRIVERS = $(shell ls diff-* | awk -v v=$(LIN_VER) -F - '{ \
-	    if ((!$$2 || $$2 <= v) && (!$$3 || v < $$3)) { ; \
-	    if (match($$4, ".c")) print $$4 ; else print $$4 "/" } }' )
+DRIVERS = $(shell cd patches; ls diff--* | awk -v v=$(LIN_VER) -F -- '{ \
+	    if ((!$$3 || $$3 <= v) && (!$$4 || v < $$4)) { ; \
+	    if (match($$2, ".c")) print $$2 ; else print $$2 "/" } }' )
 
 all:	get-drivers build
 
@@ -86,7 +86,8 @@ get-drivers:
 	    [ -d ethernet ] && cd ethernet && s="$(DRIVER_SUBDIRS)" ;	\
 	    for i in $$s; do (cd $$i ;					\
 	    	cp -Rp $(DRIVERS) $(PWD) 2>/dev/null ); done )
-	@(for i in $(PATCHES) ; do patch --posix --quiet --force -p1 < $$i; done )
+	@(for i in $(PATCHES) ; do echo "** use patches/$$i";		\
+		patch --posix --force -p1 < patches/$$i; done )
 	@touch get-drivers
 	@echo "Building the following drivers: $(obj-m)"
 
