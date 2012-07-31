@@ -46,12 +46,12 @@ SRC ?= $(KSRC)
 LIN_VER = $(shell grep LINUX_VERSION_CODE $(KSRC)/include/linux/version.h | \
 	awk '{printf "%03x%02d", $$3/256, $$3%256} ')
 
-PATCHES := $(shell	\
-	    cd patches; ls diff--* | awk -v v=$(LIN_VER) -F -- '{ \
+PATCHES := $(shell \
+	    cd $(PWD)/patches; ls diff--* | awk -v v=$(LIN_VER) -F -- '{ \
 	    if ((!$$3 || $$3 <= v) && (!$$4 || v < $$4)) print $0; }')
 
-DRIVERS := $(shell	\
-	    cd patches; ls diff--* | awk -v v=$(LIN_VER) -F -- '{ \
+DRIVERS := $(shell \
+	    cd $(PWD)/patches; ls diff--* | awk -v v=$(LIN_VER) -F -- '{ \
 	    if ((!$$3 || $$3 <= v) && (!$$4 || v < $$4)) { ; \
 	    if (match($$2, ".c")) print $$2 ; else print $$2 "/" } }' )
 
@@ -69,8 +69,8 @@ test:
 	@echo "drivers $(DRIVERS)"
 
 clean:
-# -@ make -C $(KSRC) M=$(PWD) clean
-	-@ (rm -rf $(DRIVER_SRCS) *.orig *.rej *.ko get-drivers)
+	-@ make -C $(KSRC) M=$(PWD) clean
+	-@ (rm -rf $(DRIVER_SRCS) *.orig *.rej *.ko *.o get-drivers )
 
 # the source is not here so we need to specify a dependency
 $(obj)/netmap.o: $(M)/../sys/dev/netmap/netmap.c
