@@ -12,6 +12,7 @@ RELEASE_SRCS := ./sys/net ./sys/modules ./examples
 RELEASE_SRCS += ./sys/dev
 RELEASE_SRCS += ./README ./LINUX
 RELEASE_EXCL := --exclude .svn --exclude sys/dev/\*/i\*.c --exclude examples/testmod
+RELEASE_EXCL += --exclude connlib\* --exclude netmap_vale.c
 
 # default: build for the current platform
 
