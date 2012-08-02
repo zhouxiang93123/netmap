@@ -13,7 +13,7 @@ RELEASE_EXCL := --exclude .svn --exclude sys/dev/\*/i\*.c --exclude examples/tes
 RELEASE_EXCL += --exclude connlib\* --exclude netmap_vale.c
 
 all:
-	@echo "What to you want to do ?"
+	@echo "What do you want to do ?"
 
 tgz:
 	tar cvzf /usr/ports/distfiles/${DIST_NAME} \
