@@ -5,7 +5,7 @@
  MODULE_VERSION(DRV_VERSION);
  
 +#if defined(CONFIG_NETMAP) || defined(CONFIG_NETMAP_MODULE)
-+#include <netmap/if_igb_netmap.h>
++#include <if_igb_netmap.h>
 +#endif
 +
  /**

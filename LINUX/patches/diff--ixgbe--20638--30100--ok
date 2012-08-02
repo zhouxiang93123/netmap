@@ -14,12 +14,12 @@ diff -urp net/ixgbe/ixgbe_main.c net/ixgbe/ixgbe_main.c
 + * The code is originally developed on FreeBSD and in the interest
 + * of maintainability we try to limit differences between the two systems.
 + *
-+ * <netmap/ixgbe_netmap_linux.h> contains functions for netmap support
++ * <ixgbe_netmap_linux.h> contains functions for netmap support
 + * that extend the standard driver.
 + * It also defines DEV_NETMAP so further conditional sections use
 + * that instead of CONFIG_NETMAP
 + */
-+#include <netmap/ixgbe_netmap_linux.h>
++#include <ixgbe_netmap_linux.h>
 +#endif
  
  /*

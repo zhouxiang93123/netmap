@@ -6,7 +6,7 @@ diff -urp net/e1000/e1000_main.c net/e1000/e1000_main.c
  MODULE_PARM_DESC(debug, "Debug level (0=none,...,16=all)");
  
 +#if defined(CONFIG_NETMAP) || defined(CONFIG_NETMAP_MODULE)
-+#include <netmap/if_e1000_netmap.h>
++#include <if_e1000_netmap.h>
 +#endif
 +
  /**

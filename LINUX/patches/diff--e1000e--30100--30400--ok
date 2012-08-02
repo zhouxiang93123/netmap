@@ -5,7 +5,7 @@
  };
  
 +#if defined(CONFIG_NETMAP) || defined(CONFIG_NETMAP_MODULE)
-+#include <netmap/if_e1000e_netmap.h>
++#include <if_e1000e_netmap.h>
 +#endif
 +
  /*

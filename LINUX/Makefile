@@ -35,7 +35,8 @@ DRIVER_SUBDIRS= nvidia realtek intel
 # fact the kernel sources path must be specified.
 
 # Additional compile flags (e.g. header location)
-EXTRA_CFLAGS += -I$(M) -I$(M)/../sys -I$(M)/../sys/dev -DCONFIG_NETMAP
+M:=$(PWD)
+EXTRA_CFLAGS := -I$(M) -I$(M)/../sys -I$(M)/../sys/dev -DCONFIG_NETMAP
 
 # We use KSRC for the kernel configuration and sources.
 # If the sources are elsewhere, then use SRC to point to them.
@@ -60,7 +61,7 @@ all:	get-drivers build
 build:
 	make -C $(KSRC) M=$(PWD) CONFIG_NETMAP=m	\
 		CONFIG_E1000=m CONFIG_E1000E=m \
-		CONFIG_IXGBE=m CONFIG_IGB=m \
+		CONFIG_IXGBE=m CONFIG_IGB=m EXTRA_CFLAGS='$(EXTRA_CFLAGS)' \
 		DRIVERS="$(DRIVERS:%.c=%.o)" modules
 	@ls -l `find . -name \*.ko`
 
