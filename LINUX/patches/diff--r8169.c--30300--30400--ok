@@ -5,7 +5,7 @@
  }
  
 +#if defined(CONFIG_NETMAP) || defined(CONFIG_NETMAP_MODULE)
-+#include <netmap/if_re_netmap_linux.h>
++#include <if_re_netmap_linux.h>
 +#endif
 +
  static u32 ocp_read(struct rtl8169_private *tp, u8 mask, u16 reg)

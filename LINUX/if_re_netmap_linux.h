@@ -33,7 +33,7 @@
  */
 
 
-#include <netmap/bsd_glue.h>
+#include <bsd_glue.h>
 #include <net/netmap.h>
 #include <netmap/netmap_kern.h>
 

@@ -52,7 +52,7 @@ This makes sure that there is always a free slot.
 
  */
 
-#include <netmap/bsd_glue.h>
+#include <bsd_glue.h>
 #include <net/netmap.h>
 #include <netmap/netmap_kern.h>
 #define SOFTC_T	fe_priv

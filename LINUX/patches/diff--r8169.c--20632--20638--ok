@@ -1,19 +1,11 @@
 --- /home/giuseppe/Compile/linux/drivers/net/r8169.c	2012-08-01 09:46:24.029831945 +0200
 +++ net/r8169.c	2012-08-01 10:00:12.381853666 +0200
-@@ -28,6 +28,7 @@
- #include <asm/io.h>
- #include <asm/irq.h>
- 
-+
- #define RTL8169_VERSION "2.3LK-NAPI"
- #define MODULENAME "r8169"
- #define PFX MODULENAME ": "
 @@ -537,6 +538,10 @@ static int rtl8169_poll(struct napi_stru
  static const unsigned int rtl8169_rx_config =
  	(RX_FIFO_THRESH << RxCfgFIFOShift) | (RX_DMA_BURST << RxCfgDMAShift);
  
 +#if defined(CONFIG_NETMAP) || defined(CONFIG_NETMAP_MODULE)
-+#include <netmap/if_re_netmap_linux.h>
++#include <if_re_netmap_linux.h>
 +#endif
 +
  static void mdio_write(void __iomem *ioaddr, int reg_addr, int value)

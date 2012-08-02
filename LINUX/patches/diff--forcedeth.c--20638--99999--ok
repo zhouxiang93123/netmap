@@ -8,7 +8,7 @@
 +/* we need a few forward declarations */
 +static void nv_drain_rxtx(struct net_device *dev);
 +static int nv_init_ring(struct net_device *dev);
-+#include <netmap/forcedeth_netmap.h>
++#include <forcedeth_netmap.h>
 +#endif
 +
  static int nv_init_ring(struct net_device *dev)
