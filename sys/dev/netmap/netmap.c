@@ -65,7 +65,7 @@ static netdev_tx_t linux_netmap_start(struct sk_buff *skb, struct net_device *de
 
 #ifdef __FreeBSD__
 #include <sys/cdefs.h> /* prerequisite */
-__FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 234986 2012-05-03 21:16:53Z luigi $");
+__FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 238985 2012-08-02 11:59:43Z luigi $");
 
 #include <sys/types.h>
 #include <sys/module.h>
@@ -119,8 +119,8 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, verbose,
     CTLFLAG_RW, &netmap_verbose, 0, "Verbose mode");
 SYSCTL_INT(_dev_netmap, OID_AUTO, no_timestamp,
     CTLFLAG_RW, &netmap_no_timestamp, 0, "no_timestamp");
-int netmap_buf_size = 2048;
-TUNABLE_INT("hw.netmap.buf_size", &netmap_buf_size);
+u_int netmap_buf_size = 2048;
+TUNABLE_INT("hw.netmap.buf_size", (u_int *)&netmap_buf_size);
 SYSCTL_INT(_dev_netmap, OID_AUTO, buf_size,
     CTLFLAG_RD, &netmap_buf_size, 0, "Size of packet buffers");
 int netmap_mitigate = 1;
@@ -1379,7 +1379,7 @@ netmap_start(struct ifnet *ifp, struct mbuf *m)
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[na->num_rx_rings];
 	u_int i, len = MBUF_LEN(m);
-	int error = EBUSY, lim = kring->nkr_num_slots - 1;
+	u_int error = EBUSY, lim = kring->nkr_num_slots - 1;
 	struct netmap_slot *slot;
 
 	if (netmap_verbose & NM_VERB_HOST)
@@ -1955,7 +1955,7 @@ bdg_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	int j, n, lim = kring->nkr_num_slots - 1;
+	u_int j, n, lim = kring->nkr_num_slots - 1;
 	u_int k = ring->cur, resvd = ring->reserved;
 
 	ND("%s ring %d lock %d avail %d",

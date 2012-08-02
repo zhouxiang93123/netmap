@@ -24,7 +24,7 @@
  */
 
 /*
- * $FreeBSD: head/sys/dev/netmap/if_em_netmap.h 231881 2012-02-17 14:09:04Z luigi $
+ * $FreeBSD: head/sys/dev/netmap/if_em_netmap.h 238985 2012-08-02 11:59:43Z luigi $
  * $Id$
  *
  * netmap support for em.
@@ -171,7 +171,7 @@ em_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	u_int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
 
 	/* generate an interrupt approximately every half ring */
-	int report_frequency = kring->nkr_num_slots >> 1;
+	u_int report_frequency = kring->nkr_num_slots >> 1;
 
 	k = ring->cur;
 	if (k > lim)
