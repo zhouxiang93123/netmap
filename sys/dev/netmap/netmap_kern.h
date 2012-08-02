@@ -80,7 +80,6 @@
 #error unsupported platform
 #endif
 
-
 #define ND(format, ...)
 #define D(format, ...)						\
 	do {							\
