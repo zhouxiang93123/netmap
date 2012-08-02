@@ -161,7 +161,7 @@ struct netmap_ring *rxring = NETMAP_RXRING(nifp, i);
 int i = txring->slot[txring->cur].buf_idx;
 char *buf = NETMAP_BUF(txring, i);
 .Ed
-.Ss IOCTLS
+.Sh IOCTLS
 .Pp
 .Nm
 supports some ioctl() to synchronize the state of the rings
@@ -175,7 +175,7 @@ defined as follows:
 struct nmreq {
         char      nr_name[IFNAMSIZ];
         uint32_t  nr_version;     /* API version */
-#define NETMAP_API      2         /* current version */
+#define NETMAP_API      3         /* current version */
         uint32_t  nr_offset;      /* nifp offset in the shared region */
         uint32_t  nr_memsize;     /* size of the shared region */
         uint32_t  nr_tx_slots;    /* slots in tx rings */
@@ -187,6 +187,8 @@ struct nmreq {
 #define NETMAP_SW_RING  0x2000    /* we process the sw ring */
 #define NETMAP_NO_TX_POLL 0x1000  /* no gratuitous txsync on poll */
 #define NETMAP_RING_MASK 0xfff    /* the actual ring number */
+        uint16_t        spare1;
+        uint32_t        spare2[4];
 };
 
 .Ed
@@ -253,7 +255,7 @@ number of slots available for transmission.
 tells the hardware of consumed packets, and asks for newly available
 packets.
 .El
-.Ss SYSTEM CALLS
+.Sh SYSTEM CALLS
 .Nm
 uses
 .Nm select
@@ -282,7 +284,7 @@ fds.fd = fd;
 fds.events = POLLOUT;
 for (;;) {
     poll(list, 1, -1);
-    while (ring->avail-- > 0) {
+    for ( ; ring->avail > 0 ; ring->avail--) {
         i = ring->cur;
         buf = NETMAP_BUF(ring, ring->slot[i].buf_index);
         ... prepare packet in buf ...
@@ -295,13 +297,31 @@ for (;;) {
 .Nm
 supports the following interfaces:
 .Xr em 4 ,
+.Xr igb 4 ,
 .Xr ixgbe 4 ,
-.Xr re 4 ,
+.Xr lem 4 ,
+.Xr re 4
+.Sh SEE ALSO
+.Xr vale 4
+.Pp
+http://info.iet.unipi.it/~luigi/netmap/
+.Pp
+Luigi Rizzo, Revisiting network I/O APIs: the netmap framework,
+Communications of the ACM, 55 (3), pp.45-51, March 2012
+.Pp
+Luigi Rizzo, netmap: a novel framework for fast packet I/O,
+Usenix ATC'12, June 2012, Boston
 .Sh AUTHORS
+.An -nosplit
 The
 .Nm
-framework has been designed and implemented by
-.An Luigi Rizzo
-and
-.An Matteo Landi
-in 2011 at the Universita` di Pisa.
+framework has been designed and implemented at the
+Universita` di Pisa in 2011 by
+.An Luigi Rizzo ,
+with help from
+.An Matteo Landi ,
+.An Gaetano Catalli ,
+.An Giuseppe Lettieri .
+.Pp
+.Nm
+has been funded by the EC Project CHANGE
