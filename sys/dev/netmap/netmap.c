@@ -1554,7 +1554,7 @@ linux_netmap_poll(struct file * file, struct poll_table_struct *pwait)
 }
 
 static int
-netmap_mmap(struct file *f, struct vm_area_struct *vma)
+linux_netmap_mmap(struct file *f, struct vm_area_struct *vma)
 {
 	int lut_skip, i, j;
 	int user_skip = 0;
@@ -1637,7 +1637,7 @@ netmap_release(struct inode *inode, struct file *file)
 
 
 static struct file_operations netmap_fops = {
-    .mmap = netmap_mmap,
+    .mmap = linux_netmap_mmap,
     LIN_IOCTL_NAME = linux_netmap_ioctl,
     .poll = linux_netmap_poll,
     .release = netmap_release,
@@ -1652,7 +1652,7 @@ static struct miscdevice netmap_cdevsw = {	/* same name as FreeBSD */
 static int netmap_init(void);
 static void netmap_fini(void);
 
-/* the convention for the return value is reversed in Linux */
+/* Errors have negative values on linux */
 static int linux_netmap_init(void)
 {
 	return -netmap_init();
