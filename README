@@ -3,7 +3,7 @@
 ===================================================================
 
 NETMAP is a framework for very fast packet I/O from userspace.
-VALE implements a very fast software switch using the netmap API.
+VALE implements an equally fast software switch using the netmap API.
 Both can deal with line rate on real or emulated 10 Gbit ports.
 See details at
 
@@ -14,22 +14,28 @@ In this directory you can find source code (BSD-Copyright)
 for FreeBSD and Linux. Note that recent FreeBSD distributions
 already include both NETMAP and VALE.
 
-Installation instructions
+Last update: 2012-08-02
+
+Installation instructions 
 -------------------------
-You need to install a kernel module (netmap.ko or netmap_lin.ko)
-which is all you need to use the VALE switch.
-If you want to use netmap applications on your network devices you need
-to build and load netmap-enabled device drivers.
+A kernel module (netmap.ko or netmap_lin.ko) implements the whole
+VALE switch and the core NETMAP routines.
+Netmap-aware device drivers are needed to use netmap on ethernet ports.
+To date, we have support for Intel ixgbe (10G), e1000/e1000e/igb (1G),
+Realtek 8169 (1G) and Nvidia (1G).
 
   FreeBSD
   --------
   + add 'device netmap' to your kernel config file and rebuild a kernel.
-    Alternatively, you can build the relevanto modules
+    This will include the netmap module and netmap support in the device
+    drivers.  Alternatively, you can build standalone modules
+    (netmap, ixgbe, em, lem, re, igb)
 
   Linux
   -------
   + make sure you have kernel sources matching your installed kernel,
-    say they are in /a/b/c/linux-A.B.C/ , then you should do
+    so the build system can patch the sources and build netmap-enabled
+    drivers. If kernel sources are in /a/b/c/linux-A.B.C/ , then you should do
 
 	cd netmap/LINUX
 	make KSRC=/a/b/c/linux-A.B.C/		# builds the kernel modules
@@ -38,6 +44,8 @@ to build and load netmap-enabled device drivers.
     You can omit KSRC if your kernel sources are in a standard place.
   
 
+Applications
+-------------
 The directory examples/ contains some programs that use the netmap API
 
     pkt-gen	a packet generator/receiver working at line rate at 10Gbit/s
@@ -50,12 +58,18 @@ The directory examples/ contains some programs that use the netmap API
 
 Credits
 -------
-netmap and VALE are projects of the Universita` di Pisa,
+NETMAP and VALE are projects of the Universita` di Pisa,
 partially supported by Intel Research Berkeley, EU FP7 projects CHANGE
 and OPENLAB.
 
-Developers include:
-Luigi Rizzo
-Matteo Landi
-Gaetano Catalli
-Giuseppe Lettieri
+Author:		Luigi Rizzo
+Contributors:
+		Giuseppe Lettieri
+		Marta Carbone
+		Gaetano Catalli
+		Matteo Landi
+
+References
+----------
+There are a few academic papers describing netmap, vale and applications:
+

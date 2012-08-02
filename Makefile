@@ -1,6 +1,5 @@
-SUBDIR= examples test
-
-# .include <bsd.subdir.mk>
+# $Id$
+# targets to build tarballs and diffs
 
 # build a distribution
 DIST_NAME := netmap-0.9-20120730.tar.gz
@@ -8,13 +7,10 @@ DIST_SRCS := ./sys/net ./sys/modules ./Makefile ./LINUX
 DIST_SRCS += ./sys/dev
 DIST_SRCS += ./examples ./test
 
-RELEASE_SRCS := ./sys/net ./sys/modules ./examples
-RELEASE_SRCS += ./sys/dev
+RELEASE_SRCS := ./sys/net ./sys/dev ./sys/modules ./examples
 RELEASE_SRCS += ./README ./LINUX
 RELEASE_EXCL := --exclude .svn --exclude sys/dev/\*/i\*.c --exclude examples/testmod
 RELEASE_EXCL += --exclude connlib\* --exclude netmap_vale.c
-
-# default: build for the current platform
 
 all:
 	@echo "What to you want to do ?"
