@@ -49,6 +49,7 @@
 #include <linux/etherdevice.h>	// eth_type_trans
 #include <linux/module.h>
 #include <linux/moduleparam.h>
+#include <linux/virtio.h>	// virt_to_phys
 
 #define printf(fmt, arg...)	printk(KERN_ERR fmt, ##arg)
 #define KASSERT(a, b)		BUG_ON(!(a))

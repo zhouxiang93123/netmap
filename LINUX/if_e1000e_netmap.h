@@ -304,7 +304,7 @@ static int e1000e_netmap_init_buffers(struct SOFTC_T *adapter)
 	if (!slot)
 		return 0;	// not in netmap mode
 
-	adapter->alloc_rx_buf = e1000e_no_rx_alloc;
+	adapter->alloc_rx_buf = (void*)e1000e_no_rx_alloc;
 	for (i = 0; i < rxr->count; i++) {
 		// XXX the skb check and cleanup can go away
 		struct e1000_buffer *bi = &rxr->buffer_info[i];
