@@ -47,7 +47,7 @@ and so on.
 .Pp
 .Nm
 is implemented completely in software, and is extremely fast.
-On a modern machine it can move almost 20 million packets per
+On a modern machine it can move almost 20 Million packets per
 second (Mpps) per core with small frames, and about 70 Gbit/s
 with 1500 byte frames.
 .Pp
@@ -58,8 +58,8 @@ to it using the
 .Xr netmap 4
 API.
 .Pp
-The "interface name" dictates the aggregation.
-The name has the form
+.Nm
+ports are named
 .Pa vale[bdg:][port]
 where
 .Pa vale
@@ -68,19 +68,27 @@ is the prefix indicating a VALE bridge rather than a standard interface,
 indicates a specific bridge (the colon is a separator),
 and
 .Pa port
-indicates the port to use.
+indicates a port within the bridge.
+Bridge and ports names are arbitrary strings, the only
+constraint being that the full name must fit within 16
+characters.
 .Pp
-.Ss SYSCTL VARIABLES
+.Sh SYSCTL VARIABLES
 .Nm
-uses
-.Nm select
+uses the following sysctl variables to control operation:
 and
 .Nm poll
 to wake up processes when significant events occur.
 .Sh EXAMPLES
-The following code implements a traffic generator
+Create one bridge, with a traffic generator connected to one
+.Nm
+port, and a netmap-enabled tcpdump instance on another port:
+.Bd -literal -compact
+tcpdump -ni vale-a-1 &
+pkt-gen  -i vale-a-0 -f tx &
+.Ed
 .Pp
-The following example creates two instances of a switch,
+Creates two instances of a switch,
 each connected to two qemu machines on different ports.
 .Bd -literal -compact
 qemu -net nic -net netmap,ifname=vale-1:a ... &
@@ -88,12 +96,17 @@ qemu -net nic -net netmap,ifname=vale-1:b ... &
 qemu -net nic -net netmap,ifname=vale-2:c ... &
 qemu -net nic -net netmap,ifname=vale-2:d ... &
 .Ed
+.Sh SEE ALSO
+.Xr netmap 4
 .Sh AUTHORS
+.An -nosplit
 The
 .Nm
 switch  has been designed and implemented in 2012 by
 .An Luigi Rizzo
 and
 .An Giuseppe Lettieri
-at the Universita` di Pisa, supported by the
+at the Universita` di Pisa.
+.Pp
+Work supported by the
 European Projects CHANGE and OPENLAB.
