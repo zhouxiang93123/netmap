@@ -29,5 +29,5 @@ diff-r8:
 	svn diff sys/conf sys/dev sbin/ifconfig ) > r8-netmap.diff
 
 release:
-	tar cvzf /tmp/netmap.tgz \
-		-s'/^./netmap/' $(RELEASE_EXCL) $(RELEASE_SRCS)
+	D=`date +%Y%m%d` && tar cvzf /tmp/$${D}-netmap.tgz \
+		-s'/^./netmap-release/' $(RELEASE_EXCL) $(RELEASE_SRCS)
