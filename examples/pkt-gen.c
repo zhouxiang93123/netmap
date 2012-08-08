@@ -449,14 +449,15 @@ pinger_body(void *data)
 	fds[0].fd = targ->fd;
 	fds[0].events = (POLLIN);
 	static uint32_t sent;
-	struct timespec ts, now;
+	struct timespec ts, now, last_print;
 	uint32_t count = 0, min = 1000000, av = 0;
 
 	if (targ->g->nthreads > 1) {
 		D("can only ping with 1 thread");
 		return NULL;
 	}
-	
+
+	clock_gettime(CLOCK_REALTIME_PRECISE, &last_print);
 	while (n == 0 || (int)sent < n) {
 		struct netmap_ring *ring = NETMAP_TXRING(nifp, 0);
 		struct netmap_slot *slot;
@@ -479,7 +480,7 @@ pinger_body(void *data)
 		}
 	    }
 		/* should use a parameter to decide how often to send */
-		if (poll(fds, 1, 300) <= 0) {
+		if (poll(fds, 1, 3000) <= 0) {
 			D("poll error/timeout on queue %d", targ->me);
 			continue;
 		}
@@ -513,12 +514,19 @@ pinger_body(void *data)
 		}
 		//D("tx %d rx %d", sent, rx);
 		//usleep(100000);
-		if (count >= 10000) {
+		ts.tv_sec = now.tv_sec - last_print.tv_sec;
+		ts.tv_nsec = now.tv_nsec - last_print.tv_nsec;
+		if (ts.tv_nsec < 0) {
+			ts.tv_nsec += 1000000000;
+			ts.tv_sec--;
+		}
+		if (ts.tv_sec >= 1) {
 			D("count %d min %d av %d",
 				count, min, av/count);
 			count = 0;
 			av = 0;
-			min = 1000000;
+			min = 100000000;
+			last_print = now;
 		}
 	}
 	return NULL;
