@@ -129,6 +129,15 @@ struct netmap_kring {
  * support netmap operation.
  */
 struct netmap_adapter {
+	/*
+	 * On linux we do not have a good way to tell if an interface
+	 * is netmap-capable. So we use the following trick:
+	 * NA(ifp) points here, and the first entry (which hopefully
+	 * always exists and is at least 32 bits) contains a magic
+	 * value which we can use to detect that the interface is good.
+	 */
+	uint32_t magic;
+	uint32_t na_flags;	/* IFCAP_NETMAP */
 	int refcount; /* number of user-space descriptors using this
 			 interface, which is equal to the number of
 			 struct netmap_if objs in the mapped region. */
@@ -268,6 +277,36 @@ enum {                                  /* verbose flags */
 #endif
 #define	NA(_ifp)	((struct netmap_adapter *)WNA(_ifp))
 
+/*
+ * Macros to determine if an interface is netmap capable or netmap enabled.
+ * See the magic field in struct netmap_adapter.
+ */
+#ifdef __FreeBSD__
+/*
+ * on FreeBSD just use if_capabilities and if_capenable.
+ */
+#define NETMAP_CAPABLE(ifp)	(NA(ifp) &&		\
+	(ifp)->if_capabilities & IFCAP_NETMAP )
+
+#define	NETMAP_SET_CAPABLE(ifp)				\
+	NA(ifp)->if_capabilities |= IFCAP_NETMAP
+
+#else	/* linux */
+
+/*
+ * on linux:
+ * we check if NA(ifp) is set and its first element has a related
+ * magic value. The capenable is within the struct netmap_adapter.
+ */
+#define	NETMAP_MAGIC	0x52697a7a
+
+#define NETMAP_CAPABLE(ifp)	(NA(ifp) &&		\
+	((uint32_t)(uintptr_t)NA(ifp) ^ NA(ifp)->magic) == NETMAP_MAGIC )
+
+#define	NETMAP_SET_CAPABLE(ifp)				\
+	NA(ifp)->magic = ((uint32_t)(uintptr_t)NA(ifp)) ^ NETMAP_MAGIC
+
+#endif	/* linux */
 
 #ifdef __FreeBSD__
 /* Callback invoked by the dma machinery after a successfull dmamap_load */

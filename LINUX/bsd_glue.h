@@ -110,7 +110,7 @@ struct thread;
  * We don't use this in netmap, though.
  *
  *	if_xname	name		device name
- *	if_capabilities	flags
+ *	if_capabilities	flags		// XXX not used
  *	if_capenable	priv_flags
  *		we would use "features" but it is all taken.
  *		XXX check for conflict in flags use.
@@ -118,25 +118,20 @@ struct thread;
  *	if_bridge	atalk_ptr	struct nm_bridge (only for VALE ports)
  *
  * In netmap we use if_pspare[0] to point to the netmap_adapter,
- * in linux we have no spares so we overload ax25_ptr
+ * in linux we have no spares so we overload ax25_ptr, and the detection
+ * for netmap-capable is some magic in the area pointed by that.
  */
+#define WNA(_ifp)		(_ifp)->ax25_ptr
 
 #define ifnet           	net_device      /* remap */
 #define	if_xname		name		/* field ifnet-> net_device */
-#define	if_capabilities		flags		/* IFCAP_NETMAP */
+//#define	if_capabilities		flags		/* IFCAP_NETMAP */
 #define	if_capenable		priv_flags	/* IFCAP_NETMAP */
 #define	if_bridge		atalk_ptr	/* remap, only for VALE ports */
 #define ifunit_ref(_x)		dev_get_by_name(&init_net, _x);
 #define if_rele(ifp)		dev_put(ifp)
 #define CURVNET_SET(x)
 #define CURVNET_RESTORE(x)
-
-
-/*
- * We need a pointer from the net_device to the struct netmap_adapter.
- * FreeBSD has if_pspare, on linux ax25_ptr is probably seldom used
- */
-#define WNA(_ifp)		(_ifp)->ax25_ptr
 
 
 /*

@@ -649,7 +649,7 @@ no_port:
 	/* can do this if the capability exists and if_pspare[0]
 	 * points to the netmap descriptor.
 	 */
-	if ((*ifp)->if_capabilities & IFCAP_NETMAP && NA(*ifp))
+	if (NETMAP_CAPABLE(*ifp))
 		return 0;	/* valid pointer, we hold the refcount */
 	nm_if_rele(*ifp);
 	return EINVAL;	// not NETMAP capable
@@ -1321,7 +1321,7 @@ netmap_attach(struct netmap_adapter *na, int num_queues)
 		na->tx_rings = (void *)((char *)buf + sizeof(*na));
 		na->rx_rings = na->tx_rings + na->num_tx_rings + 1;
 		bcopy(na, buf, sizeof(*na));
-		ifp->if_capabilities |= IFCAP_NETMAP;
+		NETMAP_SET_CAPABLE(ifp);
 
 		na = buf;
 		/* Core lock initialized here.  Others are initialized after
