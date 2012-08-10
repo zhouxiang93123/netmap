@@ -160,4 +160,5 @@ options         KBD_INSTALL_CDEV
 # Be aware of the administrative consequences of enabling this!
 device		bpf		# Berkeley packet filter
 device		netmap
+device		vtnet
 options	FLOWTABLE
