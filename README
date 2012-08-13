@@ -14,7 +14,7 @@ In this directory you can find source code (BSD-Copyright)
 for FreeBSD and Linux. Note that recent FreeBSD distributions
 already include both NETMAP and VALE.
 
-Last update: 2012-08-02
+Last update: 2012-08-13
 
 Installation instructions 
 -------------------------
@@ -119,5 +119,21 @@ Contributors:
 
 References
 ----------
-There are a few academic papers describing netmap, vale and applications:
+There are a few academic papers describing netmap, VALE and applications.
+You can find the papers at http://info.iet.unipi.it/~luigi/research.html
 
++ Luigi Rizzo,
+	netmap: a novel framework for fast packet I/O,
+	Usenix ATC'12, Boston, June 2012
+
++ Luigi Rizzo,
+	Revisiting network I/O APIs: the netmap framework,
+	Communications of the ACM 55 (3), 45-51, March 2012
+
++ Luigi Rizzo, Marta Carbone, Gaetano Catalli,
+	Transparent acceleration of software packet forwarding using netmap,
+	IEEE Infocom 2012, Orlando, March 2012
+
++ Luigi Rizzo, Giuseppe Lettieri,
+	VALE: a switched ethernet for virtual machines,
+	DEIT Tech report, June 2012

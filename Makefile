@@ -2,10 +2,10 @@
 # targets to build tarballs and diffs
 
 # build a distribution
-DIST_NAME := netmap-0.9-20120730.tar.gz
-DIST_SRCS := ./sys/net ./sys/modules ./Makefile ./LINUX
+DIST_NAME := /tmp/20120813-netmap.tgz
+DIST_SRCS := ./README ./sys/net ./sys/modules ./Makefile ./LINUX
 DIST_SRCS += ./sys/dev
-DIST_SRCS += ./examples ./test
+DIST_SRCS += ./examples
 
 RELEASE_SRCS := ./sys/net ./sys/dev ./sys/modules ./examples
 RELEASE_SRCS += ./README ./LINUX
@@ -16,7 +16,7 @@ all:
 	@echo "What do you want to do ?"
 
 tgz:
-	tar cvzf /usr/ports/distfiles/${DIST_NAME} \
+	tar cvzf ${DIST_NAME} \
 		-s'/^./netmap/' --exclude .svn $(DIST_SRCS)
 
 diff-head:
