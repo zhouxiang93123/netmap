@@ -55,11 +55,10 @@
 #endif
 
 /*
- * IFCAP_NETMAP goes into net_device's flags (if_capabilities)
- * and priv_flags (if_capenable). The latter used to be 16 bits
- * up to linux 2.6.36, so we need to use a 16 bit value on older
+ * IFCAP_NETMAP goes into net_device's priv_flags (if_capenable).
+ * This was 16 bits up to linux 2.6.36, so we need a 16 bit value on older
  * platforms and tolerate the clash with IFF_DYNAMIC and IFF_BRIDGE_PORT.
- * For the 32-bit value, 0x100000 (bit 20) has no clashes up to 3.3.1
+ * For the 32-bit value, 0x100000 has no clashes until at least 3.5.1
  */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,37)
 #define IFCAP_NETMAP	0x8000
@@ -68,7 +67,7 @@
 #endif
 
 #elif defined (__APPLE__)
-#warning apple support is experimental
+#warning apple support is incomplete.
 #define likely(x)	__builtin_expect(!!(x), 1)
 #define unlikely(x)	__builtin_expect(!!(x), 0)
 #define	NM_LOCK_T	IOLock *
@@ -137,7 +136,7 @@ struct netmap_adapter {
 	 * value which we can use to detect that the interface is good.
 	 */
 	uint32_t magic;
-	uint32_t na_flags;	/* IFCAP_NETMAP */
+	uint32_t na_flags;	/* future place for IFCAP_NETMAP */
 	int refcount; /* number of user-space descriptors using this
 			 interface, which is equal to the number of
 			 struct netmap_if objs in the mapped region. */
@@ -158,7 +157,6 @@ struct netmap_adapter {
 
 	u_int num_tx_desc; /* number of descriptor in each queue */
 	u_int num_rx_desc;
-	//u_int buff_size;	// XXX deprecate, use NETMAP_BUF_SIZE
 
 	/* tx_rings and rx_rings are private but allocated
 	 * as a contiguous chunk of memory. Each array has
@@ -194,7 +192,7 @@ struct netmap_adapter {
 };
 
 /*
- * The combination of "enable" (ifp->if_capabilities &IFCAP_NETMAP)
+ * The combination of "enable" (ifp->if_capenable & IFCAP_NETMAP)
  * and refcount gives the status of the interface, namely:
  *
  *	enable	refcount	Status

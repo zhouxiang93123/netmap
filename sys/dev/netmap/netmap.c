@@ -367,6 +367,7 @@ netmap_dtor_locked(void *data)
 			/* knlist_destroy(&na->rx_rings[i].si.si_note); */
 			mtx_destroy(&na->rx_rings[i].q_lock);
 		}
+		/* XXX kqueue(9) needed; these will mirror knlist_init. */
 		/* knlist_destroy(&na->tx_si.si_note); */
 		/* knlist_destroy(&na->rx_si.si_note); */
 		NMA_UNLOCK();
