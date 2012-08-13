@@ -1,0 +1,275 @@
+Index: if_epair.c
+===================================================================
+--- if_epair.c	(revision 239227)
++++ if_epair.c	(working copy)
+@@ -666,7 +666,230 @@
+ 	return (error);
+ }
+ 
++#ifdef DEV_NETMAP
++#include <sys/selinfo.h>
++#include <machine/bus.h>	// XXX busdma* routines
++#include <net/netmap.h>
++#include <dev/netmap/netmap_kern.h>
++
++/*
++ * Use only one lock per pair (the node with smallest ifp)
++ * XXX do we lock if the other node is not enabled ?
++ */
+ static void
++epair_netmap_lock(struct ifnet *ifp, int what, u_int ring_nr)
++{
++	struct epair_softc *epa = ifp->if_softc;
++	struct netmap_adapter *na = ifp < epa->oifp ? NA(ifp) : NA(epa->oifp);
++
++	KASSERT(ring_nr == 0, ("bad ring number %d", ring_nr));
++	switch (what) {
++	case NETMAP_CORE_LOCK:
++	case NETMAP_TX_LOCK:
++	case NETMAP_RX_LOCK:
++		mtx_lock(&na->core_lock);
++		break;
++	case NETMAP_CORE_UNLOCK:
++	case NETMAP_TX_UNLOCK:
++	case NETMAP_RX_UNLOCK:
++		mtx_unlock(&na->core_lock);
++		break;
++	}
++}
++
++
++static int
++epair_netmap_register(struct ifnet *ifp, int enable)
++{
++	//struct tap_softc *tp = ifp->if_softc;
++	struct netmap_adapter *na = NA(ifp);
++
++	if (na == NULL)
++		return (EINVAL);
++
++	mtx_assert(&ifp->if_softc->tap_mtx, MA_OWNED);
++	/* mtx_lock(&tp->tap_mtx); XXX we are called locked */
++	ifp->if_drv_flags &= ~(IFF_DRV_RUNNING | IFF_DRV_OACTIVE);
++
++	if (enable) {
++		ifp->if_capenable |= IFCAP_NETMAP;
++		na->if_transmit = ifp->if_transmit;
++		ifp->if_transmit = netmap_start;
++		netmap_reset(na, NR_RX, 0, 0);
++	} else {
++		ifp->if_transmit = na->if_transmit;
++		ifp->if_capenable &= ~IFCAP_NETMAP;
++	}
++	return (0);
++}
++
++/*
++ * push packets to the other side if possible.
++ * XXX If the other side is not netmap enabled, what do we do ?
++ */
++static int
++epair_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
++{
++	struct epair_softc *epa = ifp->if_softc;
++	struct netmap_adapter *na =  NA(ifp);
++	struct netmap_kring *kring = &na->tx_rings[ring_nr];
++
++	struct netmap_ring *ring = kring->ring;
++	u_int j, k = ring->cur, l, n = 0, lim = kring->nkr_num_slots - 1;
++	/* the other side */
++	struct netmap_adapter *nb = NA(epa->oifp);
++	struct netmap_kring *rx_kring = &nb->rx_rings[ring_nr];
++
++	if (k > lim)
++                return netmap_ring_reinit(kring);
++	if (do_lock)
++		epair_netmap_lock(ifp, NETMAP_CORE_LOCK, 0);
++
++	/* process packets to send */
++	j = kring->nr_hwcur;
++	if (j != k) {   /* we have new packets to send */
++		u_int j1 = rx_kring->nr_hwcur + rx_kring->nr_hwavail;
++		if (j1 > lim)
++			j1 -= lim + 1;
++		l = netmap_idx_k2n(rx_kring, j1); /* rx NIC index */
++		ND("rx offset %d for %d tx packets", (int)(l - j1), (int)(k - j));
++		for (n = 0; j != k; n++) {
++			struct netmap_slot *slot = &ring->slot[j];
++			struct netmap_slot *dst;
++			uint32_t tmp;
++			u_int len = slot->len;
++			void *addr = NMB(slot);
++
++			ND("len %d tx[%d] -> rx[%d] (%p -> %p)", len, j, l, slot, dst);
++			j = (j == lim) ? 0 : j + 1;
++			l = (l == lim) ? 0 : l + 1;
++			// prefetch(&ring->slot[j]);
++
++			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
++ring_reset:
++                                if (do_lock)
++					epair_netmap_lock(ifp, NETMAP_CORE_UNLOCK, 0);
++                                return netmap_ring_reinit(kring);
++                        }
++			if ((epa->oifp->if_capenable & IFCAP_NETMAP) == 0) {
++				ND("dropping %d, other side not ready",
++					slot - ring->slot);
++				continue;
++			}
++			dst = &rx_kring->ring->slot[l];
++			/* swap buf with the rx ring */
++			tmp = slot->buf_idx;
++			slot->buf_idx = dst->buf_idx;
++			dst->buf_idx = tmp;
++			dst->len = len;
++			dst->flags = NS_BUF_CHANGED;
++		}
++		kring->nr_hwcur = k; /* the saved ring->cur */
++		/* decrease avail by number of packets  sent */
++		kring->nr_hwavail -= n;
++		// XXX signal receive ring up to slot l (excluded)
++		rx_kring->nr_hwavail += n;
++		ND("pushed %d packets, wake up receiver", n);
++		selwakeuppri(&rx_kring->si, PI_NET);
++	}
++	/* the previous end was kring->nr_hwcur + kring->nr_hwavail.
++	 * Now it moves to rx_kring->nr_hwcur - 1 which may have
++	 * increased since
++	 */
++	l = kring->nr_hwcur + kring->nr_hwavail + 1;
++	if (l > lim)	/* wrap */
++		l -= lim + 1;
++	if (l != rx_kring->nr_hwcur) {	/* new bufs avail */
++		int delta = rx_kring->nr_hwcur - kring->nr_hwcur;
++		kring->nr_hwavail = (delta > 0) ? delta : lim + 1 - delta ;
++		if (delta < 0)
++			delta += kring->nkr_num_slots;
++	}
++	// XXX rate limit
++	ND("%s rx bufs avail %d",
++	    (l == rx_kring->nr_hwcur) ? "old" : "new", kring->nr_hwavail);
++	/* update avail to what the kernel knows */
++	ring->avail = kring->nr_hwavail;
++	if (do_lock)
++		epair_netmap_lock(ifp, NETMAP_CORE_UNLOCK, 0);
++	return 0;
++}
++
++static int
++epair_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
++{
++	struct epair_softc *epa = ifp->if_softc;	/* my side */
++	struct netmap_adapter *na = NA(ifp);
++
++	struct netmap_kring *kring = &na->rx_rings[ring_nr];
++	struct netmap_ring *ring = kring->ring;
++	u_int j, l, n, lim = kring->nkr_num_slots - 1;
++	u_int k = ring->cur, resvd = ring->reserved;
++
++	if (do_lock)
++		epair_netmap_lock(ifp, NETMAP_CORE_LOCK, 0);
++	j = kring->nr_hwcur;
++	if (resvd > 0) {
++		if (resvd + ring->avail >= lim + 1) {
++			D("XXX invalid reserve/avail %d %d", resvd, ring->avail);
++			ring->reserved = resvd = 0; // XXX panic...
++		}
++		k = (k >= resvd) ? k - resvd : k + lim + 1 - resvd;
++	}
++	if (j != k) { /* userspace has released some packets. */
++		struct netmap_adapter *nb = NA(epa->oifp);
++		struct netmap_kring *tx_kring = &nb->tx_rings[ring_nr];
++
++		l = netmap_idx_k2n(kring, j);
++		for (n = 0; j != k; n++) {
++			struct netmap_slot *slot = &ring->slot[j];
++			void *addr = NMB(slot);
++			if (addr == netmap_buffer_base) /* bad buf */
++				goto ring_reset;
++			slot->flags &= ~NS_BUF_CHANGED;
++			j = (j == lim) ? 0 : j + 1;
++			l = (l == lim) ? 0 : l + 1;
++		}
++		ND("receiver freed %d bufs, wakeup sender", n);
++		kring->nr_hwavail -= n;
++		kring->nr_hwcur = k;
++		selwakeuppri(&tx_kring->si, PI_NET);
++		// XXX wakeup other side ?
++	}
++	/* tell userspace that there are new packets */
++	ring->avail = kring->nr_hwavail - resvd;
++
++	if (do_lock)
++		epair_netmap_lock(ifp, NETMAP_CORE_UNLOCK, 0);
++	return 0;
++
++ring_reset:
++	// XXX wakeup other side ?
++        if (do_lock)
++		epair_netmap_lock(ifp, NETMAP_CORE_UNLOCK, 0);
++        return netmap_ring_reinit(kring);
++}
++
++static void
++epair_netmap_attach(struct epair_softc *sc)
++{
++	struct netmap_adapter na;
++
++	bzero(&na, sizeof(na));
++	na.ifp = sc->ifp;
++	na.num_tx_desc = 1024;
++	na.num_rx_desc = 1024;
++	na.nm_txsync = epair_netmap_txsync;
++	na.nm_rxsync = epair_netmap_rxsync;
++	na.nm_lock = epair_netmap_lock;
++	na.nm_register = epair_netmap_register;
++	netmap_attach(&na, 1);
++}
++
++
++#endif /* DEV_NETMAP */
++
++static void
+ epair_init(void *dummy __unused)
+ {
+ }
+@@ -729,6 +952,9 @@
+ 		ether_ifattach(ifp, eaddr);
+ 		/* Correctly set the name for the cloner list. */
+ 		strlcpy(name, scb->ifp->if_xname, len);
++#ifdef DEV_NETMAP
++		epair_netmap_attach(scb);
++#endif /* DEV_NETMAP */
+ 		return (0);
+ 	}
+ 
+@@ -822,6 +1048,9 @@
+ 	eaddr[4] = ifp->if_index & 0xff;
+ 	eaddr[5] = 0x0a;
+ 	ether_ifattach(ifp, eaddr);
++#ifdef DEV_NETMAP
++	epair_netmap_attach(sca);
++#endif /* DEV_NETMAP */
+ 	sca->if_qflush = ifp->if_qflush;
+ 	ifp->if_qflush = epair_qflush;
+ 	ifp->if_transmit = epair_transmit;
+@@ -925,6 +1154,9 @@
+ 	if (error)
+ 		panic("%s: if_clone_destroyif() for our 2nd iface failed: %d",
+ 		    __func__, error);
++#ifdef DEV_NETMAP
++	netmap_detach(oifp);
++#endif /* DEV_NETMAP */
+ 	if_free(oifp);
+ 	ifmedia_removeall(&scb->media);
+ 	free(scb, M_EPAIR);
+@@ -937,6 +1169,9 @@
+ 	DPRINTF("sca refcnt=%u\n", sca->refcount);
+ 	EPAIR_REFCOUNT_ASSERT(sca->refcount == 1,
+ 	    ("%s: ifp=%p sca->refcount!=1: %d", __func__, ifp, sca->refcount));
++#ifdef DEV_NETMAP
++	netmap_detach(ifp);
++#endif /* DEV_NETMAP */
+ 	if_free(ifp);
+ 	ifmedia_removeall(&sca->media);
+ 	free(sca, M_EPAIR);
