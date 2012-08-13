@@ -46,6 +46,14 @@
 #include <netmap/netmap_kern.h>
 #define SOFTC_T	ixgbe_adapter
 
+/*
+ * Adaptation to various version of the driver.
+ * Recent drivers (3.4 and above) redefine some macros
+ */
+#ifndef	IXGBE_TX_DESC_ADV
+#define	IXGBE_TX_DESC_ADV	IXGBE_TX_DESC
+#define	IXGBE_RX_DESC_ADV	IXGBE_RX_DESC
+#endif
 
 /*
  * Register/unregister. We are already under core lock.

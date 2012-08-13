@@ -39,7 +39,22 @@
 #include <netmap/netmap_kern.h>
 #define SOFTC_T	igb_adapter
 
-
+/*
+ * Adapt to different versions. E1000_TX_DESC_ADV etc. have
+ * dropped the _ADV suffix in newer versions. Also the first
+ * argument is now a pointer not the object.
+ */
+#ifndef E1000_TX_DESC_ADV
+#define	E1000_TX_DESC_ADV(_r, _i)	IGB_TX_DESC(&(_r), _i)
+#define	E1000_RX_DESC_ADV(_r, _i)	IGB_RX_DESC(&(_r), _i)
+#define	READ_TDH(_txr)			({struct e1000_hw *hw = &adapter->hw;rd32(E1000_TDH((_txr)->reg_idx));} )
+#else /* up to 3.2, approximately */
+#define	igb_tx_buffer			igb_buffer
+#define	tx_buffer_info			buffer_info
+#define	igb_rx_buffer			igb_buffer
+#define	rx_buffer_info			buffer_info
+#define	READ_TDH(_txr)			readl((_txr)->head)
+#endif
 /*
  * Register/unregister, similar to e1000_reinit_safe()
  */
@@ -166,7 +181,7 @@ igb_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		int delta;
 
 		/* record completed transmissions using TDH */
-		l = readl(txr->head);
+		l = READ_TDH(txr);
 		if (l >= kring->nkr_num_slots) { /* XXX can happen */
 			D("TDH wrap %d", l);
 			l -= kring->nkr_num_slots;
@@ -340,7 +355,7 @@ igb_netmap_configure_rx_ring(struct igb_ring *rxr)
 		int si = netmap_idx_n2k(&na->rx_rings[reg_idx], i);
 
 		// XXX the skb check can go away
-		struct igb_buffer *bi = &rxr->buffer_info[i];
+		struct igb_rx_buffer *bi = &rxr->rx_buffer_info[i];
 		if (bi->skb)
 			D("rx buf %d was set", i);
 		bi->skb = NULL; // XXX leak if set
