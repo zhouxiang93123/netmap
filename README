@@ -26,6 +26,8 @@ Realtek 8169 (1G) and Nvidia (1G).
 
   FreeBSD
   --------
+  (FreeBSD HEAD and stable/9 already include netmap in the source tree
+  so you should not need the code in this distribution.)
   + add 'device netmap' to your kernel config file and rebuild a kernel.
     This will include the netmap module and netmap support in the device
     drivers.  Alternatively, you can build standalone modules
