@@ -24,29 +24,34 @@ Netmap relies on a kernel module (netmap_lin.ko) and slightly modified
 device drivers. Userspace programs can use the native API (documented
 in netmap.4) or a libpcap emulation library.
 
-    Directory structure for this archive
+The FreeBSD and Linux versions share the same codebase, which
+is located in ../sys . For Linux we use some additional glue code,
+(bsd_glue.h).
 
-	.		documentation, patches etc.
-	include/net	header files for user programs
-	net/netmap	kernel core files,
-			sample applications, manpage
-	net/*		patched device drivers for a 3.0.x linux version. 
-			They are taken from the tinycore distribution.
-			Better intel drivers might be at
-			http://sourceforge.net/projects/e1000/
-                    
+Device drivers are taken directly from the Linux distributions,
+and patched using the files in the patches/ directory.
+Common driver modifications are in the .h files in this directory.
+
+
 HOW TO BUILD THE CODE
 ---------------------
 
 1. make sure you have kernel sources/headers matching your installed system
 
 2. do the following
-	(cd net;  make KSRC=/usr/src/linux-kernel-source-or-headers )
-   this produces net/netmap/netmap_lin.ko and other kernel modules.
+	make clean; make KSRC=/usr/src/linux-kernel-source-or-headers
+   this produces ./netmap_lin.ko and other kernel modules.
 
 3. to build sample applications, run
-	(cd net/netmap; make apps )
+	(cd ../examples; make )
    (you will need the pthreads and libpcap-dev packages to build them)
+
+If you want support for additional drivers please have a look at
+ixgbe_netmap_linux.h and the patches in patches/
+The patch file are named as diff--DRIVER--LOW--HIGH--otherstuff
+where DRIVER is the driver name to patch, LOW and HIGH are the
+versions to which the patch applies (LOW included, HIGH excluded, so
+diff--r8169.c--20638--30300--ok applies from 2.6.38 to 3.3.0 (excluded)
 
 HOW TO USE THE CODE
 -------------------
@@ -61,13 +66,13 @@ TinyCore image, the following steps can be used for initial testing:
 1. unload any modules for the network cards you want to use, e.g.
 	sudo rmmod ixgbe
 	sudo rmmod e1000
-	sudo rmmod e1000e
+	...
 
 2. load netmap and device driver module
-	sudo insmod net/netmap/netmap_lin.ko
-	sudo insmod net/ixgbe/ixgbe.ko
-	sudo insmod net/ixgbe/e1000.ko
-	sudo insmod net/ixgbe/e1000e.ko
+	sudo insmod ./netmap_lin.ko
+	sudo insmod ./ixgbe/ixgbe.ko
+	sudo insmod ./e1000/e1000.ko
+	...
 
 3. turn the interface(s) up
 
@@ -76,12 +81,12 @@ TinyCore image, the following steps can be used for initial testing:
 4. Run test applications -- as an example, pkt-gen is a raw packet
    sender/receiver which can do line rate on a 10G interface
 
-	# send about 500 million packets of 64 bytes each.
+	# send about 500 million packets of 60 bytes each.
 	# wait 5s before starting, so the link can go up
-	sudo pkt-gen -i eth0 -t 500111222 -l 64 -w 5
-	# you should see about 14.2 Mpps
+	sudo pkt-gen -i eth0 -f tx -n 500111222 -l 60 -w 5
+	# you should see about 14.88 Mpps
 
-	sudo pkt-gen -i eth0 # act as a receiver
+	sudo pkt-gen -i eth0 -f rx # act as a receiver
 
 
 COMMON PROBLEMS
@@ -118,6 +123,9 @@ COMMON PROBLEMS
 
 REVISION HISTORY
 -----------------
+
+20120813 - updated distribution using common code for FreeBSD and Linux,
+	and inclusion of drivers from the linux source tree
 
 20120322 - fixed the 'igb' driver, now it can send and receive correctly
 	(the problem was in netmap_rx_irq() so it might have affected
