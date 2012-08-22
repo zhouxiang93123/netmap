@@ -716,13 +716,14 @@ main(int argc, char **argv)
 		if (pps < 10000)
 			continue;
 		pps = (my_count - prev)*ONE_MILLION / pps;
-		D("%" PRIu64 " %scycles/s scale %" PRIu64, pps/g.scale,
-			g.scale_name, g.scale);
+		D("%" PRIu64 " %scycles/s scale %" PRIu64 " in %dus", pps/g.scale,
+			g.scale_name, g.scale, (int)(toc.tv_sec* ONE_MILLION + toc.tv_usec));
 		prev = my_count;
 		toc = now;
 		if (done == g.nthreads)
 			break;
 	}
+	D("total %" PRIu64 " cycles", prev);
 
 	timerclear(&tic);
 	timerclear(&toc);
