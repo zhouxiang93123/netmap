@@ -26,8 +26,11 @@
 /*
  * $Id$
  *
- * Test program to study various concurrency issues.
+ * Test program to study various ops and concurrency issues.
  * Create multiple threads, possibly bind to cpus, and run a workload.
+ *
+ * cc -O2 -Werror -Wall testlock.c -o testlock -lpthread
+ *	you might need -lrt
  */
 
 #include <inttypes.h>
@@ -436,13 +439,15 @@ test_gettimeofday(struct targ *t)
         }
 }
 
-static inline void
+
+#define likely(x)	__builtin_expect(!!(x), 1)
+#define unlikely(x)	__builtin_expect(!!(x), 0)
+
+static void
 fast_bcopy(void *_src, void *_dst, int l)
 {
 	uint64_t *src = _src;
 	uint64_t *dst = _dst;
-#define likely(x)       __builtin_expect(!!(x), 1)
-#define unlikely(x)       __builtin_expect(!!(x), 0)
 	if (unlikely(l >= 1024)) {
 		bcopy(src, dst, l);
 		return;
@@ -452,17 +457,33 @@ fast_bcopy(void *_src, void *_dst, int l)
 		*dst++ = *src++;
 		*dst++ = *src++;
 		*dst++ = *src++;
-#if 1
 		*dst++ = *src++;
 		*dst++ = *src++;
 		*dst++ = *src++;
 		*dst++ = *src++;
-#endif
 	}
 }
-	
+
+// XXX if you want to make sure there is no inlining...
+// static void (*fp)(void *_src, void *_dst, int l) = fast_bcopy;
+
 #define HU	0x3ffff
 static struct glob_arg huge[HU+1];
+
+void
+test_fastcopy(struct targ *t)
+{
+        int m, len;
+	len = t->g->arg;
+	if (len > (int)sizeof(struct glob_arg))
+		len = sizeof(struct glob_arg);
+	D("fast copying %d bytes", len);
+        for (m = 0; m < t->g->m_cycles; m++) {
+		fast_bcopy(t->g, (void *)&huge[m & HU], len);
+		t->count+=1;
+        }
+}
+
 void
 test_bcopy(struct targ *t)
 {
@@ -470,11 +491,23 @@ test_bcopy(struct targ *t)
 	len = t->g->arg;
 	if (len > (int)sizeof(struct glob_arg))
 		len = sizeof(struct glob_arg);
-	D("copying %d bytes", len);
+	D("bcopying %d bytes", len);
         for (m = 0; m < t->g->m_cycles; m++) {
-		//bcopy(t->g, (void *)&huge[m & HU], len);
-		fast_bcopy(t->g, (void *)&huge[m & HU], len);
-		//memcpy((void *)&huge[m & HU], t->g, len);
+		__builtin_memcpy(t->g, (void *)&huge[m & HU], len);
+		t->count+=1;
+        }
+}
+
+void
+test_memcpy(struct targ *t)
+{
+        int m, len;
+	len = t->g->arg;
+	if (len > (int)sizeof(struct glob_arg))
+		len = sizeof(struct glob_arg);
+	D("memcopying %d bytes", len);
+        for (m = 0; m < t->g->m_cycles; m++) {
+		memcpy((void *)&huge[m & HU], t->g, len);
 		t->count+=1;
         }
 }
@@ -491,6 +524,8 @@ struct entry tests[] = {
 	{ test_time, "time", 1 },
 	{ test_gettimeofday, "gettimeofday", 1 },
 	{ test_bcopy, "bcopy", 1 },
+	{ test_memcpy, "memcpy", 1 },
+	{ test_fastcopy, "fastcopy", 1 },
 	{ test_add, "add", ONE_MILLION },
 	{ test_nop, "nop", ONE_MILLION },
 	{ test_atomic_add, "atomic-add", ONE_MILLION },
