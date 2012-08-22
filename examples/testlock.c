@@ -516,24 +516,25 @@ struct entry {
 	void (*fn)(struct targ *);
 	char *name;
 	uint64_t scale;
+	uint64_t m_cycles;
 };
 struct entry tests[] = {
-	{ test_sel, "select", 1 },
-	{ test_poll, "poll", 1 },
-	{ test_usleep, "usleep", 1 },
-	{ test_time, "time", 1 },
-	{ test_gettimeofday, "gettimeofday", 1 },
-	{ test_bcopy, "bcopy", 1 },
-	{ test_memcpy, "memcpy", 1 },
-	{ test_fastcopy, "fastcopy", 1 },
-	{ test_add, "add", ONE_MILLION },
-	{ test_nop, "nop", ONE_MILLION },
-	{ test_atomic_add, "atomic-add", ONE_MILLION },
-	{ test_cli, "cli", ONE_MILLION },
-	{ test_rdtsc, "rdtsc", ONE_MILLION },	// unserialized
-	{ test_rdtsc1, "rdtsc1", ONE_MILLION },	// serialized
-	{ test_atomic_cmpset, "cmpset", ONE_MILLION },
-	{ NULL, NULL, 0 }
+	{ test_sel, "select", 1, 1000 },
+	{ test_poll, "poll", 1, 1000 },
+	{ test_usleep, "usleep", 1, 1000 },
+	{ test_time, "time", 1, 1000 },
+	{ test_gettimeofday, "gettimeofday", 1, 1000000 },
+	{ test_bcopy, "bcopy", 1, 100000000 },
+	{ test_memcpy, "memcpy", 1, 100000000 },
+	{ test_fastcopy, "fastcopy", 1, 100000000 },
+	{ test_add, "add", ONE_MILLION, 100000000 },
+	{ test_nop, "nop", ONE_MILLION, 100000000 },
+	{ test_atomic_add, "atomic-add", ONE_MILLION, 100000000 },
+	{ test_cli, "cli", ONE_MILLION, 100000000 },
+	{ test_rdtsc, "rdtsc", ONE_MILLION, 100000000 },	// unserialized
+	{ test_rdtsc1, "rdtsc1", ONE_MILLION, 100000000 },	// serialized
+	{ test_atomic_cmpset, "cmpset", ONE_MILLION, 100000000 },
+	{ NULL, NULL, 0, 0 }
 };
 
 static void
@@ -545,14 +546,14 @@ usage(void)
 	fprintf(stderr,
 		"Usage:\n"
 		"%s arguments\n"
+		"\t-m name		test name\n"
+		"\t-n cycles		(millions) of cycles\n"
+		"\t-l arg		bytes, usec, ... \n"
 		"\t-t threads		total threads\n"
 		"\t-c cores		cores to use\n"
 		"\t-a n			force affinity every n cores\n"
 		"\t-A n			cache contention every n bytes\n"
-		"\t-n cycles		(millions) of cycles\n"
 		"\t-w report_ms		milliseconds between reports\n"
-		"\t-m name		test name\n"
-		"\t-N arg		usec for select/usleep\n"
 		"",
 		cmd);
 	fprintf(stderr, "Available tests:\n");
@@ -580,9 +581,9 @@ main(int argc, char **argv)
 	g.privs = getprivs();
 	g.nthreads = 1;
 	g.cpus = 1;
-	g.m_cycles = 1000;	/* millions */
+	g.m_cycles = 0;
 
-	while ( (ch = getopt(argc, argv, "A:a:m:n:w:c:t:vN:")) != -1) {
+	while ( (ch = getopt(argc, argv, "A:a:m:n:w:c:t:vl:")) != -1) {
 		switch(ch) {
 		default:
 			D("bad option %c %s", ch, optarg);
@@ -609,7 +610,7 @@ main(int argc, char **argv)
 		case 'm':
 			g.test_name = optarg;
 			break;
-		case 'N':
+		case 'l':
 			g.arg = atoi(optarg);
 			break;
 
@@ -628,6 +629,8 @@ main(int argc, char **argv)
 			if (!strcmp(g.test_name, tests[i].name)) {
 				g.fn = tests[i].fn;
 				g.scale = tests[i].scale;
+				if (g.m_cycles == 0)
+					g.m_cycles = tests[i].m_cycles;
 				if (g.scale == ONE_MILLION)
 					g.scale_name = "M";
 				else if (g.scale == 1000)
