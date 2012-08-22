@@ -155,7 +155,7 @@ struct thread;
 // http://www.mjmwired.net/kernel/Documentation/DMA-API.txt
 
 #define contigmalloc(sz, ty, flags, a, b, pgsz, c)		\
-	(char *) __get_free_pages(GFP_KERNEL |  __GFP_ZERO,	\
+	(char *) __get_free_pages(GFP_ATOMIC |  __GFP_ZERO,	\
 		    ilog2(roundup_pow_of_two((sz)/PAGE_SIZE)))
 #define contigfree(va, sz, ty)	free_pages((unsigned long)va,	\
 		    ilog2(roundup_pow_of_two(sz)/PAGE_SIZE))
