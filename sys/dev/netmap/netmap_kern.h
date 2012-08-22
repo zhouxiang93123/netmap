@@ -287,7 +287,7 @@ enum {                                  /* verbose flags */
 	(ifp)->if_capabilities & IFCAP_NETMAP )
 
 #define	NETMAP_SET_CAPABLE(ifp)				\
-	NA(ifp)->if_capabilities |= IFCAP_NETMAP
+	(ifp)->if_capabilities |= IFCAP_NETMAP
 
 #else	/* linux */
 
