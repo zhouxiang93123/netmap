@@ -6,6 +6,12 @@ DIST_NAME := /tmp/20120813-netmap.tgz
 DIST_SRCS := ./README ./sys/net ./sys/modules ./Makefile ./LINUX
 DIST_SRCS += ./sys/dev
 DIST_SRCS += ./examples
+DIST_EXCL += --exclude .svn
+DIST_EXCL += --exclude connlib\* --exclude netmap_vale.c
+DIST_EXCL += --exclude examples/testmod
+DIST_EXCL += --exclude cxgbe_netmap.h
+DIST_EXCL += --exclude if_sfxge_netmap.h
+DIST_EXCL += --exclude if_bge_netmap.h
 
 RELEASE_SRCS := ./sys/net ./sys/dev ./sys/modules ./examples
 RELEASE_SRCS += ./README ./LINUX
@@ -17,7 +23,7 @@ all:
 
 tgz:
 	tar cvzf ${DIST_NAME} \
-		-s'/^./netmap/' --exclude .svn $(DIST_SRCS)
+		-s'/^./netmap/' $(DIST_EXCL) $(DIST_SRCS)
 
 diff-head:
 	(cd ~/FreeBSD/head ; \
