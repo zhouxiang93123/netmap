@@ -89,6 +89,18 @@
 		__FUNCTION__, __LINE__, ##__VA_ARGS__);		\
 	} while (0)
  
+/* rate limited, the first parameter indicates how many per second */
+#define RD(lps, format, ...)					\
+	do {							\
+		static int t0, cnt;				\
+		if (t0 != time_second) {			\
+			t0 = time_second;			\
+			cnt = 0;				\
+		}						\
+		if (cnt++ < lps)				\
+		    D(format, ##__VA_ARGS__);			\
+	} while (0)
+ 
 struct netmap_adapter;
 
 /*
