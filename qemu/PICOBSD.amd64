@@ -109,6 +109,7 @@ device	miibus
 #device		mlxen
 #device		mthca
 
+device	epair
 device		ixgbe
 device		bxe		# broadcom 10G
 device		oce		# emulex
