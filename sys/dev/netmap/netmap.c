@@ -56,6 +56,7 @@
 
 #ifdef linux
 #include "bsd_glue.h"
+#include <asm/bitops.h>
 static netdev_tx_t linux_netmap_start(struct sk_buff *skb, struct net_device *dev);
 #endif /* linux */
 
@@ -101,12 +102,13 @@ MALLOC_DEFINE(M_NETMAP, "netmap", "Network memory map");
 /*
  * lock and unlock for the netmap memory allocator
  */
-#define NMA_LOCK()	mtx_lock(&nm_mem->nm_mtx);
-#define NMA_UNLOCK()	mtx_unlock(&nm_mem->nm_mtx);
+#define NMA_LOCK()	mtx_lock(&nm_mem.nm_mtx);
+#define NMA_UNLOCK()	mtx_unlock(&nm_mem.nm_mtx);
 struct netmap_mem_d;
-static struct netmap_mem_d *nm_mem;	/* Our memory allocator. */
+// struct netmap_mem_d nm_mem; /* Our memory allocator. */
 
 u_int netmap_total_buffers;
+u_int netmap_buf_size;
 char *netmap_buffer_base;	/* address of an invalid buffer */
 
 /* user-controlled variables */
@@ -119,10 +121,6 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, verbose,
     CTLFLAG_RW, &netmap_verbose, 0, "Verbose mode");
 SYSCTL_INT(_dev_netmap, OID_AUTO, no_timestamp,
     CTLFLAG_RW, &netmap_no_timestamp, 0, "no_timestamp");
-u_int netmap_buf_size = 2048;
-TUNABLE_INT("hw.netmap.buf_size", (u_int *)&netmap_buf_size);
-SYSCTL_INT(_dev_netmap, OID_AUTO, buf_size,
-    CTLFLAG_RD, &netmap_buf_size, 0, "Size of packet buffers");
 int netmap_mitigate = 1;
 SYSCTL_INT(_dev_netmap, OID_AUTO, mitigate, CTLFLAG_RW, &netmap_mitigate, 0, "");
 int netmap_no_pendintr = 1;
@@ -170,6 +168,18 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
 #include <sys/refcount.h>
 #endif /* __FreeBSD__ */
 #define prefetch(x)	__builtin_prefetch(x)
+
+static inline unsigned long test_and_set_bit(int b, unsigned long *p)
+{
+	unsigned long ret = *p;
+	*p |= 1<<b;
+	return ret;
+}
+static inline unsigned long test_bit(int b, unsigned long *p)
+{
+	return *p & (1<<b);
+}
+
 #endif /* !linux */
 
 static void bdg_netmap_attach(struct ifnet *ifp);
@@ -294,6 +304,7 @@ nm_find_bridge(const char *name)
 #endif /* !NETMAP_MEM2 */
 /*------------ end of memory allocator ----------*/
 
+
 /* Structure associated to each thread which registered an interface. */
 struct netmap_priv_d {
 	struct netmap_if *np_nifp;	/* netmap interface descriptor. */
@@ -302,8 +313,19 @@ struct netmap_priv_d {
 	int		np_ringid;	/* from the ioctl */
 	u_int		np_qfirst, np_qlast;	/* range of rings to scan */
 	uint16_t	np_txpoll;
+	
+	unsigned long	ref_done;
 };
 
+
+static int
+netmap_get_memory(struct netmap_priv_d* p)
+{
+	if (test_and_set_bit(1, &p->ref_done) == 0) {
+		netmap_memory_finalize();
+	}
+	return nm_mem.lasterr;
+}
 
 /*
  * File descriptor's private data destructor.
@@ -423,16 +445,23 @@ netmap_dtor(void *data)
 {
 	struct netmap_priv_d *priv = data;
 	struct ifnet *ifp = priv->np_ifp;
-	struct netmap_adapter *na = NA(ifp);
+	struct netmap_adapter *na;
+	
+	if (ifp) {
+		na = NA(ifp);
+		na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
+		netmap_dtor_locked(data);
+		na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
 
-	na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
-	netmap_dtor_locked(data);
-	na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
-
-	nm_if_rele(ifp);
+		nm_if_rele(ifp);
+	}
+	if (test_bit(1, &priv->ref_done)) {
+		netmap_memory_deref();
+	}
 	bzero(priv, sizeof(*priv));	/* XXX for safety */
 	free(priv, M_DEVBUF);
 }
+
 
 
 /*
@@ -456,13 +485,41 @@ netmap_mmap(__unused struct cdev *dev,
 #endif
 	)
 {
+	int error = 0;
+	struct netmap_priv_d *priv;
+
 	if (nprot & PROT_EXEC)
 		return (-1);	// XXX -1 or EINVAL ?
+
+	error = devfs_get_cdevpriv((void **)&priv);
+	if (error) 
+		return (error);
+	error = netmap_get_memory(priv);
+	if (error)
+	    return (error);
 
 	ND("request for offset 0x%x", (uint32_t)offset);
 	*paddr = netmap_ofstophys(offset);
 
-	return (0);
+	return (*paddr ? 0 : ENOMEM);
+}
+
+static int
+netmap_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
+{
+	struct netmap_priv_d *priv;
+	int error;
+	
+	priv = malloc(sizeof(struct netmap_priv_d), M_DEVBUF,
+			      M_NOWAIT | M_ZERO);
+	if (priv == NULL) 
+		return ENOMEM;
+
+	error = devfs_set_cdevpriv(priv, netmap_dtor);
+	if (error) 
+	        return error;
+	
+	return 0;
 }
 #endif /* __FreeBSD__ */
 
@@ -803,20 +860,15 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	CURVNET_SET(TD_TO_VNET(td));
 
 	error = devfs_get_cdevpriv((void **)&priv);
-	if (error != ENOENT && error != 0) {
+	if (error) {
 		CURVNET_RESTORE();
-		return (error);
+		return (error == ENOENT ? ENXIO : error);
 	}
 
-	error = 0;	/* Could be ENOENT */
 	nmr->nr_name[sizeof(nmr->nr_name) - 1] = '\0';	/* truncate name */
 	switch (cmd) {
 	case NIOCGINFO:		/* return capabilities etc */
-		/* memsize is always valid */
-		nmr->nr_memsize = nm_mem->nm_totalsize;
-		nmr->nr_offset = 0;
-		nmr->nr_rx_rings = nmr->nr_tx_rings = 0;
-		nmr->nr_rx_slots = nmr->nr_tx_slots = 0;
+		/* update configuration */
 		if (nmr->nr_version != NETMAP_API) {
 			D("API mismatch got %d have %d",
 				nmr->nr_version, NETMAP_API);
@@ -824,6 +876,15 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			error = EINVAL;
 			break;
 		}
+		error = netmap_get_memory(priv);
+		D("get_memory returned %d", error);
+		if (error)
+			break;
+		/* memsize is always valid */
+		nmr->nr_memsize = nm_mem.nm_totalsize;
+		nmr->nr_offset = 0;
+		nmr->nr_rx_rings = nmr->nr_tx_rings = 0;
+		nmr->nr_rx_slots = nmr->nr_tx_slots = 0;
 		if (nmr->nr_name[0] == '\0')	/* just get memory info */
 			break;
 		error = get_ifp(nmr->nr_name, &ifp); /* get a refcount */
@@ -843,7 +904,12 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			error = EINVAL;
 			break;
 		}
-		if (priv != NULL) {	/* thread already registered */
+		/* ensure allocators are ready */
+		error = netmap_get_memory(priv);
+		ND("get_memory returned %d", error);
+		if (error)
+			break;
+		if (priv->np_ifp != NULL) {	/* thread already registered */
 			error = netmap_set_ringid(priv, nmr->nr_ringid);
 			break;
 		}
@@ -852,17 +918,6 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		if (error)
 			break;
 		na = NA(ifp); /* retrieve netmap adapter */
-		/*
-		 * Allocate the private per-thread structure.
-		 * XXX perhaps we can use a blocking malloc ?
-		 */
-		priv = malloc(sizeof(struct netmap_priv_d), M_DEVBUF,
-			      M_NOWAIT | M_ZERO);
-		if (priv == NULL) {
-			error = ENOMEM;
-			nm_if_rele(ifp);   /* return the refcount */
-			break;
-		}
 
 		for (i = 10; i > 0; i--) {
 			na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
@@ -874,7 +929,6 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		if (i == 0) {
 			D("too many NIOCREGIF attempts, give up");
 			error = EINVAL;
-			free(priv, M_DEVBUF);
 			nm_if_rele(ifp);	/* return the refcount */
 			break;
 		}
@@ -906,49 +960,50 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 error:
 			na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
 			nm_if_rele(ifp);	/* return the refcount */
-			bzero(priv, sizeof(*priv));
-			free(priv, M_DEVBUF);
+			priv->np_ifp = NULL;
+			priv->np_nifp = NULL;
 			break;
 		}
 
 		na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
-		error = devfs_set_cdevpriv(priv, netmap_dtor);
-
-		if (error != 0) {
-			/* could not assign the private storage for the
-			 * thread, call the destructor explicitly.
-			 */
-			netmap_dtor(priv);
-			break;
-		}
 
 		/* return the offset of the netmap_if object */
 		nmr->nr_rx_rings = na->num_rx_rings;
 		nmr->nr_tx_rings = na->num_tx_rings;
 		nmr->nr_rx_slots = na->num_rx_desc;
 		nmr->nr_tx_slots = na->num_tx_desc;
-		nmr->nr_memsize = nm_mem->nm_totalsize;
+		nmr->nr_memsize = nm_mem.nm_totalsize;
 		nmr->nr_offset = netmap_if_offset(nifp);
 		break;
 
 	case NIOCUNREGIF:
-		if (priv == NULL) {
+		ifp = priv->np_ifp;
+
+		if (ifp == NULL) {
 			error = ENXIO;
 			break;
 		}
 
-		/* the interface is unregistered inside the
-		   destructor of the private data. */
-		devfs_clear_cdevpriv();
+		na = NA(ifp);
+
+		na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
+		netmap_dtor_locked(priv);
+		na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
+
+		nm_if_rele(ifp);
+		priv->np_ifp = NULL;
+		priv->np_nifp = NULL;
 		break;
 
 	case NIOCTXSYNC:
         case NIOCRXSYNC:
-		if (priv == NULL) {
+		ifp = priv->np_ifp;	/* we have a reference */
+
+		if (ifp == NULL) {
 			error = ENXIO;
 			break;
 		}
-		ifp = priv->np_ifp;	/* we have a reference */
+
 		na = NA(ifp); /* retrieve netmap adapter */
 		if (priv->np_qfirst == NETMAP_SW_RING) { /* host rings */
 			if (cmd == NIOCTXSYNC)
@@ -1560,38 +1615,65 @@ linux_netmap_mmap(struct file *f, struct vm_area_struct *vma)
 	int lut_skip, i, j;
 	int user_skip = 0;
 	struct lut_entry *l_entry;
-	const struct netmap_obj_pool *p[] = {
-		nm_mem->nm_if_pool,
-		nm_mem->nm_ring_pool,
-		nm_mem->nm_buf_pool };
+	int error = 0;
+	unsigned long off, tomap;
 	/*
 	 * vma->vm_start: start of mapping user address space
 	 * vma->vm_end: end of the mapping user address space
+	 * vma->vm_pfoff: offset of first page in the device
 	 */
 
-	(void)f;	/* UNUSED */
 	// XXX security checks
+	
+	error = netmap_get_memory(f->private_data);
+	ND("get_memory returned %d", error);
+	if (error)
+	    return -error;
 
-	for (i = 0; i < 3; i++) {  /* loop through obj_pools */
+	off = vma->vm_pgoff << PAGE_SHIFT; /* offset in bytes */
+	tomap = vma->vm_end - vma->vm_start;
+	for (i = 0; i < NETMAP_POOLS_NR; i++) {  /* loop through obj_pools */
+		const struct netmap_obj_pool *p = &nm_mem.pools[i];
 		/*
 		 * In each pool memory is allocated in clusters
-		 * of size _clustsize , each containing clustentries
+		 * of size _clustsize, each containing clustentries
 		 * entries. For each object k we already store the
-		 * vtophys malling in lut[k] so we use that, scanning
+		 * vtophys mapping in lut[k] so we use that, scanning
 		 * the lut[] array in steps of clustentries,
 		 * and we map each cluster (not individual pages,
 		 * it would be overkill).
 		 */
-		for (lut_skip = 0, j = 0; j < p[i]->_numclusters; j++) {
-			l_entry = &p[i]->lut[lut_skip];
+
+		/* 
+		 * We interpret vm_pgoff as an offset into the whole
+		 * netmap memory, as if all clusters where contiguous.
+		 */
+		for (lut_skip = 0, j = 0; j < p->_numclusters; j++, lut_skip += p->clustentries) {
+			unsigned long paddr, mapsize;
+			if (p->_clustsize <= off) {
+				off -= p->_clustsize;
+				continue;
+			}
+			l_entry = &p->lut[lut_skip]; /* first obj in the cluster */
+			paddr = l_entry->paddr + off; 
+			mapsize = p->_clustsize - off;
+			off = 0;
+			if (mapsize > tomap)
+				mapsize = tomap;
+			ND("remap_pfn_range(%lx, %lx, %lx)",
+				vma->vm_start + user_skip,
+				paddr >> PAGE_SHIFT, mapsize);
 			if (remap_pfn_range(vma, vma->vm_start + user_skip,
-					l_entry->paddr >> PAGE_SHIFT, p[i]->_clustsize,
+					paddr >> PAGE_SHIFT, mapsize,
 					vma->vm_page_prot))
 				return -EAGAIN; // XXX check return value
-			lut_skip += p[i]->clustentries;
-			user_skip += p[i]->_clustsize;
+			user_skip += mapsize;
+			tomap -= mapsize;
+			if (tomap == 0)
+				goto done;
 		}
 	}
+done:
 
 	return 0;
 }
@@ -1636,8 +1718,24 @@ netmap_release(struct inode *inode, struct file *file)
 	return (0);
 }
 
+static int
+linux_netmap_open(struct inode *inode, struct file *file)
+{
+	struct netmap_priv_d *priv;
+	(void)inode;	/* UNUSED */
+
+	priv = malloc(sizeof(struct netmap_priv_d), M_DEVBUF,
+			      M_NOWAIT | M_ZERO);
+	if (priv == NULL) 
+		return -ENOMEM;
+	
+	file->private_data = priv;
+
+	return (0);
+}
 
 static struct file_operations netmap_fops = {
+    .open = linux_netmap_open,
     .mmap = linux_netmap_mmap,
     LIN_IOCTL_NAME = linux_netmap_ioctl,
     .poll = linux_netmap_poll,
@@ -1683,6 +1781,7 @@ MODULE_LICENSE("Dual BSD/GPL"); /* the code here is all BSD. */
 static struct cdevsw netmap_cdevsw = {
 	.d_version = D_VERSION,
 	.d_name = "netmap",
+	.d_open = netmap_open,
 	.d_mmap = netmap_mmap,
 	.d_ioctl = netmap_ioctl,
 	.d_poll = netmap_poll,
@@ -2048,8 +2147,7 @@ netmap_init(void)
 		printf("netmap: unable to initialize the memory allocator.\n");
 		return (error);
 	}
-	printf("netmap: loaded module with %d Mbytes\n",
-		(int)(nm_mem->nm_totalsize >> 20));
+	printf("netmap: loaded module\n");
 	netmap_dev = make_dev(&netmap_cdevsw, 0, UID_ROOT, GID_WHEEL, 0660,
 			      "netmap");
 
