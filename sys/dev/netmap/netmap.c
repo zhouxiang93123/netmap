@@ -301,7 +301,7 @@ struct netmap_priv_d {
 	int		np_ringid;	/* from the ioctl */
 	u_int		np_qfirst, np_qlast;	/* range of rings to scan */
 	uint16_t	np_txpoll;
-	
+
 	unsigned long	ref_done;	/* use with NMA_LOCK held */
 };
 
@@ -417,7 +417,7 @@ nm_if_rele(struct ifnet *ifp)
 			bzero(ifp, sizeof(*ifp));
 			free(ifp, M_DEVBUF);
 			break;
-		} 
+		}
 		else if (b->bdg_ports[i] != NULL)
 			full = 1;
 	}
@@ -438,7 +438,7 @@ netmap_dtor(void *data)
 	struct netmap_priv_d *priv = data;
 	struct ifnet *ifp = priv->np_ifp;
 	struct netmap_adapter *na;
-	
+
 	if (ifp) {
 		na = NA(ifp);
 		na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
@@ -513,7 +513,7 @@ netmap_mmap_single(struct cdev *cdev, vm_ooffset_t *foff,
 	return 0;
 }
 #endif /* __FreeBSD__ */
-	
+
 
 /*
  * mmap(2) support for the "netmap" device.
@@ -569,16 +569,16 @@ netmap_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
 {
 	struct netmap_priv_d *priv;
 	int error;
-	
+
 	priv = malloc(sizeof(struct netmap_priv_d), M_DEVBUF,
 			      M_NOWAIT | M_ZERO);
-	if (priv == NULL) 
+	if (priv == NULL)
 		return ENOMEM;
 
 	error = devfs_set_cdevpriv(priv, netmap_dtor);
-	if (error) 
+	if (error)
 	        return error;
-	
+
 	return 0;
 }
 #endif /* __FreeBSD__ */
@@ -1684,7 +1684,7 @@ linux_netmap_mmap(struct file *f, struct vm_area_struct *vma)
 	 */
 
 	// XXX security checks
-	
+
 	error = netmap_get_memory(f->private_data);
 	ND("get_memory returned %d", error);
 	if (error)
@@ -1704,7 +1704,7 @@ linux_netmap_mmap(struct file *f, struct vm_area_struct *vma)
 		 * it would be overkill).
 		 */
 
-		/* 
+		/*
 		 * We interpret vm_pgoff as an offset into the whole
 		 * netmap memory, as if all clusters where contiguous.
 		 */
@@ -1715,7 +1715,7 @@ linux_netmap_mmap(struct file *f, struct vm_area_struct *vma)
 				continue;
 			}
 			l_entry = &p->lut[lut_skip]; /* first obj in the cluster */
-			paddr = l_entry->paddr + off; 
+			paddr = l_entry->paddr + off;
 			mapsize = p->_clustsize - off;
 			off = 0;
 			if (mapsize > tomap)
@@ -1786,9 +1786,9 @@ linux_netmap_open(struct inode *inode, struct file *file)
 
 	priv = malloc(sizeof(struct netmap_priv_d), M_DEVBUF,
 			      M_NOWAIT | M_ZERO);
-	if (priv == NULL) 
+	if (priv == NULL)
 		return -ENOMEM;
-	
+
 	file->private_data = priv;
 
 	return (0);
