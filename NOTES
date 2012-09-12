@@ -1,4 +1,12 @@
 --- status and other development notes ---
+20120824 devfs_get_cdevpriv()
+	curthread		struct thread	sys/proc.h
+	->td_fpop		struct file	
+	->f_cdevpriv		struct cdev_privdata sys/fs/devfs/devfs_int.h
+	->cdpd_data		void *
+
+    in mmap:
+	dev			struct cdev, sys/conf.h
 20120802	http://www.asciiflow.com/ ascii art
 
 20120724 barelli	svn+ssh://27148317-unipi@onelab3.iet.unipi.it/usr/home/PPM10/27148317/thesis
