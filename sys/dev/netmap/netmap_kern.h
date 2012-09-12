@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2011-2012 Matteo Landi, Luigi Rizzo. All rights reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -9,7 +9,7 @@
  *   2. Redistributions in binary form must reproduce the above copyright
  *      notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -88,7 +88,7 @@
 		(int)__xxts.tv_sec % 1000, (int)__xxts.tv_usec,	\
 		__FUNCTION__, __LINE__, ##__VA_ARGS__);		\
 	} while (0)
- 
+
 /* rate limited, lps indicates how many per second */
 #define RD(lps, format, ...)					\
 	do {							\
@@ -100,7 +100,7 @@
 		if (cnt++ < lps)				\
 			D(format, ##__VA_ARGS__);		\
 	} while (0)
- 
+
 struct netmap_adapter;
 
 /*
