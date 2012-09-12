@@ -103,12 +103,25 @@
 #endif /* linux */
 
 static inline int min(int a, int b) { return a < b ? a : b; }
+extern int time_second;
 
 /* debug support */
 #define ND(format, ...)	do {} while(0)
-#define D(format, ...)				\
-	fprintf(stderr, "%s [%d] " format "\n", 	\
+#define D(format, ...)					\
+	fprintf(stderr, "%s [%d] " format "\n",		\
 	__FUNCTION__, __LINE__, ##__VA_ARGS__)
+
+#define RD(lps, format, ...)				\
+	do {						\
+		static int t0, cnt;			\
+		if (t0 != time_second) {		\
+			t0 = time_second;		\
+			cnt = 0;			\
+		}					\
+		if (cnt++ < lps)			\
+			D(format, ##__VA_ARGS__);	\
+	} while (0)
+
 
 #ifndef EXPERIMENTAL
 #define EXPERIMENTAL 0
@@ -118,7 +131,7 @@ static inline int min(int a, int b) { return a < b ? a : b; }
 // XXX does it work on 32-bit machines ?
 static inline void prefetch (const void *x)
 {
-        __asm volatile("prefetcht0 %0" :: "m" (*(const unsigned long *)x));
+	__asm volatile("prefetcht0 %0" :: "m" (*(const unsigned long *)x));
 }
 
 // XXX only for multiples of 64 bytes, non overlapped.
@@ -146,7 +159,7 @@ pkt_copy(const void *_src, void *_dst, int l)
 }
 
 #if EXPERIMENTAL
-/* Wrapper around `rdtsc' to take reliable timestamps flushing the pipeline */ 
+/* Wrapper around `rdtsc' to take reliable timestamps flushing the pipeline */
 #define netmap_rdtsc(t) \
 	do { \
 		u_int __regs[4];					\
@@ -177,18 +190,18 @@ rdtsc(void)
  * info on a ring we handle
  */
 struct my_ring {
-        const char *ifname;
-        int fd;
-        char *mem;                      /* userspace mmap address */
-        u_int memsize;
-        u_int queueid;
-        u_int begin, end;               /* first..last+1 rings to check */
-        struct netmap_if *nifp;
-        struct netmap_ring *tx, *rx;    /* shortcuts */
+	const char *ifname;
+	int fd;
+	char *mem;                      /* userspace mmap address */
+	u_int memsize;
+	u_int queueid;
+	u_int begin, end;               /* first..last+1 rings to check */
+	struct netmap_if *nifp;
+	struct netmap_ring *tx, *rx;    /* shortcuts */
 
-        uint32_t if_flags;
-        uint32_t if_reqcap;
-        uint32_t if_curcap;
+	uint32_t if_flags;
+	uint32_t if_reqcap;
+	uint32_t if_curcap;
 };
 int netmap_open(struct my_ring *me, int ringid, int promisc);
 int netmap_close(struct my_ring *me);
