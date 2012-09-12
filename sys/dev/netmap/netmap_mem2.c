@@ -99,6 +99,20 @@
 #define NETMAP_BUF_MAX_NUM      20000   /* 40MB */
 #endif
 
+#ifdef linux
+#define NMA_LOCK_T		struct semaphore
+#define NMA_LOCK_INIT()		sema_init(&nm_mem.nm_mtx, 1)
+#define NMA_LOCK_DESTROY()	
+#define NMA_LOCK()		down(&nm_mem.nm_mtx)
+#define NMA_UNLOCK()		up(&nm_mem.nm_mtx)
+#else /* !linux */
+#define NMA_LOCK_T		struct mtx
+#define NMA_LOCK_INIT()		mtx_init(&nm_mem.nm_mtx, "netmap memory allocator lock", NULL, MTX_DEF)
+#define NMA_LOCK_DESTROY()	mtx_destroy(&nm_mem.nm_mtx)
+#define NMA_LOCK()		mtx_lock(&nm_mem.nm_mtx)
+#define NMA_UNLOCK()		mtx_unlock(&nm_mem.nm_mtx)
+#endif /* linux */
+
 enum {
 	NETMAP_IF_POOL   = 0,
 	NETMAP_RING_POOL,
@@ -153,7 +167,7 @@ struct netmap_obj_pool {
 
 
 struct netmap_mem_d {
-	NM_LOCK_T nm_mtx; /* protect the allocator ? */
+	NMA_LOCK_T nm_mtx;  /* protect the allocator */
 	u_int nm_totalsize; /* shorthand */
 
 	int finalized;		/* !=0 iff preallocation done */
@@ -697,7 +711,6 @@ netmap_memory_finalize(void)
 		goto out;
 	}
 
-	/* make sysctl values match actual values in the pools */
 	for (i = 0; i < NETMAP_POOLS_NR; i++) {
 		nm_mem.lasterr = netmap_finalize_obj_allocator(&nm_mem.pools[i]);
 		if (nm_mem.lasterr)
@@ -716,6 +729,7 @@ netmap_memory_finalize(void)
 	nm_mem.finalized = 1;
 	nm_mem.lasterr = 0;
 
+	/* make sysctl values match actual values in the pools */
 	for (i = 0; i < NETMAP_POOLS_NR; i++) {
 		netmap_params[i].size = nm_mem.pools[i]._objsize;
 		netmap_params[i].num  = nm_mem.pools[i].objtotal;
@@ -735,9 +749,7 @@ cleanup:
 static int
 netmap_memory_init(void)
 {
-	mtx_init(&nm_mem.nm_mtx, "netmap memory allocator lock", NULL,
-		 MTX_DEF);
-
+	NMA_LOCK_INIT();
 	return (0);
 }
 
@@ -749,7 +761,7 @@ netmap_memory_fini(void)
 	for (i = 0; i < NETMAP_POOLS_NR; i++) {
 	    netmap_destroy_obj_allocator(&nm_mem.pools[i]);
 	}
-	mtx_destroy(&nm_mem.nm_mtx);
+	NMA_LOCK_DESTROY();
 }
 
 static void
@@ -768,6 +780,7 @@ netmap_free_rings(struct netmap_adapter *na)
 
 
 
+/* call with NMA_LOCK held */
 static void *
 netmap_if_new(const char *ifname, struct netmap_adapter *na)
 {
@@ -779,7 +792,6 @@ netmap_if_new(const char *ifname, struct netmap_adapter *na)
 	u_int nrx = na->num_rx_rings + 1; /* shorthand, include stack ring */
 	struct netmap_kring *kring;
 
-	NMA_LOCK();
 	/*
 	 * the descriptor is followed inline by an array of offsets
 	 * to the tx and rx rings in the shared memory region.
@@ -787,7 +799,6 @@ netmap_if_new(const char *ifname, struct netmap_adapter *na)
 	len = sizeof(struct netmap_if) + (nrx + ntx) * sizeof(ssize_t);
 	nifp = netmap_if_malloc(len);
 	if (nifp == NULL) {
-		NMA_UNLOCK();
 		return NULL;
 	}
 
@@ -798,7 +809,6 @@ netmap_if_new(const char *ifname, struct netmap_adapter *na)
 
 	(na->refcount)++;	/* XXX atomic ? we are under lock */
 	if (na->refcount > 1) { /* already setup, we are done */
-		NMA_UNLOCK();
 		goto final;
 	}
 
@@ -872,7 +882,6 @@ netmap_if_new(const char *ifname, struct netmap_adapter *na)
 			goto cleanup;
 		}
 	}
-	NMA_UNLOCK();
 #ifdef linux
 	// XXX initialize the selrecord structs.
 	for (i = 0; i < ntx; i++)
@@ -902,7 +911,6 @@ cleanup:
 	netmap_free_rings(na);
 	netmap_if_free(nifp);
 	(na->refcount)--;
-	NMA_UNLOCK();
 	return NULL;
 }
 

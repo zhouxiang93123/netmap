@@ -99,14 +99,6 @@ MALLOC_DEFINE(M_NETMAP, "netmap", "Network memory map");
 #include <net/netmap.h>
 #include <dev/netmap/netmap_kern.h>
 
-/*
- * lock and unlock for the netmap memory allocator
- */
-#define NMA_LOCK()	mtx_lock(&nm_mem.nm_mtx);
-#define NMA_UNLOCK()	mtx_unlock(&nm_mem.nm_mtx);
-struct netmap_mem_d;
-// struct netmap_mem_d nm_mem; /* Our memory allocator. */
-
 u_int netmap_total_buffers;
 u_int netmap_buf_size;
 char *netmap_buffer_base;	/* address of an invalid buffer */
@@ -293,9 +285,30 @@ nm_find_bridge(const char *name)
 /*------------ end of memory allocator ----------*/
 
 
-/* Structure associated to each thread which registered an interface. */
+/* Structure associated to each thread which registered an interface.
+ *
+ * The first 4 fields of this structure are written by NIOCREGIF and
+ * read by poll() and NIOC?XSYNC.
+ * There is low contention among writers (actually, a correct user program
+ * should have no contention among writers) and among writers and readers,
+ * so we use a single global lock to protect the structure initialization.
+ * Since initialization involves the allocation of memory, we reuse the memory
+ * allocator lock.
+ * Read access to the structure is lock free. Readers must check that
+ * np_nifp is not NULL before using the other fields.
+ * If np_nifp is NULL initialization has not been performed, so they should
+ * return an error to userlevel.
+ *
+ * The ref_done field is used to regulate access to the refcount in the
+ * memory allocator. The refcount must be incremented at most once for
+ * each open("/dev/netmap"). The increment is performed by the first
+ * function that calls netmap_get_memory() (currently called by
+ * mmap(), NIOCGINFO and NIOCREGIF).
+ * If the refcount is incremented, it is then decremented when the
+ * private structure is destroyed.
+ */
 struct netmap_priv_d {
-	struct netmap_if *np_nifp;	/* netmap interface descriptor. */
+	struct netmap_if * volatile np_nifp;	/* netmap interface descriptor. */
 
 	struct ifnet	*np_ifp;	/* device for which we hold a reference */
 	int		np_ringid;	/* from the ioctl */
@@ -325,6 +338,7 @@ netmap_get_memory(struct netmap_priv_d* p)
  * Call nm_register(ifp,0) to stop netmap mode on the interface and
  * revert to normal operation. We expect that np_ifp has not gone.
  */
+/* call with NMA_LOCK held */
 static void
 netmap_dtor_locked(void *data)
 {
@@ -364,7 +378,6 @@ netmap_dtor_locked(void *data)
 		selwakeuppri(&na->tx_si, PI_NET);
 		selwakeuppri(&na->rx_si, PI_NET);
 		/* release all buffers */
-		NMA_LOCK();
 		for (i = 0; i < na->num_tx_rings + 1; i++) {
 			struct netmap_ring *ring = na->tx_rings[i].ring;
 			lim = na->tx_rings[i].nkr_num_slots;
@@ -384,7 +397,6 @@ netmap_dtor_locked(void *data)
 		/* XXX kqueue(9) needed; these will mirror knlist_init. */
 		/* knlist_destroy(&na->tx_si.si_note); */
 		/* knlist_destroy(&na->rx_si.si_note); */
-		NMA_UNLOCK();
 		netmap_free_rings(na);
 		wakeup(na);
 	}
@@ -439,6 +451,7 @@ netmap_dtor(void *data)
 	struct ifnet *ifp = priv->np_ifp;
 	struct netmap_adapter *na;
 
+	NMA_LOCK();
 	if (ifp) {
 		na = NA(ifp);
 		na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
@@ -447,7 +460,6 @@ netmap_dtor(void *data)
 
 		nm_if_rele(ifp);
 	}
-	NMA_LOCK();
 	if (priv->ref_done) {
 		netmap_memory_deref();
 	}
@@ -922,13 +934,14 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	error = devfs_get_cdevpriv((void **)&priv);
 	if (error) {
 		CURVNET_RESTORE();
+		/* XXX ENOENT should be impossible, since the priv
+		 * is now created in the open */
 		return (error == ENOENT ? ENXIO : error);
 	}
 
 	nmr->nr_name[sizeof(nmr->nr_name) - 1] = '\0';	/* truncate name */
 	switch (cmd) {
 	case NIOCGINFO:		/* return capabilities etc */
-		/* update configuration */
 		if (nmr->nr_version != NETMAP_API) {
 			D("API mismatch got %d have %d",
 				nmr->nr_version, NETMAP_API);
@@ -936,6 +949,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			error = EINVAL;
 			break;
 		}
+		/* update configuration */
 		error = netmap_get_memory(priv);
 		D("get_memory returned %d", error);
 		if (error)
@@ -969,14 +983,20 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		ND("get_memory returned %d", error);
 		if (error)
 			break;
+
+		/* protect access to priv from concurrent NIOCREGIF */
+		NMA_LOCK();
 		if (priv->np_ifp != NULL) {	/* thread already registered */
 			error = netmap_set_ringid(priv, nmr->nr_ringid);
+			NMA_UNLOCK();
 			break;
 		}
 		/* find the interface and a reference */
 		error = get_ifp(nmr->nr_name, &ifp); /* keep reference */
-		if (error)
+		if (error) {
+			NMA_UNLOCK();
 			break;
+		}
 		na = NA(ifp); /* retrieve netmap adapter */
 
 		for (i = 10; i > 0; i--) {
@@ -990,6 +1010,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			D("too many NIOCREGIF attempts, give up");
 			error = EINVAL;
 			nm_if_rele(ifp);	/* return the refcount */
+			NMA_UNLOCK();
 			break;
 		}
 
@@ -997,7 +1018,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		error = netmap_set_ringid(priv, nmr->nr_ringid);
 		if (error)
 			goto error;
-		priv->np_nifp = nifp = netmap_if_new(nmr->nr_name, na);
+		nifp = netmap_if_new(nmr->nr_name, na);
 		if (nifp == NULL) { /* allocation failed */
 			error = ENOMEM;
 		} else if (ifp->if_capenable & IFCAP_NETMAP) {
@@ -1012,8 +1033,10 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 				mtx_init(&na->rx_rings[i].q_lock, "nm_rxq_lock", MTX_NETWORK_LOCK, MTX_DEF);
 			}
 			error = na->nm_register(ifp, 1); /* mode on */
-			if (error)
+			if (error) {
 				netmap_dtor_locked(priv);
+				netmap_if_free(nifp);
+			}
 		}
 
 		if (error) {	/* reg. failed, release priv and ref */
@@ -1022,10 +1045,19 @@ error:
 			nm_if_rele(ifp);	/* return the refcount */
 			priv->np_ifp = NULL;
 			priv->np_nifp = NULL;
+			NMA_UNLOCK();
 			break;
 		}
 
 		na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
+
+		/* the following assignment is a commitment.
+		 * Readers (i.e., poll and *SYNC) check for
+		 * np_nifp != NULL without locking
+		 */
+		wmb(); /* make sure previous writes are visible to all CPUs */
+		priv->np_nifp = nifp;
+		NMA_UNLOCK();
 
 		/* return the offset of the netmap_if object */
 		nmr->nr_rx_rings = na->num_rx_rings;
@@ -1037,29 +1069,29 @@ error:
 		break;
 
 	case NIOCUNREGIF:
-		ifp = priv->np_ifp;
-
-		if (ifp == NULL) {
-			error = ENXIO;
-			break;
+		if (nmr->nr_version != NETMAP_API) {
+			D("API mismatch got %d have %d",
+				nmr->nr_version, NETMAP_API);
+			nmr->nr_version = NETMAP_API;
 		}
-
-		na = NA(ifp);
-
-		na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
-		netmap_dtor_locked(priv);
-		na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
-
-		nm_if_rele(ifp);
-		priv->np_ifp = NULL;
-		priv->np_nifp = NULL;
+		error = EINVAL;
 		break;
 
 	case NIOCTXSYNC:
 	case NIOCRXSYNC:
+		nifp = priv->np_nifp;
+
+		if (nifp == NULL) {
+			error = ENXIO;
+			break;
+		}
+		rmb(); /* make sure following reads are not from cache */
+
+
 		ifp = priv->np_ifp;	/* we have a reference */
 
 		if (ifp == NULL) {
+			D("Internal error: nifp != NULL && ifp == NULL");
 			error = ENXIO;
 			break;
 		}
@@ -1161,6 +1193,12 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 
 	if (devfs_get_cdevpriv((void **)&priv) != 0 || priv == NULL)
 		return POLLERR;
+
+	if (priv->np_nifp == NULL) {
+		D("No if registered");
+		return POLLERR;
+	}
+	rmb(); /* make sure following reads are not from cache */
 
 	ifp = priv->np_ifp;
 	// XXX check for deleting() ?
