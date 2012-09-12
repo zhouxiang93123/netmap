@@ -1056,7 +1056,7 @@ error:
 		break;
 
 	case NIOCTXSYNC:
-        case NIOCRXSYNC:
+	case NIOCRXSYNC:
 		ifp = priv->np_ifp;	/* we have a reference */
 
 		if (ifp == NULL) {
