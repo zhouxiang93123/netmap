@@ -639,7 +639,7 @@ netmap_memory_config_changed(void)
 
 /* call with lock held */
 static int
-netmap_memory_config_locked(void)
+netmap_memory_config(void)
 {
 	int i;
 
@@ -674,14 +674,12 @@ out:
 	return nm_mem.lasterr;
 }
 
+/* call with lock held */
 static int
 netmap_memory_finalize(void)
 {
 	int i;
 	u_int totalsize = 0;
-
-
-	NMA_LOCK();
 
 	nm_mem.refcount++;
 	if (nm_mem.refcount > 1) {
@@ -689,7 +687,8 @@ netmap_memory_finalize(void)
 		goto out;
 	}
 
-	if (netmap_memory_config_locked())
+	/* update configuration if changed */
+	if (netmap_memory_config())
 		goto out;
 
 	if (nm_mem.finalized) {
@@ -698,6 +697,7 @@ netmap_memory_finalize(void)
 		goto out;
 	}
 
+	/* make sysctl values match actual values in the pools */
 	for (i = 0; i < NETMAP_POOLS_NR; i++) {
 		nm_mem.lasterr = netmap_finalize_obj_allocator(&nm_mem.pools[i]);
 		if (nm_mem.lasterr)
@@ -722,17 +722,13 @@ netmap_memory_finalize(void)
 	}
 
 out:
-
-	NMA_UNLOCK();
 	return nm_mem.lasterr;
 
 cleanup:
-
 	for (i = 0; i < NETMAP_POOLS_NR; i++) {
 		netmap_reset_obj_allocator(&nm_mem.pools[i]);
 	}
 
-	NMA_UNLOCK();
 	return nm_mem.lasterr;
 }
 
@@ -910,11 +906,10 @@ cleanup:
 	return NULL;
 }
 
+/* call with NMA_LOCK held */
 static void
 netmap_memory_deref(void)
 {
-	NMA_LOCK();
 	nm_mem.refcount--;
 	D("refcount = %d", nm_mem.refcount);
-	NMA_UNLOCK();
 }

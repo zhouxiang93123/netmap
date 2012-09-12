@@ -168,18 +168,6 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
 #include <sys/refcount.h>
 #endif /* __FreeBSD__ */
 #define prefetch(x)	__builtin_prefetch(x)
-
-static inline unsigned long test_and_set_bit(int b, unsigned long *p)
-{
-	unsigned long ret = *p;
-	*p |= 1<<b;
-	return ret;
-}
-static inline unsigned long test_bit(int b, unsigned long *p)
-{
-	return *p & (1<<b);
-}
-
 #endif /* !linux */
 
 static void bdg_netmap_attach(struct ifnet *ifp);
@@ -314,17 +302,21 @@ struct netmap_priv_d {
 	u_int		np_qfirst, np_qlast;	/* range of rings to scan */
 	uint16_t	np_txpoll;
 	
-	unsigned long	ref_done;
+	unsigned long	ref_done;	/* use with NMA_LOCK held */
 };
 
 
 static int
 netmap_get_memory(struct netmap_priv_d* p)
 {
-	if (test_and_set_bit(1, &p->ref_done) == 0) {
-		netmap_memory_finalize();
+	int error = 0;
+	NMA_LOCK();
+	if (!p->ref_done) {
+		p->ref_done = 1;
+		error = netmap_memory_finalize();
 	}
-	return nm_mem.lasterr;
+	NMA_UNLOCK();
+	return error;
 }
 
 /*
@@ -455,14 +447,73 @@ netmap_dtor(void *data)
 
 		nm_if_rele(ifp);
 	}
-	if (test_bit(1, &priv->ref_done)) {
+	NMA_LOCK();
+	if (priv->ref_done) {
 		netmap_memory_deref();
 	}
+	NMA_UNLOCK();
 	bzero(priv, sizeof(*priv));	/* XXX for safety */
 	free(priv, M_DEVBUF);
 }
 
+#ifdef __FreeBSD__
+#include <vm/vm.h>
+#include <vm/vm_param.h>
+#include <vm/vm_object.h>
+#include <vm/vm_page.h>
+#include <vm/vm_pager.h>
+#include <vm/uma.h>
 
+static struct cdev_pager_ops saved_cdev_pager_ops;
+
+static int
+netmap_dev_pager_ctor(void *handle, vm_ooffset_t size, vm_prot_t prot,
+    vm_ooffset_t foff, struct ucred *cred, u_short *color)
+{
+	D("first mmap for %p", handle);
+	return saved_cdev_pager_ops.cdev_pg_ctor(handle,
+			size, prot, foff, cred, color);
+}
+
+static void
+netmap_dev_pager_dtor(void *handle)
+{
+	saved_cdev_pager_ops.cdev_pg_dtor(handle);
+	D("ready to release memory for %p", handle);
+}
+
+
+static struct cdev_pager_ops netmap_cdev_pager_ops = {
+        .cdev_pg_ctor = netmap_dev_pager_ctor,
+        .cdev_pg_dtor = netmap_dev_pager_dtor,
+        .cdev_pg_fault = NULL,
+};
+
+static int
+netmap_mmap_single(struct cdev *cdev, vm_ooffset_t *foff,
+	vm_size_t objsize,  vm_object_t *objp, int prot)
+{
+	vm_object_t obj;
+
+	D("cdev %p foff %d size %d objp %p prot %d", cdev, *foff,
+		objsize, objp, prot);
+	obj = vm_pager_allocate(OBJT_DEVICE, cdev, objsize, prot, *foff,
+            curthread->td_ucred);
+	D("returns obj %p", obj);
+	if (obj == NULL)
+		return EINVAL;
+	if (saved_cdev_pager_ops.cdev_pg_fault == NULL) {
+		D("initialize cdev_pager_ops");
+		saved_cdev_pager_ops = *(obj->un_pager.devp.ops);
+		netmap_cdev_pager_ops.cdev_pg_fault =
+			saved_cdev_pager_ops.cdev_pg_fault;
+	};
+	obj->un_pager.devp.ops = &netmap_cdev_pager_ops;
+	*objp = obj;
+	return 0;
+}
+#endif /* __FreeBSD__ */
+	
 
 /*
  * mmap(2) support for the "netmap" device.
@@ -492,16 +543,25 @@ netmap_mmap(__unused struct cdev *dev,
 		return (-1);	// XXX -1 or EINVAL ?
 
 	error = devfs_get_cdevpriv((void **)&priv);
-	if (error) 
-		return (error);
-	error = netmap_get_memory(priv);
+	if (error == EBADF) {	/* called on fault, memory is initialized */
+		RD(5, "handling fault at ofs 0x%x", offset);
+		error = 0;
+	} else if (error == 0)	/* make sure memory is set */
+		error = netmap_get_memory(priv);
 	if (error)
-	    return (error);
+		return (error);
 
 	ND("request for offset 0x%x", (uint32_t)offset);
 	*paddr = netmap_ofstophys(offset);
 
 	return (*paddr ? 0 : ENOMEM);
+}
+
+static int
+netmap_close(struct cdev *dev, int fflag, int devtype, struct thread *td)
+{
+	D("dev %p fflag 0x%x devtype %d td %p", dev, fflag, devtype, td);
+	return 0;
 }
 
 static int
@@ -1783,8 +1843,10 @@ static struct cdevsw netmap_cdevsw = {
 	.d_name = "netmap",
 	.d_open = netmap_open,
 	.d_mmap = netmap_mmap,
+	.d_mmap_single = netmap_mmap_single,
 	.d_ioctl = netmap_ioctl,
 	.d_poll = netmap_poll,
+	.d_close = netmap_close,
 };
 #endif /* __FreeBSD__ */
 
