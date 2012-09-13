@@ -1,0 +1,27 @@
+diff -urp /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/broadcom/bnx2x/bnx2x_main.c bnx2x/bnx2x_main.c
+--- /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/broadcom/bnx2x/bnx2x_main.c	2012-09-11 20:50:55.822622214 -0700
++++ bnx2x/bnx2x_main.c	2012-09-13 14:13:50.925531254 -0700
+@@ -599,6 +599,13 @@ static u64 bnx2x_wb_rd(struct bnx2x *bp,
+ }
+ #endif
+ 
++
++#if defined(CONFIG_NETMAP) || defined(CONFIG_NETMAP_MODULE)
++#include <bnx2x_netmap_linux.h>
++#else
++#error --- normal compilation
++#endif /* NETMAP */
++
+ static int bnx2x_mc_assert(struct bnx2x *bp)
+ {
+ 	char last_idx;
+@@ -11227,6 +11234,9 @@ static int __devinit bnx2x_init_one(stru
+ 	            pcie_speed == 2 ? "5GHz (Gen2)" : "2.5GHz",
+ 		    dev->base_addr, bp->pdev->irq, dev->dev_addr);
+ 
++#ifdef DEV_NETMAP
++	bnx2x_netmap_attach(bp);
++#endif /* DEV_NETMAP */
+ 	return 0;
+ 
+ init_one_exit:

@@ -13,6 +13,7 @@ CONFIG_E1000:=m
 CONFIG_E1000E:=m
 CONFIG_IXGBE:=m
 CONFIG_IGB:=m
+CONFIG_BNX2X:=m
 
 netmap_lin-objs := netmap.o
 
@@ -30,6 +31,8 @@ obj-m += $(DRIVERS)
 # can be in $(KSRC)/source/drivers/net/ethernet/$(manufacturer)
 DRIVER_SRCS = r8169.c forcedeth.c e1000/ e1000e/ ixgbe/ igb/
 DRIVER_SUBDIRS= nvidia realtek intel
+DRIVER_SRCS += bnx2x/ mellanox/
+DRIVER_SUBDIRS += broadcom .
 
 # The following commands are needed to build the modules as out-of-tree, in
 # fact the kernel sources path must be specified.
@@ -37,6 +40,7 @@ DRIVER_SUBDIRS= nvidia realtek intel
 # Additional compile flags (e.g. header location)
 M:=$(PWD)
 EXTRA_CFLAGS := -I$(M) -I$(M)/../sys -I$(M)/../sys/dev -DCONFIG_NETMAP
+EXTRA_CFLAGS += -Wno-unused-but-set-variable
 
 # We use KSRC for the kernel configuration and sources.
 # If the sources are elsewhere, then use SRC to point to them.
@@ -61,6 +65,7 @@ all:	get-drivers build
 build:
 	make -C $(KSRC) M=$(PWD) CONFIG_NETMAP=m	\
 		CONFIG_E1000=m CONFIG_E1000E=m \
+		CONFIG_BNX2X=m CONFIG_MLX4=m \
 		CONFIG_IXGBE=m CONFIG_IGB=m EXTRA_CFLAGS='$(EXTRA_CFLAGS)' \
 		DRIVERS="$(DRIVERS:%.c=%.o)" modules
 	@ls -l `find . -name \*.ko`
@@ -89,6 +94,7 @@ get-drivers:
 	    cd drivers/net; s=. ;					\
 	    [ -d ethernet ] && cd ethernet && s="$(DRIVER_SUBDIRS)" ;	\
 	    for i in $$s; do (cd $$i ;					\
+		echo "Copying from `pwd` ";				\
 	    	cp -Rp $(DRIVERS) $(PWD) 2>/dev/null ); done )
 	-@(for i in $(PATCHES) ; do echo "** use patches/$$i";		\
 		patch --posix --quiet --force -p1 < patches/$$i; done )
