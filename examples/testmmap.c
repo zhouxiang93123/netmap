@@ -200,6 +200,19 @@ void do_unregif()
 	output_err(ret, "ioctl(%d, NIOCUNREGIF) for %s =%d", fd, arg, ret);
 }
 
+volatile char tmp1;
+void do_access()
+{
+	char *arg = nextarg();
+	char *p;
+	if (!arg) {
+		output("missing address");
+		return;
+	}
+	p = (char *)strtoul((void *)arg, NULL, 0);
+	tmp1 = *p;
+}
+
 void do_mmap()
 {
 	void *mmap_addr;
@@ -309,6 +322,7 @@ struct cmd_def commands[] = {
 		.name = "mmap",
 		.f    = do_mmap,
 	},
+	{	.name = "access", .f = do_access, },
 	{
 		.name = "munmap",
 		.f    = do_munmap,

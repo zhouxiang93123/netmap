@@ -78,8 +78,20 @@
 
 #include <net/netmap.h>
 #include <net/netmap_user.h>
-#ifndef MY_PCAP
+
+#ifndef MY_PCAP		/* use the system's pcap if available */
+
+#ifdef NO_PCAP
+#define	PCAP_ERRBUF_SIZE	512
+typedef void pcap_t;
+struct pcap_pkthdr;
+#define	pcap_inject(a,b,c)	((void)a, (void)b, (void)c, -1)
+#define	pcap_dispatch(a, b, c, d)	(void)c
+#define	pcap_open_live(a, b, c, d, e)	((void)e, NULL)
+#else /* !NO_PCAP */
 #include <pcap/pcap.h> // XXX do we need it ?
+#endif /* !NO_PCAP */
+
 #endif // XXX hack
 
 #include <pthread.h>	/* pthread_* */
