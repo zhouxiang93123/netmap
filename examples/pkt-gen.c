@@ -40,6 +40,7 @@ const char *default_payload="netmap pkt-gen Luigi Rizzo and Matteo Landi\n"
 	"http://info.iet.unipi.it/~luigi/netmap/ ";
 
 #include "nm_util.h"
+int time_second;	// support for RD() debugging macro
 
 int verbose = 0;
 
@@ -450,7 +451,7 @@ pinger_body(void *data)
 	fds[0].events = (POLLIN);
 	static uint32_t sent;
 	struct timespec ts, now, last_print;
-	uint32_t count = 0, min = 1000000, av = 0;
+	uint32_t count = 0, min = 1000000000, av = 0;
 
 	if (targ->g->nthreads > 1) {
 		D("can only ping with 1 thread");
@@ -501,7 +502,7 @@ pinger_body(void *data)
 					ts.tv_nsec += 1000000000;
 					ts.tv_sec--;
 				}
-				if (0) D("seq %d/%d delta %d.%09d", seq, sent,
+				if (1) D("seq %d/%d delta %d.%09d", seq, sent,
 					(int)ts.tv_sec, (int)ts.tv_nsec);
 				if (ts.tv_nsec < (int)min)
 					min = ts.tv_nsec;
@@ -1228,6 +1229,7 @@ main(int arc, char **argv)
 		delta.tv_usec = (report_interval%1000)*1000;
 		select(0, NULL, NULL, NULL, &delta);
 		gettimeofday(&now, NULL);
+		time_second = now.tv_sec;
 		timersub(&now, &toc, &toc);
 		my_count = 0;
 		for (i = 0; i < g.nthreads; i++) {
