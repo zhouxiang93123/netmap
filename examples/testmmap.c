@@ -103,21 +103,22 @@ void chan_clear_all(struct chan *c[], int max)
 	}
 }
 
+int last_fd = -1;
+size_t last_memsize = 0;
+void * last_mmap_addr = NULL;
+
+
 void do_open()
 {
-	int fd = open("/dev/netmap", O_RDWR);
-	output_err(fd, "open(\"/dev/netmap\", O_RDWR)=%d", fd);
+	last_fd = open("/dev/netmap", O_RDWR);
+	output_err(last_fd, "open(\"/dev/netmap\", O_RDWR)=%d", last_fd);
 }
 
 void do_close()
 {
 	int ret, fd;
 	char *arg = nextarg();
-	if (!arg) {
-		output("missing fd");
-		return;
-	}
-	fd = atoi(arg);
+	fd = arg ? atoi(arg) : last_fd;
 	ret = close(fd);
 	output_err(ret, "close(%d)=%d", fd, ret);
 }
@@ -126,52 +127,51 @@ void do_getinfo()
 {
 	struct nmreq nmr;
 	int ret;
-	char *name;
+	char *arg, *name = "any";
 	int fd;
-
-	name = nextarg();
-	if (!name) {
-		output("missing fd");
-		return;
-	}
-	fd = atoi(name);
 
 	bzero(&nmr, sizeof(nmr));
 	nmr.nr_version = NETMAP_API;
-	name = strtok(NULL, " \n\t");
+
+	arg = nextarg();
+	if (!arg) {
+		fd = last_fd;
+		goto doit;
+	}
+	fd = atoi(arg);
+
+	name = nextarg();
 	if (name) {
 		strncpy(nmr.nr_name, name, sizeof(nmr.nr_name));
-	} else {
-		name = "any";
-	}
+	} 
+doit:
 	ret = ioctl(fd, NIOCGINFO, &nmr);
-	output_err(ret, "ioctl(%d, NIOCGINFO) for %s: memsize=%" PRIu32, fd, name, nmr.nr_memsize);
+	last_memsize = nmr.nr_memsize;
+	output_err(ret, "ioctl(%d, NIOCGINFO) for %s: memsize=%zu", fd, name, last_memsize);
 }
 
 void do_regif()
 {
 	struct nmreq nmr;
 	int ret;
-	char *arg;
+	char *arg, *name;
 	int fd;
 
-	arg = nextarg();
-	if (!arg) {
-		output("missing fd");
-		return;
-	}
-	fd = atoi(arg);
-	arg = nextarg();
-	if (!arg) {
+	bzero(&nmr, sizeof(nmr));
+	nmr.nr_version = NETMAP_API;
+
+	name = nextarg();
+	if (!name) {
 		output("missing ifname");
 		return;
 	}
-	bzero(&nmr, sizeof(nmr));
-	nmr.nr_version = NETMAP_API;
-	strncpy(nmr.nr_name, arg, sizeof(nmr.nr_name));
+	strncpy(nmr.nr_name, name, sizeof(nmr.nr_name));
+
+	arg = nextarg();
+	fd = arg ? atoi(arg) : last_fd;
 
 	ret = ioctl(fd, NIOCREGIF, &nmr);
-	output_err(ret, "ioctl(%d, NIOCREGIF) for %s =%d", fd, arg, ret);
+	output_err(ret, "ioctl(%d, NIOCREGIF) for %s =%d", fd, name, ret);
 }
 
 void do_unregif()
@@ -180,24 +180,23 @@ void do_unregif()
 	int ret;
 	char *arg;
 	int fd;
+	char *name;
 
-	arg = nextarg();
-	if (!arg) {
-		output("missing fd");
-		return;
-	}
-	fd = atoi(arg);
-	arg = nextarg();
-	if (!arg) {
+	bzero(&nmr, sizeof(nmr));
+	nmr.nr_version = NETMAP_API;
+
+	name = nextarg();
+	if (!name) {
 		output("missing ifname");
 		return;
 	}
-	bzero(&nmr, sizeof(nmr));
-	nmr.nr_version = NETMAP_API;
-	strncpy(nmr.nr_name, arg, sizeof(nmr.nr_name));
+	strncpy(nmr.nr_name, name, sizeof(nmr.nr_name));
+	arg = nextarg();
+
+	fd = arg ? atoi(arg) : last_fd;
 
 	ret = ioctl(fd, NIOCUNREGIF, &nmr);
-	output_err(ret, "ioctl(%d, NIOCUNREGIF) for %s =%d", fd, arg, ret);
+	output_err(ret, "ioctl(%d, NIOCUNREGIF) for %s =%d", fd, name, ret);
 }
 
 volatile char tmp1;
@@ -215,7 +214,6 @@ void do_access()
 
 void do_mmap()
 {
-	void *mmap_addr;
 	size_t memsize;
 	off_t off = 0;
 	int fd;
@@ -223,27 +221,28 @@ void do_mmap()
 
 	arg = nextarg();
 	if (!arg) {
-		output("missing memsize");
-		return;
+		memsize = last_memsize;
+		fd = last_fd;
+		goto doit;
 	}
 	memsize = atoi(arg);
 	arg = nextarg();
 	if (!arg) {
-		output("missing fd");
-		return;
+		fd = last_fd;
+		goto doit;
 	}
 	fd = atoi(arg);
 	arg = nextarg();
 	if (arg) {
 		off = (off_t)atol(arg);
 	}
-
-	mmap_addr = mmap(0, memsize,
+doit:
+	last_mmap_addr = mmap(0, memsize,
 			PROT_WRITE | PROT_READ,
 			MAP_SHARED, fd, off);
-	output_err(mmap_addr == MAP_FAILED ? -1 : 0,
+	output_err(last_mmap_addr == MAP_FAILED ? -1 : 0,
 		"mmap(0, %zu, PROT_WRITE|PROT_READ, MAP_SHARED, %d, %jd)=%p",
-		memsize, fd, (intmax_t)off, mmap_addr);
+		memsize, fd, (intmax_t)off, last_mmap_addr);
 
 }
 
@@ -256,19 +255,141 @@ void do_munmap()
 
 	arg = nextarg();
 	if (!arg) {
-		output("missing address");
-		return;
+		mmap_addr = last_mmap_addr;
+		memsize = last_memsize;
+		goto doit;
 	}
 	mmap_addr = (void*)strtoul(arg, NULL, 0);
 	arg = nextarg();
 	if (!arg) {
-		output("missing memsize");
-		return;
+		memsize = last_memsize;
+		goto doit;
 	}
 	memsize = (size_t)strtoul(arg, NULL, 0);
+doit:
 	ret = munmap(mmap_addr, memsize);
 	output_err(ret, "munmap(%p, %zu)=%d", mmap_addr, memsize, ret);
 }
+
+void do_poll()
+{
+	/* timeout fd fd... */
+	nfds_t nfds = 0, allocated_fds = 10, i;
+	struct pollfd *fds;
+	int timeout = 500; /* 1/2 second */
+	char *arg;
+	int ret;
+
+	arg = nextarg();
+	if (arg)
+		timeout = atoi(arg);
+	fds = malloc(allocated_fds * sizeof(struct pollfd));
+	if (fds == NULL) {
+		output_err(-1, "out of memory");
+		return;
+	}
+	while ( (arg = nextarg()) ) {
+		if (nfds >= allocated_fds) {
+			allocated_fds *= 2;
+			fds = realloc(fds, allocated_fds * sizeof(struct pollfd));
+			if (fds == NULL) {
+				output_err(-1, "out of memory");
+				return;
+			}
+		}
+		fds[nfds].fd = atoi(arg);
+		fds[nfds].events = POLLIN;
+		nfds++;
+	}
+	ret = poll(fds, nfds, timeout);
+	for (i = 0; i < nfds; i++) {
+		output("poll(%d)=%s%s%s%s%s", fds[i].fd, 
+			(fds[i].revents & POLLIN) ? "IN  " : "-   ",
+			(fds[i].revents & POLLOUT)? "OUT " : "-   ",
+			(fds[i].revents & POLLERR)? "ERR " : "-   ",
+			(fds[i].revents & POLLHUP)? "HUP " : "-   ",
+			(fds[i].revents & POLLNVAL)?"NVAL" : "-");
+
+	}
+	output_err(ret, "poll(...)=%d", ret);
+	free(fds);
+}
+
+void
+do_txsync()
+{
+	char *arg = nextarg();
+	int fd = arg ? atoi(arg) : last_fd;
+	int ret = ioctl(fd, NIOCTXSYNC, NULL);
+	output_err(ret, "ioctl(%d, NIOCTXSYNC)=%d", fd, ret);
+}
+
+void
+do_rxsync()
+{
+	char *arg = nextarg();
+	int fd = arg ? atoi(arg) : last_fd;
+	int ret = ioctl(fd, NIOCRXSYNC, NULL);
+	output_err(ret, "ioctl(%d, NIOCRXSYNC)=%d", fd, ret);
+}
+
+void
+do_expr()
+{
+	unsigned long stack[11];
+	int top = 10;
+	char *arg;
+	int err = 0;
+
+	stack[10] = ULONG_MAX;
+	while ( (arg = nextarg()) ) {
+		errno = 0;
+		char *rest;
+		unsigned long n = strtoul(arg, &rest, 0);
+		if (!errno && rest != arg) {
+			if (top <= 0) {
+				err = -1;
+				break;
+			}
+			stack[--top] = n;
+			continue;
+		}
+		if (top <= 8) {
+			unsigned long n1 = stack[top++];
+			unsigned long n2 = stack[top++];
+			unsigned long r = 0;
+			switch (arg[0]) {
+			case '+':
+				r = n1 + n2;
+				break;
+			case '-':
+				r = n1 - n2;
+				break;
+			case '*':
+				r = n1 * n2;
+				break;
+			case '/':
+				if (n2)
+					r = n1 / n2;
+				else {
+					errno = EDOM;
+					err = -1;
+				}
+				break;
+			default:
+				err = -1;
+				break;
+			}
+			stack[--top] = r;
+			continue;
+		}
+		err = -1;
+		break;
+	}
+	output_err(err, "expr=%lu", stack[top]);
+}
+				
+			
 
 void
 do_echo()
@@ -326,6 +447,22 @@ struct cmd_def commands[] = {
 	{
 		.name = "munmap",
 		.f    = do_munmap,
+	},
+	{
+		.name = "poll",
+		.f    = do_poll,
+	},
+	{
+		.name = "txsync",
+		.f    = do_txsync,
+	},
+	{
+		.name = "rxsync",
+		.f    = do_rxsync,
+	},
+	{
+		.name = "expr",
+		.f    = do_expr,
 	},
 	{
 		.name = "echo",
@@ -448,7 +585,10 @@ cmd_loop()
 				goto clean1;
 			case 0:
 				fclose(stdin);
-				dup(p1[0]);
+				if (dup(p1[0]) < 0) {
+					output_err(-1, "dup");
+					exit(1);
+				}
 				close(p1[1]);
 				stdin = fdopen(0, "r");
 				chan_clear_all(channels, MAX_CHAN);
