@@ -195,7 +195,10 @@ typedef unsigned int (d_poll_t)(struct file * file, struct poll_table_struct *pw
  * This relies on the availability of the 'error' local variable.
  */
 #define make_dev(_cdev, _zero, _uid, _gid, _perm, _name)	\
-	({error = misc_register(_cdev); _cdev; } )
+	({error = misc_register(_cdev);				\
+	D("run mknod /dev/%s c %d %d # error %d",		\
+	    (_cdev)->name, MISC_MAJOR, (_cdev)->minor, error);	\
+	 _cdev; } )
 #define destroy_dev(_cdev)	misc_deregister(_cdev)
 
 /*--- sysctl API ----*/
