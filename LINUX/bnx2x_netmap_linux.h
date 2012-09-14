@@ -35,15 +35,7 @@
 #include <netmap/netmap_kern.h>
 #define SOFTC_T	bnx2x
 
-/*
- * Adaptation to various version of the driver.
- * Recent drivers (3.4 and above) redefine some macros
- */
-#ifndef	IXGBE_TX_DESC_ADV
-#define	IXGBE_TX_DESC_ADV	IXGBE_TX_DESC
-#define	IXGBE_RX_DESC_ADV	IXGBE_RX_DESC
-#endif
-
+#ifdef NETMAP_BNX2X_MAIN
 /*
  * Register/unregister. We are already under core lock.
  * Only called on the first register or the last unregister.
@@ -311,9 +303,8 @@ ring_reset:
 static int
 bnx2x_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 {
-#if 0
 	struct SOFTC_T *adapter = netdev_priv(ifp);
-	struct ixgbe_ring *rxr = adapter->rx_ring[ring_nr];
+	struct bnx2x_fastpath *rxr = &adapter->fp[ring_nr];
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
@@ -342,6 +333,7 @@ bnx2x_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 *
 	 * rxr->next_to_check is set to 0 on a ring reinit
 	 */
+#if 0
 	l = rxr->next_to_clean;
 	j = netmap_idx_n2k(kring, l);
 
@@ -533,7 +525,11 @@ bnx2x_netmap_attach(struct SOFTC_T *adapter)
 	na.nm_txsync = bnx2x_netmap_txsync;
 	na.nm_rxsync = bnx2x_netmap_rxsync;
 	na.nm_register = bnx2x_netmap_reg;
-	na.num_tx_rings = dev->num_tx_queues;
-	netmap_attach(&na, dev->num_rx_queues);
+	/* same number of tx and rx queues. queue 0 is somewhat special
+	 * but we still cosider it. If FCOE is supported, the last hw
+	 * queue is used for it.
+ 	 */
+	netmap_attach(&na, BNX2X_NUM_ETH_QUEUES(adapter));
 }
+#endif /* NETMAP_BNX2X_MAIN */
 /* end of file */

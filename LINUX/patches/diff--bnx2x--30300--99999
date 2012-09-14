@@ -1,12 +1,59 @@
+diff -urp /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/broadcom/bnx2x/bnx2x_cmn.c bnx2x/bnx2x_cmn.c
+--- /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/broadcom/bnx2x/bnx2x_cmn.c	2012-09-11 20:50:55.812622063 -0700
++++ bnx2x/bnx2x_cmn.c	2012-09-13 17:02:50.860722068 -0700
+@@ -30,6 +30,9 @@
+ #include "bnx2x_sp.h"
+ 
+ 
++#if defined(CONFIG_NETMAP) || defined(CONFIG_NETMAP_MODULE)
++#include <bnx2x_netmap_linux.h>	/* extern stuff */
++#endif /* CONFIG_NETMAP */
+ 
+ /**
+  * bnx2x_move_fp - move content of the fastpath structure.
+@@ -142,6 +145,11 @@ int bnx2x_tx_int(struct bnx2x *bp, struc
+ 		return -1;
+ #endif
+ 
++#ifdef DEV_NETMAP
++	if (netmap_tx_irq(bp->dev, txdata->txq_index))
++		return 1; /* seems to be ignored */
++#endif /* DEV_NETMAP */
++
+ 	txq = netdev_get_tx_queue(bp->dev, txdata->txq_index);
+ 	hw_cons = le16_to_cpu(*txdata->tx_cons_sb);
+ 	sw_cons = txdata->tx_pkt_cons;
+@@ -602,6 +610,11 @@ int bnx2x_rx_int(struct bnx2x_fastpath *
+ 		return 0;
+ #endif
+ 
++#ifdef DEV_NETMAP
++	if (netmap_rx_irq(bp->dev, fp->index, &rx_pkt))
++		return true; /* no more interrupts */
++#endif /* DEV_NETMAP */
++
+ 	/* CQ "next element" is of the size of the regular element,
+ 	   that's why it's ok here */
+ 	hw_comp_cons = le16_to_cpu(*fp->rx_cons_sb);
 diff -urp /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/broadcom/bnx2x/bnx2x_main.c bnx2x/bnx2x_main.c
 --- /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/broadcom/bnx2x/bnx2x_main.c	2012-09-11 20:50:55.822622214 -0700
-+++ bnx2x/bnx2x_main.c	2012-09-13 14:13:50.925531254 -0700
-@@ -599,6 +599,13 @@ static u64 bnx2x_wb_rd(struct bnx2x *bp,
++++ bnx2x/bnx2x_main.c	2012-09-13 16:56:05.774101803 -0700
+@@ -599,6 +599,23 @@ static u64 bnx2x_wb_rd(struct bnx2x *bp,
  }
  #endif
  
 +
 +#if defined(CONFIG_NETMAP) || defined(CONFIG_NETMAP_MODULE)
++/*
++ * This driver is made of multiple files so the netmap header
++ * is included here, and child routines get the prototypes etc.
++ *
++ * Intercept points:
++ * - for RX and TX interrupts, modify bnx2x_tx_int() and bnx2x_rx_int()
++ *   same as it is done on the ixgbe. (bnx2x_cmn.c)
++ *
++ */
++#define NETMAP_BNX2X_MAIN
 +#include <bnx2x_netmap_linux.h>
 +#else
 +#error --- normal compilation
@@ -15,7 +62,7 @@ diff -urp /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/bro
  static int bnx2x_mc_assert(struct bnx2x *bp)
  {
  	char last_idx;
-@@ -11227,6 +11234,9 @@ static int __devinit bnx2x_init_one(stru
+@@ -11227,6 +11244,9 @@ static int __devinit bnx2x_init_one(stru
  	            pcie_speed == 2 ? "5GHz (Gen2)" : "2.5GHz",
  		    dev->base_addr, bp->pdev->irq, dev->dev_addr);
  
