@@ -299,6 +299,25 @@ ring_reset:
  * and set kring->nr_hwcur = ring->cur and ring->avail = kring->nr_hwavail.
  *
  * do_lock has a special meaning: please refer to txsync.
+
+Broadcom:
+
+the software keeps two sets of producer and consumer indexes:
+one in the completion queue (fp->rx_comp_cons, fp->rx_comp_prod)
+and one in the buffer descriptors (fp->rx_bd_cons, fp->rx_bd_prod).
+
+The processing loop iterates on the completion queue, and
+buffers are consumed only after 'fastpath' events.
+
+The hardware reports the first empty slot through
+(*fp->rx_cons_sb) (skipping the link field).
+
+20120913
+The code in bnx2x_rx_int() has a strange thing, it keeps
+two running counters bd_prod and bd_prod_fw which are
+apparently the same.
+
+
  */
 static int
 bnx2x_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
