@@ -736,12 +736,16 @@ netmap_memory_finalize(void)
 	}
 
 out:
+	if (nm_mem.lasterr)
+		nm_mem.refcount--;
+
 	return nm_mem.lasterr;
 
 cleanup:
 	for (i = 0; i < NETMAP_POOLS_NR; i++) {
 		netmap_reset_obj_allocator(&nm_mem.pools[i]);
 	}
+	nm_mem.refcount--;
 
 	return nm_mem.lasterr;
 }

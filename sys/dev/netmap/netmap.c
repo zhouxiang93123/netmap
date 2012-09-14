@@ -325,8 +325,9 @@ netmap_get_memory(struct netmap_priv_d* p)
 	int error = 0;
 	NMA_LOCK();
 	if (!p->ref_done) {
-		p->ref_done = 1;
 		error = netmap_memory_finalize();
+		if (!error)
+			p->ref_done = 1;
 	}
 	NMA_UNLOCK();
 	return error;
