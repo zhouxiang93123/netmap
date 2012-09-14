@@ -98,13 +98,41 @@ bnx2x_netmap_reg(struct ifnet *ifp, int onoff)
  * do_lock is set iff the function is called from the ioctl handler.
  * In this case, grab a lock around the body, and also reclaim transmitted
  * buffers irrespective of interrupt mitigation.
+
+Broadcom: the tx routine is bnx2x_start_xmit()
+skbs are mapped to certain queues through skb_get_queue_mapping
+       txq_index = skb_get_queue_mapping(skb);
+        txq = netdev_get_tx_queue(dev, txq_index);
+
+        BUG_ON(txq_index >= MAX_ETH_TXQ_IDX(bp) + FCOE_PRESENT);
+
+each 'fp' has MAX_TXQS_PER_COS entries (16 on the E1 hardware)
+so txq_index is partitioned into high and low bits.
+Presumably some cards have BNX2X_MULTI_TX_COS+1 (3) 
+tx units on each fastpath ?
+
+        // decode the fastpath index and the cos index from the txq
+        fp_index = TXQ_TO_FP(txq_index);A		// low bits
+        txdata_index = TXQ_TO_COS(txq_index);		// high bits
+
+	struct bnx2x_fastpath *fp = &bp->fp[fp_index];
+	struct bnx2x_fp_txdata *txdata = &fp->txdata[txdata_index];
+
+
+make sure that slots are available through
+	struct bnx2x *bp = netdev_priv(dev);
+	bnx2x_tx_avail(bp, txdata)
+
+We operate under the assumption that we use only the first
+set of queues.
+
  */
 static int
 bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 {
-#if 0
 	struct SOFTC_T *adapter = netdev_priv(ifp);
-	struct ixgbe_ring *txr = adapter->tx_ring[ring_nr];
+	struct bnx2x_fastpath *fp = &adapter->fp[ring_nr];
+	struct bnx2x_fp_txdata *txr = &fp->txdata[0];
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
@@ -139,6 +167,7 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 * drivers it might be negative as well.
 	 */
 	j = kring->nr_hwcur;
+#if 0
 	if (j != k) {	/* we have new packets to send */
 		l = netmap_idx_k2n(kring, j);
 		for (n = 0; j != k; n++) {
@@ -301,6 +330,8 @@ ring_reset:
  * do_lock has a special meaning: please refer to txsync.
 
 Broadcom:
+
+see bnx2x_cmn.c :: bnx2x_rx_int()
 
 the software keeps two sets of producer and consumer indexes:
 one in the completion queue (fp->rx_comp_cons, fp->rx_comp_prod)
