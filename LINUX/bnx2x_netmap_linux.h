@@ -27,6 +27,10 @@
  * $Id: bnx2x_netmap_linux.h $
  *
  * netmap support for bnx2x (LINUX version)
+ *
+ * The programming manual is publicly available at
+ *	http://www.broadcom.com/collateral/pg/57710_57711-PG200-R.pdf
+ *	http://www.broadcom.com/collateral/pg/57XX-PG105-R.pdf
  */
 
 
@@ -100,29 +104,43 @@ bnx2x_netmap_reg(struct ifnet *ifp, int onoff)
  * buffers irrespective of interrupt mitigation.
 
 Broadcom: the tx routine is bnx2x_start_xmit()
-skbs are mapped to certain queues through skb_get_queue_mapping
-	txq_index = skb_get_queue_mapping(skb);
-        txq = netdev_get_tx_queue(dev, txq_index);
 
-        BUG_ON(txq_index >= MAX_ETH_TXQ_IDX(bp) + FCOE_PRESENT);
+The card has 16 hardware queues ("fastpath contexts"),
+each possibly with several "Class of Service" (COS) queues.
+(the data sheet says up to 16, but the software seems to use 4).
+The linux driver numbers queues 0..15 for COS=0, 16..31 for COS=1,
+and so on. The low 4 bits are used to indicate the fastpath context.
 
-each 'fp' has MAX_TXQS_PER_COS entries (16 on the E1 hardware)
-so txq_index is partitioned into high and low bits.
-Presumably some cards have BNX2X_MULTI_TX_COS+1 (3) 
-tx units on each fastpath ?
+The tx ring is made of one or more pages containing Buffer Descriptors (BD)
+each 16-byte long (NOTE: different from the rx side). The last BD in a page
+(also 16 bytes) points to the next page (8 for physical address + 8 reserved bytes).
+These page are presumably contiguous in virtual address space so all it takes
+is to skip the reserved entries when we reach the last entry on the page
+(MAX_TX_DESC_CNT - 1, or 255).
 
-        // decode the fastpath index and the cos index from the txq
-        fp_index = TXQ_TO_FP(txq_index);A		// low bits
-        txdata_index = TXQ_TO_COS(txq_index);		// high bits
+Unlike the standard driver we can limit ourselves to a single BD per packet.
+The driver differs from the documentation. In particular the END_BD flag
+seems not to exist anymore, presumably the firmware can derive the number
+of buffers from the START_BD flag plus nbd.
+It is unclear from the docs whether we can have only one BD per packet 
+The field to initialize are (all in LE format)
+	addr_lo, addr_hi	LE32, physical buffer address
+	nbytes			LE16, packet size
+	vlan			LE16 ?? producer index ???
+	nbd			L8 1 only one buffer
+	bd_flags.as_bitfield	L8 START_BD XXX no END_BD, derived from the nbd field ?
+	general_data		L8 0 0..5: header_nbd; 6-7: ethernet_type
 
-	struct bnx2x_fastpath *fp = &bp->fp[fp_index];
-	struct bnx2x_fp_txdata *txdata = &fp->txdata[txdata_index];
+and once we are done 'ring the doorbell' which presumably tells the NIC
+to look at further buffers in the tx queue.
+The doorbell is just a write to a register which includes which
+'fastpath' context (i.e. set of queues) to look at.
 
-from here we have the HOST ring tx_buf_ring, and the NIC RING tx_desc_ring
+	struct bnx2x_fastpath *fp = &bp->fp[ring_nr % 16];
+	struct bnx2x_fp_txdata *txdata = &fp->txdata[ring_nr / 16];
 
-make sure that slots are available through
-	struct bnx2x *bp = netdev_priv(dev);
-	bnx2x_tx_avail(bp, txdata)
+In txdata, The HOST ring is tx_buf_ring, and the NIC RING tx_desc_ring,
+cid is the 'context id' or ring_nr % 16 .
 
 We operate under the assumption that we use only the first
 set of queues.
@@ -139,13 +157,6 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k = ring->cur, l, n, lim = kring->nkr_num_slots - 1;
 
-	/*
-	 * ixgbe can generate an interrupt on every tx packet, but it
-	 * seems very expensive, so we interrupt once every half ring,
-	 * or when requested with NS_REPORT
-	 */
-	int report_frequency = kring->nkr_num_slots >> 1;
-
 	/* if cur is invalid reinitialize the ring. */
 	if (k > lim)
 		return netmap_ring_reinit(kring);
@@ -160,29 +171,14 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 * For the transmit ring, we have
 	 *
 	 *		j = kring->nr_hwcur
-	 *		l = IXGBE_TDT (not tracked in the driver)
+	 *		l = ... (also txdata->tx_bd_prod;)
 	 * and
 	 * 		j == (l + kring->nkr_hwofs) % ring_size
-	 *
-	 * In this driver kring->nkr_hwofs >= 0, but for other
-	 * drivers it might be negative as well.
 	 */
 	j = kring->nr_hwcur;
 	if (j != k) {	/* we have new packets to send */
 		l = netmap_idx_k2n(kring, j);
-		// l should be same as txdata->tx_bd_prod;
 		for (n = 0; j != k; n++) {
-			/*
-			 * Collect per-slot info.
-			 * Note that txbuf and curr are indexed by l.
-			 *
-			 * In this driver we collect the buffer address
-			 * (using the PNMB() macro) because we always
-			 * need to rewrite it into the NIC ring.
-			 * Many other drivers preserve the address, so
-			 * we only need to access it if NS_BUF_CHANGED
-			 * is set.
-			 */
 			struct netmap_slot *slot = &ring->slot[j];
 			struct eth_tx_start_bd *tx_start_bd =
 				&txdata->tx_desc_ring[l].start_bd;
@@ -217,10 +213,11 @@ ring_reset:
 			 * address in the NIC ring. Other drivers do not
 			 * need this.
 			 */
+
 			tx_start_bd->bd_flags.as_bitfield = ETH_TX_BD_FLAGS_START_BD;
 			tx_start_bd->vlan_or_ethertype = cpu_to_le16(l);	// XXX producer index
-			tx_start_bd->addr_hi = cpu_to_le32(U64_HI(paddr));
 			tx_start_bd->addr_lo = cpu_to_le32(U64_LO(paddr));
+			tx_start_bd->addr_hi = cpu_to_le32(U64_HI(paddr));
 			tx_start_bd->nbytes = cpu_to_le16(len);
 			tx_start_bd->nbd = cpu_to_le16(1);
 		{
@@ -237,16 +234,17 @@ ring_reset:
 			SET_FLAG(tx_start_bd->general_data, ETH_TX_START_BD_ETH_ADDR_TYPE, mac_type);
 		}
 
-			SET_FLAG(tx_start_bd->general_data, ETH_TX_START_BD_HDR_NBDS, 1);
+			SET_FLAG(tx_start_bd->general_data, ETH_TX_START_BD_HDR_NBDS, 0); // XXX no header
 
 			/* XXX set len */
 			j = (j == lim) ? 0 : j + 1;
-			l = (l == lim) ? 0 : l + 1;
+			l = TX_BD(NEXT_TX_IDX(l)); // skip link fields.
 		}
 		kring->nr_hwcur = k; /* the saved ring->cur */
 		/* decrease avail by number of packets  sent */
 		kring->nr_hwavail -= n;
 		txdata->tx_bd_prod = l; // XXX not strictly necessary
+	 	/* XXX adjust kring->nkr_hwofs) */
 
 		wmb();	/* synchronize writes to the NIC ring */
 		/* (re)start the transmitter up to slot l (excluded) */
@@ -270,23 +268,18 @@ ring_reset:
 
 		/*
 		 * Record completed transmissions.
-		 * We (re)use the driver's txr->next_to_clean to keep
+		 * The card writes the current index in memory in
+		 * 	le16_to_cpu(*txdata->tx_cons_sb);
+		 * We (re)use the driver's txr->tx_pkt_cons to keep
 		 * track of the most recently completed transmission.
-		 *
-		 * The datasheet discourages the use of TDH to find out the
-		 * number of sent packets. We should rather check the DD
-		 * status bit in a packet descriptor. However, we only set
-		 * the "report status" bit for some descriptors (a kind of
-		 * interrupt mitigation), so we can only check on those.
-		 * For the time being we use TDH, as we do it infrequently
-		 * enough not to pose performance problems.
+		 * XXX check whether the hw reports buffers or bd.
 		 */
-		l = 0; // XXX IXGBE_READ_REG(&adapter->hw, IXGBE_TDH(ring_nr));
+		l = le16_to_cpu(*txdata->tx_cons_sb);
 		if (l >= kring->nkr_num_slots) { /* XXX can happen */
 			D("TDH wrap %d", l);
 			l -= kring->nkr_num_slots;
 		}
-		delta = l - txdata->tx_bd_cons;
+		delta = l - txdata->tx_pkt_cons; // XXX buffers, not slots
 		if (delta) {
 			/* some tx completed, increment hwavail. */
 			if (delta < 0)
@@ -354,6 +347,9 @@ bnx2x_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;
 	int force_update = do_lock || kring->nr_kflags & NKR_PENDINTR;
 	u_int k = ring->cur, resvd = ring->reserved;
+	uint16_t hw_comp_cons, sw_comp_cons;
+
+
 
 	if (k > lim) /* userspace is cheating */
 		return netmap_ring_reinit(kring);
@@ -376,23 +372,36 @@ bnx2x_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 *
 	 * rxr->next_to_check is set to 0 on a ring reinit
 	 */
-#if 0
-	l = rxr->next_to_clean;
-	j = netmap_idx_n2k(kring, l);
+
+	/* scan the completion queue to see what is going on.
+	 * Note that we do not use l here.
+	 */
+	sw_comp_cons = RCQ_BD(rxr->rx_comp_cons);
+	l = rxr->rx_bd_cons;
+	j = netmap_idx_n2k(kring, j);
+	hw_comp_cons = le16_to_cpu(*rxr->rx_cons_sb);
+	if ((hw_comp_cons & MAX_RCQ_DESC_CNT) == MAX_RCQ_DESC_CNT)
+		hw_comp_cons++;
+
+	rmb(); // XXX
 
 	if (netmap_no_pendintr || force_update) {
-		for (n = 0; ; n++) {
-			union ixgbe_adv_rx_desc *curr = IXGBE_RX_DESC_ADV(rxr, l);
-			uint32_t staterr = le32toh(curr->wb.upper.status_error);
+		n = 0;
+		for (n = 0; sw_comp_cons != hw_comp_cons; sw_comp_cons = RCQ_BD(NEXT_RCQ_IDX(sw_comp_cons)) ) {
+			union eth_rx_cqe *cqe = &rxr->rx_comp_ring[l];
+			struct eth_fast_path_rx_cqe *cqe_fp = &cqe->fast_path_cqe;
+			// XXX fetch event, process slowpath as in the main driver,
+			if (1 /* slowpath */)
+				continue;
+			ring->slot[j].len = le16_to_cpu(cqe_fp->pkt_len_or_gro_seg_len);
 
-			if ((staterr & IXGBE_RXD_STAT_DD) == 0)
-				break;
-			ring->slot[j].len = le16toh(curr->wb.upper.length);
+			l = NEXT_RX_IDX(l);
 			j = (j == lim) ? 0 : j + 1;
-			l = (l == lim) ? 0 : l + 1;
+			n++;
 		}
 		if (n) { /* update the state variables */
-			rxr->next_to_clean = l;
+			rxr->rx_comp_cons = sw_comp_cons; // XXX adjust nkr_hwofs
+			rxr->rx_bd_cons = l; // XXX adjust nkr_hwofs
 			kring->nr_hwavail += n;
 		}
 		kring->nr_kflags &= ~NKR_PENDINTR;
@@ -414,6 +423,7 @@ bnx2x_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		k = (k >= resvd) ? k - resvd : k + lim + 1 - resvd;
 	}
 	if (j != k) { /* userspace has released some packets. */
+		uint16_t sw_comp_prod = 0; // XXX
 		l = netmap_idx_k2n(kring, j);
 		for (n = 0; j != k; n++) {
 			/* collect per-slot info, with similar validations
@@ -424,6 +434,7 @@ bnx2x_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			 * address in the NIC ring, but other drivers
 			 * may not have this requirement.
 			 */
+#if 0 // XXX
 			struct netmap_slot *slot = &ring->slot[j];
 			union ixgbe_adv_rx_desc *curr = IXGBE_RX_DESC_ADV(rxr, l);
 			uint64_t paddr;
@@ -438,18 +449,17 @@ bnx2x_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			}
 			curr->wb.upper.status_error = 0;
 			curr->read.pkt_addr = htole64(paddr);
+#endif // XXX
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
 		}
 		kring->nr_hwavail -= n;
 		kring->nr_hwcur = k;
-		rxr->next_to_use = l; // XXX not really used
+		// XXXX cons = ...
 		wmb();
-		/* IMPORTANT: we must leave one free slot in the ring,
-		 * so move l back by one unit
-		 */
-		l = (l == 0) ? lim : l - 1;
-		IXGBE_WRITE_REG(&adapter->hw, IXGBE_RDT(rxr->reg_idx), l);
+		/* Update producers */
+		bnx2x_update_rx_prod(adapter, rxr, l, sw_comp_prod,
+				     rxr->rx_sge_prod);
 	}
 	/* tell userspace that there are new packets */
 	ring->avail = kring->nr_hwavail - resvd;
@@ -462,8 +472,6 @@ ring_reset:
 	if (do_lock)
 		mtx_unlock(&kring->q_lock);
 	return netmap_ring_reinit(kring);
-#endif // 0
-	return 0;
 }
 
 
