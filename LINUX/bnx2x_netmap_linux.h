@@ -101,7 +101,7 @@ bnx2x_netmap_reg(struct ifnet *ifp, int onoff)
 
 Broadcom: the tx routine is bnx2x_start_xmit()
 skbs are mapped to certain queues through skb_get_queue_mapping
-       txq_index = skb_get_queue_mapping(skb);
+	txq_index = skb_get_queue_mapping(skb);
         txq = netdev_get_tx_queue(dev, txq_index);
 
         BUG_ON(txq_index >= MAX_ETH_TXQ_IDX(bp) + FCOE_PRESENT);
@@ -118,6 +118,7 @@ tx units on each fastpath ?
 	struct bnx2x_fastpath *fp = &bp->fp[fp_index];
 	struct bnx2x_fp_txdata *txdata = &fp->txdata[txdata_index];
 
+from here we have the HOST ring tx_buf_ring, and the NIC RING tx_desc_ring
 
 make sure that slots are available through
 	struct bnx2x *bp = netdev_priv(dev);
@@ -132,7 +133,7 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 {
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct bnx2x_fastpath *fp = &adapter->fp[ring_nr];
-	struct bnx2x_fp_txdata *txr = &fp->txdata[0];
+	struct bnx2x_fp_txdata *txdata = &fp->txdata[0];
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
@@ -167,9 +168,9 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 * drivers it might be negative as well.
 	 */
 	j = kring->nr_hwcur;
-#if 0
 	if (j != k) {	/* we have new packets to send */
 		l = netmap_idx_k2n(kring, j);
+		// l should be same as txdata->tx_bd_prod;
 		for (n = 0; j != k; n++) {
 			/*
 			 * Collect per-slot info.
@@ -183,14 +184,12 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			 * is set.
 			 */
 			struct netmap_slot *slot = &ring->slot[j];
-			union ixgbe_adv_tx_desc *curr = IXGBE_TX_DESC_ADV(txr, l);
+			struct eth_tx_start_bd *tx_start_bd =
+				&txdata->tx_desc_ring[l].start_bd;
+			
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
-			// XXX type for flags and len ?
-			int flags = ((slot->flags & NS_REPORT) ||
-				j == 0 || j == report_frequency) ?
-					IXGBE_TXD_CMD_RS : 0;
-			u_int len = slot->len;
+			uint16_t len = slot->len;
 
 			/*
 			 * Quick check for valid addr and len.
@@ -218,24 +217,40 @@ ring_reset:
 			 * address in the NIC ring. Other drivers do not
 			 * need this.
 			 */
-			curr->read.buffer_addr = htole64(paddr);
-			curr->read.olinfo_status = htole32(len << IXGBE_ADVTXD_PAYLEN_SHIFT);
-			curr->read.cmd_type_len =
-			    htole32( len |
-				(IXGBE_ADVTXD_DTYP_DATA |
-				    IXGBE_ADVTXD_DCMD_DEXT |
-				    IXGBE_ADVTXD_DCMD_IFCS |
-				    IXGBE_TXD_CMD_EOP | flags) );
+			tx_start_bd->bd_flags.as_bitfield = ETH_TX_BD_FLAGS_START_BD;
+			tx_start_bd->vlan_or_ethertype = cpu_to_le16(l);	// XXX producer index
+			tx_start_bd->addr_hi = cpu_to_le32(U64_HI(paddr));
+			tx_start_bd->addr_lo = cpu_to_le32(U64_LO(paddr));
+			tx_start_bd->nbytes = cpu_to_le16(len);
+			tx_start_bd->nbd = cpu_to_le16(1);
+		{
+			int mac_type = UNICAST_ADDRESS;
+#if 0 // XXX
+			if (unlikely(is_multicast_ether_addr(eth->h_dest))) {
+				if (is_broadcast_ether_addr(eth->h_dest))
+					mac_type = BROADCAST_ADDRESS;
+				else
+					mac_type = MULTICAST_ADDRESS;
+			}
+#endif // XXX
+			
+			SET_FLAG(tx_start_bd->general_data, ETH_TX_START_BD_ETH_ADDR_TYPE, mac_type);
+		}
+
+			SET_FLAG(tx_start_bd->general_data, ETH_TX_START_BD_HDR_NBDS, 1);
+
+			/* XXX set len */
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
 		}
 		kring->nr_hwcur = k; /* the saved ring->cur */
 		/* decrease avail by number of packets  sent */
 		kring->nr_hwavail -= n;
+		txdata->tx_bd_prod = l; // XXX not strictly necessary
 
 		wmb();	/* synchronize writes to the NIC ring */
 		/* (re)start the transmitter up to slot l (excluded) */
-		IXGBE_WRITE_REG(&adapter->hw, IXGBE_TDT(txr->reg_idx), l);
+		DOORBELL(adapter, txdata->cid, txdata->tx_db.raw);
 	}
 
 	/*
@@ -247,29 +262,8 @@ ring_reset:
 	 */
 	if (do_lock) {
 		j = 1; /* forced reclaim, ignore interrupts */
-		kring->nr_kflags = kring->nkr_num_slots;
-	} else if (kring->nr_hwavail > 0) {
-		j = 0; /* buffers still available: no reclaim, ignore intr. */
-		kring->nr_kflags = kring->nkr_num_slots;
 	} else {
-		/*
-		 * no buffers available, locate a slot for which we request
-		 * ReportStatus (approximately half ring after next_to_clean)
-		 * and record it in kring->nr_kflags.
-		 * If the slot has DD set, do the reclaim looking at TDH,
-		 * otherwise we go to sleep (in netmap_poll()) and will be
-		 * woken up when slot nr_kflags will be ready.
-		 */
-		union ixgbe_adv_tx_desc *txd = IXGBE_TX_DESC_ADV(txr, 0);
-
-		j = txr->next_to_clean + kring->nkr_num_slots/2;
-		if (j >= kring->nkr_num_slots)
-			j -= kring->nkr_num_slots;
-		// round to the closest with dd set
-		j= (j < kring->nkr_num_slots / 4 || j >= kring->nkr_num_slots*3/4) ?
-			0 : report_frequency;
-		kring->nr_kflags = j; /* the slot to check */
-		j = txd[j].wb.status & IXGBE_TXD_STAT_DD;	// XXX cpu_to_le32 ?
+		j = 1; // for the time being, force reclaim 
 	}
 	if (j) {
 		int delta;
@@ -287,17 +281,17 @@ ring_reset:
 		 * For the time being we use TDH, as we do it infrequently
 		 * enough not to pose performance problems.
 		 */
-		l = IXGBE_READ_REG(&adapter->hw, IXGBE_TDH(ring_nr));
+		l = 0; // XXX IXGBE_READ_REG(&adapter->hw, IXGBE_TDH(ring_nr));
 		if (l >= kring->nkr_num_slots) { /* XXX can happen */
 			D("TDH wrap %d", l);
 			l -= kring->nkr_num_slots;
 		}
-		delta = l - txr->next_to_clean;
+		delta = l - txdata->tx_bd_cons;
 		if (delta) {
 			/* some tx completed, increment hwavail. */
 			if (delta < 0)
 				delta += kring->nkr_num_slots;
-			txr->next_to_clean = l;
+			txdata->tx_bd_cons = l;
 			kring->nr_hwavail += delta;
 			if (kring->nr_hwavail > lim)
 				goto ring_reset;
@@ -308,7 +302,6 @@ ring_reset:
 
 	if (do_lock)
 		mtx_unlock(&kring->q_lock);
-#endif // 0
 	return 0;
 }
 
