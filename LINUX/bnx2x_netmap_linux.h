@@ -355,7 +355,7 @@ bnx2x_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	u_int k = ring->cur, resvd = ring->reserved;
 	uint16_t hw_comp_cons, sw_comp_cons;
 
-D("start ring %d k %d lim %d", ring, k, lim);
+D("start ring %d k %d lim %d", ring_nr, k, lim);
 
 	if (k > lim) /* userspace is cheating */
 		return netmap_ring_reinit(kring);
