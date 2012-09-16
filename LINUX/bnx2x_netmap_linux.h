@@ -39,6 +39,8 @@
 #include <netmap/netmap_kern.h>
 #define SOFTC_T	bnx2x
 
+int bnx2x_netmap_ring_config(struct SOFTC_T *adapter, int ring_nr);
+
 #ifdef NETMAP_BNX2X_MAIN
 /*
  * Register/unregister. We are already under core lock.
@@ -53,8 +55,10 @@ bnx2x_netmap_reg(struct ifnet *ifp, int onoff)
 
 	if (na == NULL)
 		return EINVAL;	/* no netmap support here */
-	//rtnl_lock(); // XXX do we need it ?
+	rtnl_lock(); // XXX do we need it ?
+D("prepare to bnx2x_nic_unload");
 	bnx2x_nic_unload(adapter, UNLOAD_NORMAL);
+D("done bnx2x_nic_unload");
 
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
@@ -73,8 +77,10 @@ bnx2x_netmap_reg(struct ifnet *ifp, int onoff)
 		ifp->if_capenable &= ~IFCAP_NETMAP;
 		/* initialize the card, this time in standard mode */
 	}
+D("prepare to bnx2x_nic_load");
 	bnx2x_nic_load(adapter, LOAD_NORMAL);
-	//rtnl_unlock(); // XXX do we need it ?
+D("done bnx2x_nic_load");
+	rtnl_unlock(); // XXX do we need it ?
 	return (error);
 }
 
@@ -349,7 +355,7 @@ bnx2x_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	u_int k = ring->cur, resvd = ring->reserved;
 	uint16_t hw_comp_cons, sw_comp_cons;
 
-
+D("start ring %d k %d lim %d", ring, k, lim);
 
 	if (k > lim) /* userspace is cheating */
 		return netmap_ring_reinit(kring);
@@ -479,8 +485,8 @@ ring_reset:
  * if in netmap mode, attach the netmap buffers to the ring and return true.
  * Otherwise return false.
  */
-static int
-bnx2x_netmap_configure_tx_ring(struct SOFTC_T *adapter, int ring_nr)
+int
+bnx2x_netmap_ring_config(struct SOFTC_T *adapter, int ring_nr)
 {
 	struct netmap_adapter *na = NA(adapter->dev);
 	struct netmap_slot *slot = netmap_reset(na, NR_TX, ring_nr, 0);
@@ -488,6 +494,8 @@ bnx2x_netmap_configure_tx_ring(struct SOFTC_T *adapter, int ring_nr)
 
 	if (!slot)
 		return 0;	// not in netmap;
+	D("allocate memory for ring %d, slots: rx %d tx %d",
+		ring_nr, (int)adapter->rx_ring_size, (int) NUM_TX_BD);
 #if 0
 	/*
 	 * on a generic card we should set the address in the slot.
@@ -581,6 +589,7 @@ bnx2x_netmap_attach(struct SOFTC_T *adapter)
 	 * queue is used for it.
  	 */
 	netmap_attach(&na, BNX2X_NUM_ETH_QUEUES(adapter));
+	D("done");
 }
 #endif /* NETMAP_BNX2X_MAIN */
 /* end of file */

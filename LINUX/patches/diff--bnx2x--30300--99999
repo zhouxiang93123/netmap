@@ -1,6 +1,6 @@
 diff -urp /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/broadcom/bnx2x/bnx2x_cmn.c bnx2x/bnx2x_cmn.c
 --- /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/broadcom/bnx2x/bnx2x_cmn.c	2012-09-11 20:50:55.812622063 -0700
-+++ bnx2x/bnx2x_cmn.c	2012-09-13 17:02:50.860722068 -0700
++++ bnx2x/bnx2x_cmn.c	2012-09-15 21:36:54.590110768 -0700
 @@ -30,6 +30,9 @@
  #include "bnx2x_sp.h"
  
@@ -35,6 +35,17 @@ diff -urp /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/bro
  	/* CQ "next element" is of the size of the regular element,
  	   that's why it's ok here */
  	hw_comp_cons = le16_to_cpu(*fp->rx_cons_sb);
+@@ -3288,7 +3301,9 @@ static int bnx2x_alloc_fp_mem_at(struct
+ 		if (ring_size < rx_ring_size)
+ 			goto alloc_mem_err;
+ 	}
+-
++#ifdef DEV_NETMAP
++	bnx2x_netmap_ring_config(bp, index);
++#endif /* DEV_NETMAP */
+ 	return 0;
+ 
+ /* handles low memory cases */
 diff -urp /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/broadcom/bnx2x/bnx2x_main.c bnx2x/bnx2x_main.c
 --- /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/broadcom/bnx2x/bnx2x_main.c	2012-09-11 20:50:55.822622214 -0700
 +++ bnx2x/bnx2x_main.c	2012-09-13 16:56:05.774101803 -0700
