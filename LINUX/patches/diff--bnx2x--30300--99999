@@ -48,7 +48,7 @@ diff -urp /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/bro
  /* handles low memory cases */
 diff -urp /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/broadcom/bnx2x/bnx2x_main.c bnx2x/bnx2x_main.c
 --- /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/broadcom/bnx2x/bnx2x_main.c	2012-09-11 20:50:55.822622214 -0700
-+++ bnx2x/bnx2x_main.c	2012-09-13 16:56:05.774101803 -0700
++++ bnx2x/bnx2x_main.c	2012-09-16 13:23:51.437591675 -0700
 @@ -599,6 +599,23 @@ static u64 bnx2x_wb_rd(struct bnx2x *bp,
  }
  #endif
@@ -56,19 +56,19 @@ diff -urp /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/bro
 +
 +#if defined(CONFIG_NETMAP) || defined(CONFIG_NETMAP_MODULE)
 +/*
-+ * This driver is made of multiple files so the netmap header
-+ * is included here, and child routines get the prototypes etc.
++ * This driver uses multiple source files. The netmap header is included
++ * in all places where we have netmap hooks, and actual code is included
++ * only in the file with #define NETMAP_BNX2X_MAIN.
 + *
 + * Intercept points:
++ * - initialization is in bnx2x_open() (this file).
 + * - for RX and TX interrupts, modify bnx2x_tx_int() and bnx2x_rx_int()
 + *   same as it is done on the ixgbe. (bnx2x_cmn.c)
-+ *
++ * - ring (re) init is in bnx2x_alloc_fp_mem_at() (bnx2x_cmn.c)
 + */
 +#define NETMAP_BNX2X_MAIN
 +#include <bnx2x_netmap_linux.h>
-+#else
-+#error --- normal compilation
-+#endif /* NETMAP */
++#endif /* CONFIG_NETMAP */
 +
  static int bnx2x_mc_assert(struct bnx2x *bp)
  {

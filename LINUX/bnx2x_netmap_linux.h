@@ -31,6 +31,35 @@
  * The programming manual is publicly available at
  *	http://www.broadcom.com/collateral/pg/57710_57711-PG200-R.pdf
  *	http://www.broadcom.com/collateral/pg/57XX-PG105-R.pdf
+
+Configuration in the linux driver:
+BCM_PAGE_SIZE		4096		// Pages are 4 Kbytes
+					rx_bd = 8 bytes
+					tx_bd = 16 bytes
+					cont_desc = 16 bytes
+TX_DESC_CNT		4096/16=256	includes the cont.
+NEXT_PAGE_TX_DESC_CNT	1
+NUM_TX_RINGS		16		XXX this is really pages, not rings.
+NUM_TX_BD		256*NUM_TX_RINGS	gross, includes the cont.
+MAX_TX_BD		NUM_TX_BD-1	only to deal with indexes
+
+MAX_TX_DESC_CNT		255		actual, per ring
+MAX_TX_AVAIL		255*16-2	overall
+TX_BD(x)		((x) & MAX_TX_BD)	modulo, all rings
+TX_BD_POFF(x)		((x) & MAX_TX_DESC_CNT)	modulo, single ring
+
+NUM_RX_RINGS		8		XXX this is really pages, not rings.
+RX_DESC_CNT		4096/sizeof(rx_bd) = 512	includes cont
+NEXT_PAGE_RX_DESC_CNT	2
+MAX_RX_DESC_CNT		510
+RX_DESC_MASK		511				within page ?
+NUM_RX_BD		RX_DESC_CNT*NUM_RX_RINGS=4096
+MAX_RX_BD		NUM_RX_BD-1
+MAX_RX_AVAIL		MAX_RX_DESC_CNT*NUM_RX_RINGS - 2	4078, pure coincidence.
+
+buffer descriptors are allocated in bnx2x_alloc_fp_mem_at().
+For each Class Of Service (COS) we have NUM_TX_BD slots in total.
+
  */
 
 
@@ -55,10 +84,8 @@ bnx2x_netmap_reg(struct ifnet *ifp, int onoff)
 
 	if (na == NULL)
 		return EINVAL;	/* no netmap support here */
-	rtnl_lock(); // XXX do we need it ?
-D("prepare to bnx2x_nic_unload");
+	rtnl_lock(); // here is needed.
 	bnx2x_nic_unload(adapter, UNLOAD_NORMAL);
-D("done bnx2x_nic_unload");
 
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
@@ -77,10 +104,8 @@ D("done bnx2x_nic_unload");
 		ifp->if_capenable &= ~IFCAP_NETMAP;
 		/* initialize the card, this time in standard mode */
 	}
-D("prepare to bnx2x_nic_load");
 	bnx2x_nic_load(adapter, LOAD_NORMAL);
-D("done bnx2x_nic_load");
-	rtnl_unlock(); // XXX do we need it ?
+	rtnl_unlock();
 	return (error);
 }
 
@@ -113,7 +138,7 @@ Broadcom: the tx routine is bnx2x_start_xmit()
 
 The card has 16 hardware queues ("fastpath contexts"),
 each possibly with several "Class of Service" (COS) queues.
-(the data sheet says up to 16, but the software seems to use 4).
+(the data sheet says up to 16 COS, but the software seems to use 4).
 The linux driver numbers queues 0..15 for COS=0, 16..31 for COS=1,
 and so on. The low 4 bits are used to indicate the fastpath context.
 
@@ -171,19 +196,18 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 
 	/*
 	 * Process new packets to send. j is the current index in the
-	 * netmap ring, l is the corresponding index in the NIC ring.
-	 * The two numbers differ because upon a *_init() we reset
+	 * netmap ring, l is the corresponding index in the NIC ring
+	 * (txdata->tx_bd_prod). The two differ because of CONT entries
+	 * in the NIC ring, and also because upon reset we reset
 	 * the NIC ring but leave the netmap ring unchanged.
 	 * For the transmit ring, we have
 	 *
 	 *		j = kring->nr_hwcur
 	 *		l = ... (also txdata->tx_bd_prod;)
-	 * and
-	 * 		j == (l + kring->nkr_hwofs) % ring_size
 	 */
 	j = kring->nr_hwcur;
 	if (j != k) {	/* we have new packets to send */
-		l = netmap_idx_k2n(kring, j);
+		l = txdata->tx_bd_prod;
 		for (n = 0; j != k; n++) {
 			struct netmap_slot *slot = &ring->slot[j];
 			struct eth_tx_start_bd *tx_start_bd =
@@ -215,13 +239,14 @@ ring_reset:
 			}
 			/*
 			 * Fill the slot in the NIC ring.
-			 * In this driver we need to rewrite the buffer
+			 * vlan_or_ethertype is (presumably) the index that the XMIT engine will
+			 * report as consumed buffer.
 			 * address in the NIC ring. Other drivers do not
 			 * need this.
 			 */
 
 			tx_start_bd->bd_flags.as_bitfield = ETH_TX_BD_FLAGS_START_BD;
-			tx_start_bd->vlan_or_ethertype = cpu_to_le16(l);	// XXX producer index
+			tx_start_bd->vlan_or_ethertype = cpu_to_le16(j);	// XXX producer index ?
 			tx_start_bd->addr_lo = cpu_to_le32(U64_LO(paddr));
 			tx_start_bd->addr_hi = cpu_to_le32(U64_HI(paddr));
 			tx_start_bd->nbytes = cpu_to_le16(len);
@@ -239,8 +264,10 @@ ring_reset:
 			
 			SET_FLAG(tx_start_bd->general_data, ETH_TX_START_BD_ETH_ADDR_TYPE, mac_type);
 		}
-
-			SET_FLAG(tx_start_bd->general_data, ETH_TX_START_BD_HDR_NBDS, 0); // XXX no header
+			// XXX the docs say to use 1 for number of headers. Should not affect the total
+			// nor parsing blocks, though i do not understand how the firmware understands
+			// whether there is a parsing block.
+			SET_FLAG(tx_start_bd->general_data, ETH_TX_START_BD_HDR_NBDS, 1 /* XXX */ );
 
 			/* XXX set len */
 			j = (j == lim) ? 0 : j + 1;
@@ -249,8 +276,7 @@ ring_reset:
 		kring->nr_hwcur = k; /* the saved ring->cur */
 		/* decrease avail by number of packets  sent */
 		kring->nr_hwavail -= n;
-		txdata->tx_bd_prod = l; // XXX not strictly necessary
-	 	/* XXX adjust kring->nkr_hwofs) */
+		txdata->tx_bd_prod = l; /* XXX adjust kring->nkr_hwofs) ? */
 
 		wmb();	/* synchronize writes to the NIC ring */
 		/* (re)start the transmitter up to slot l (excluded) */
@@ -258,18 +284,10 @@ ring_reset:
 	}
 
 	/*
-	 * Reclaim buffers for completed transmissions.
-	 * Because this is expensive (we read a NIC register etc.)
-	 * we only do it in specific cases (see below).
-	 * In all cases kring->nr_kflags indicates which slot will be
-	 * checked upon a tx interrupt (nkr_num_slots means none).
+	 * Reclaim buffers for completed transmissions, as in bnx2x_tx_int().
+	 * Maybe we could do it lazily.
 	 */
-	if (do_lock) {
-		j = 1; /* forced reclaim, ignore interrupts */
-	} else {
-		j = 1; // for the time being, force reclaim 
-	}
-	if (j) {
+	if (1) {
 		int delta;
 
 		/*
@@ -278,7 +296,8 @@ ring_reset:
 		 * 	le16_to_cpu(*txdata->tx_cons_sb);
 		 * We (re)use the driver's txr->tx_pkt_cons to keep
 		 * track of the most recently completed transmission.
-		 * XXX check whether the hw reports buffers or bd.
+		 * XXX the hw reports a 'pkt' index, but in netmap mode
+		 * they are in sync with the 
 		 */
 		l = le16_to_cpu(*txdata->tx_cons_sb);
 		if (l >= kring->nkr_num_slots) { /* XXX can happen */
@@ -482,82 +501,48 @@ ring_reset:
 
 
 /*
- * if in netmap mode, attach the netmap buffers to the ring and return true.
+ * If in netmap mode, attach the netmap buffers to the ring and return true.
  * Otherwise return false.
+ * Called at the end of bnx2x_alloc_fp_mem_at(), sets both tx and rx
+ * buffer entries. At init time we allocate the max number of entries
+ * for the card, but at runtime the card might use a smaller number,
+ * so be careful on where we fetch the information.
  */
 int
 bnx2x_netmap_ring_config(struct SOFTC_T *adapter, int ring_nr)
 {
 	struct netmap_adapter *na = NA(adapter->dev);
 	struct netmap_slot *slot = netmap_reset(na, NR_TX, ring_nr, 0);
-	//int j;
+	struct bnx2x_fastpath *fp;
+	struct bnx2x_fp_txdata *txdata;
+	int j;
 
 	if (!slot)
 		return 0;	// not in netmap;
-	D("allocate memory for ring %d, slots: rx %d tx %d",
-		ring_nr, (int)adapter->rx_ring_size, (int) NUM_TX_BD);
-#if 0
+	D("allocate memory for ring %d, tx/rx slots: %d %d max %d %d",
+		ring_nr, (int) NUM_TX_BD, (int)adapter->rx_ring_size,
+		na->num_tx_desc, na->num_rx_desc);
+	fp = &adapter->fp[ring_nr];
+	txdata = &fp->txdata[0];
 	/*
-	 * on a generic card we should set the address in the slot.
-	 * But on the ixgbe, the address needs to be rewritten
-	 * after a transmission so there is nothing do to except
-	 * loading the map.
+	 * Do nothing on the tx ring, addresses are set up at tx time.
 	 */
-	for (j = 0; j < na->num_tx_desc; j++) {
-		int sj = netmap_idx_n2k(&na->tx_rings[ring_nr], j);
-		uint64_t paddr;
-		void *addr = PNMB(slot + sj, &paddr);
-	}
-#endif
-	return 1;
-}
-
-
-static int
-bnx2x_netmap_configure_rx_ring(struct SOFTC_T *adapter, int ring_nr)
-{
-#if 0
+	D("tx: pkt cons/prod %d -> %d, bd cons/prod %d -> %d, cons_sb %d",
+		txdata->tx_pkt_cons, txdata->tx_pkt_prod,
+		txdata->tx_bd_cons, txdata->tx_bd_prod,
+		le16_to_cpu(*txdata->tx_cons_sb) );
 	/*
-	 * In netmap mode, we must preserve the buffers made
-	 * available to userspace before the if_init()
-	 * (this is true by default on the TX side, because
-	 * init makes all buffers available to userspace).
-	 *
-	 * netmap_reset() and the device specific routines
-	 * (e.g. ixgbe_setup_receive_rings()) map these
-	 * buffers at the end of the NIC ring, so here we
-	 * must set the RDT (tail) register to make sure
-	 * they are not overwritten.
-	 *
-	 * In this driver the NIC ring starts at RDH = 0,
-	 * RDT points to the last slot available for reception (?),
-	 * so RDT = num_rx_desc - 1 means the whole ring is available.
+	 * on the receive ring, must set buf addresses into the slots.
 	 */
-	struct netmap_adapter *na = NA(adapter->dev);
-	struct netmap_slot *slot = netmap_reset(na, NR_RX, ring_nr, 0);
-	int lim, i;
-	struct ixgbe_ring *ring = adapter->rx_ring[ring_nr];
-        /* same as in ixgbe_setup_transmit_ring() */
-	if (!slot)
-		return 0;	// not in netmap;
-
-	lim = na->num_rx_desc - 1 - na->rx_rings[ring_nr].nr_hwavail;
-
-	for (i = 0; i < na->num_rx_desc; i++) {
-		/*
-		 * Fill the map and set the buffer address in the NIC ring,
-		 * considering the offset between the netmap and NIC rings
-		 * (see comment in ixgbe_setup_transmit_ring() ).
-		 */
-		int si = netmap_idx_n2k(&na->rx_rings[ring_nr], i);
+	slot = netmap_reset(na, NR_RX, ring_nr, 0);
+	D("rx: comp cons/prod %d -> %d, bd cons/prod %d -> %d, cons_sb %d",
+		fp->rx_comp_cons, fp->rx_comp_prod,
+		fp->rx_bd_cons, fp->rx_bd_prod,
+		le16_to_cpu(*fp->rx_cons_sb) );
+	for (j = 0; j < na->num_rx_desc; j++) {
 		uint64_t paddr;
-		PNMB(slot + si, &paddr);
-		// netmap_load_map(rxr->ptag, rxbuf->pmap, addr);
-		/* Update descriptor */
-		IXGBE_RX_DESC_ADV(ring, i)->read.pkt_addr = htole64(paddr);
+		void *addr = PNMB(slot + j, &paddr);
 	}
-	IXGBE_WRITE_REG(&adapter->hw, IXGBE_RDT(ring_nr), lim);
-#endif // 0
 	return 1;
 }
 
@@ -579,8 +564,13 @@ bnx2x_netmap_attach(struct SOFTC_T *adapter)
 
 	na.ifp = dev;
 	na.separate_locks = 0;	/* this card has separate rx/tx locks */
+	/* apparently the card starts with rx_ring_size = 0, and this is set up
+	 * at a later time during the open() routine. So we force to use
+	 * tx_ring_size. Also note, this is the *net* number of entries,
+	 * skipping those continuation blocks.
+	 */
 	na.num_tx_desc = adapter->tx_ring_size;
-	na.num_rx_desc = adapter->rx_ring_size;
+	na.num_rx_desc = na.num_tx_desc; // XXX see above
 	na.nm_txsync = bnx2x_netmap_txsync;
 	na.nm_rxsync = bnx2x_netmap_rxsync;
 	na.nm_register = bnx2x_netmap_reg;
@@ -589,7 +579,7 @@ bnx2x_netmap_attach(struct SOFTC_T *adapter)
 	 * queue is used for it.
  	 */
 	netmap_attach(&na, BNX2X_NUM_ETH_QUEUES(adapter));
-	D("done");
+	D("%d queues, tx: %d rx %d slots", BNX2X_NUM_ETH_QUEUES(adapter), na.num_tx_desc, na.num_rx_desc);
 }
 #endif /* NETMAP_BNX2X_MAIN */
 /* end of file */
