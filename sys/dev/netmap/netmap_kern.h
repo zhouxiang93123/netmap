@@ -149,6 +149,9 @@ struct netmap_adapter {
 	 */
 	uint32_t magic;
 	uint32_t na_flags;	/* future place for IFCAP_NETMAP */
+#define NAF_SKIP_INTR	1	/* use the regular interrupt handler.
+				 * useful during initialization
+				 */
 	int refcount; /* number of user-space descriptors using this
 			 interface, which is equal to the number of
 			 struct netmap_if objs in the mapped region. */
