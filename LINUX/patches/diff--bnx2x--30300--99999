@@ -1,6 +1,5 @@
-diff -urp /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/broadcom/bnx2x/bnx2x_cmn.c bnx2x/bnx2x_cmn.c
---- /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/broadcom/bnx2x/bnx2x_cmn.c	2012-09-11 20:50:55.812622063 -0700
-+++ bnx2x/bnx2x_cmn.c	2012-09-15 21:36:54.590110768 -0700
+--- bnx2x/bnx2x_cmn.c	2012-09-11 20:50:55.812622063 -0700
++++ ./bnx2x/bnx2x_cmn.c	2012-09-15 21:36:54.590110768 -0700
 @@ -30,6 +30,9 @@
  #include "bnx2x_sp.h"
  
@@ -46,9 +45,8 @@ diff -urp /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/bro
  	return 0;
  
  /* handles low memory cases */
-diff -urp /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/broadcom/bnx2x/bnx2x_main.c bnx2x/bnx2x_main.c
---- /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/broadcom/bnx2x/bnx2x_main.c	2012-09-11 20:50:55.822622214 -0700
-+++ bnx2x/bnx2x_main.c	2012-09-16 13:23:51.437591675 -0700
+--- bnx2x/bnx2x_main.c	2012-09-11 20:50:55.822622214 -0700
++++ ./bnx2x/bnx2x_main.c	2012-09-16 13:23:51.437591675 -0700
 @@ -599,6 +599,23 @@ static u64 bnx2x_wb_rd(struct bnx2x *bp,
  }
  #endif
