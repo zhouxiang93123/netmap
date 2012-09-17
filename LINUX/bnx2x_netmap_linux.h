@@ -89,12 +89,12 @@ bnx2x_netmap_reg(struct ifnet *ifp, int onoff)
 	 * On disable, flush again, and restart the interface.
 	 * 
 	 */
-	rtnl_lock(); // here is needed.
 	D("setting netmap mode for %s to %s", ifp->if_xname, onoff ? "ON" : "OFF");
+	return EINVAL; // test
+	rtnl_lock(); // here is needed.
 	// bnx2x_nic_unload(adapter, UNLOAD_NORMAL);
-error = 1; // XXX
 
-	if (0 && onoff) { /* enable netmap mode */
+	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
 
 		/* save if_transmit and replace with our routine */
