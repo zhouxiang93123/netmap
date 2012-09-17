@@ -94,7 +94,7 @@
  */
 
 #ifndef CONSERVATIVE
-#define NETMAP_BUF_MAX_NUM      100000  /* 200MB */
+#define NETMAP_BUF_MAX_NUM	20*4096*2	/* large machine */
 #else /* CONSERVATIVE */
 #define NETMAP_BUF_MAX_NUM      20000   /* 40MB */
 #endif
@@ -163,6 +163,7 @@ struct netmap_obj_pool {
 	u_int _memtotal;	/* _numclusters*_clustsize */
 	struct lut_entry *lut;  /* virt,phys addresses, objtotal entries */
 	uint32_t *bitmap;       /* one bit per buffer, 1 means free */
+	uint32_t bitmap_slots;	/* number of uint32 entries in bitmap */
 };
 
 
@@ -304,8 +305,12 @@ netmap_obj_offset(struct netmap_obj_pool *p, const void *vaddr)
 	netmap_obj_offset(&nm_mem.pools[NETMAP_BUF_POOL], (v)))
 
 
+/*
+ * report the index, and use start position as a hint,
+ * otherwise buffer allocation becomes terribly expensive.
+ */
 static void *
-netmap_obj_malloc(struct netmap_obj_pool *p, int len)
+netmap_obj_malloc(struct netmap_obj_pool *p, int len, uint32_t *start, uint32_t *index)
 {
 	uint32_t i = 0;			/* index in the bitmap */
 	uint32_t mask, j;		/* slot counter */
@@ -321,9 +326,11 @@ netmap_obj_malloc(struct netmap_obj_pool *p, int len)
 		D("%s allocator: run out of memory", p->name);
 		return NULL;
 	}
+	if (start)
+		i = *start;
 
-	/* termination is guaranteed by p->free */
-	while (vaddr == NULL) {
+	/* termination is guaranteed by p->free, but better check bounds on i */
+	while (vaddr == NULL && i < p->bitmap_slots)  {
 		uint32_t cur = p->bitmap[i];
 		if (cur == 0) { /* bitmask is fully used */
 			i++;
@@ -337,9 +344,13 @@ netmap_obj_malloc(struct netmap_obj_pool *p, int len)
 		p->objfree--;
 
 		vaddr = p->lut[i * 32 + j].vaddr;
+		if (index)
+			*index = i * 32 + j;
 	}
 	ND("%s allocator: allocated object @ [%d][%d]: vaddr %p", i, j, vaddr);
 
+	if (start)
+		*start = i;
 	return vaddr;
 }
 
@@ -381,12 +392,12 @@ netmap_obj_free_va(struct netmap_obj_pool *p, void *vaddr)
 	    vaddr, p->name);
 }
 
-#define netmap_if_malloc(len)	netmap_obj_malloc(&nm_mem.pools[NETMAP_IF_POOL], len)
+#define netmap_if_malloc(len)	netmap_obj_malloc(&nm_mem.pools[NETMAP_IF_POOL], len, NULL, NULL)
 #define netmap_if_free(v)	netmap_obj_free_va(&nm_mem.pools[NETMAP_IF_POOL], (v))
-#define netmap_ring_malloc(len)	netmap_obj_malloc(&nm_mem.pools[NETMAP_RING_POOL], len)
+#define netmap_ring_malloc(len)	netmap_obj_malloc(&nm_mem.pools[NETMAP_RING_POOL], len, NULL, NULL)
 #define netmap_ring_free(v)	netmap_obj_free_va(&nm_mem.pools[NETMAP_RING_POOL], (v))
-#define netmap_buf_malloc()			\
-	netmap_obj_malloc(&nm_mem.pools[NETMAP_BUF_POOL], NETMAP_BUF_SIZE)
+#define netmap_buf_malloc(_pos, _index)			\
+	netmap_obj_malloc(&nm_mem.pools[NETMAP_BUF_POOL], NETMAP_BUF_SIZE, _pos, _index)
 
 
 /* Return the index associated to the given packet buffer */
@@ -401,24 +412,26 @@ netmap_new_bufs(struct netmap_if *nifp,
 {
 	struct netmap_obj_pool *p = &nm_mem.pools[NETMAP_BUF_POOL];
 	int i = 0;	/* slot counter */
+	uint32_t pos = 0;	/* slot in p->bitmap */
+	uint32_t index = 0;	/* buffer index */
 
 	(void)nifp;	/* UNUSED */
 	for (i = 0; i < n; i++) {
 	        /* XXX get index instead of vaddr */
-		void *vaddr = netmap_buf_malloc();
+		void *vaddr = netmap_buf_malloc(&pos, &index);
 		if (vaddr == NULL) {
 			D("unable to locate empty packet buffer");
 			goto cleanup;
 		}
 
-		slot[i].buf_idx = netmap_buf_index(vaddr);
+		slot[i].buf_idx = index; // netmap_buf_index(vaddr);
 		KASSERT(slot[i].buf_idx != 0,
 		    ("Assigning buf_idx=0 to just created slot"));
 		slot[i].len = p->_objsize;
 		slot[i].flags = NS_BUF_CHANGED; // XXX GAETANO hack
 	}
 
-	ND("allocated %d buffers, %d available", n, p->objfree);
+	ND("allocated %d buffers, %d available, first at %d", n, p->objfree, pos);
 	return (0);
 
 cleanup:
@@ -456,7 +469,11 @@ netmap_reset_obj_allocator(struct netmap_obj_pool *p)
 				contigfree(p->lut[i].vaddr, p->_clustsize, M_NETMAP);
 		}
 		bzero(p->lut, sizeof(struct lut_entry) * p->objtotal);
+#ifdef linux
+		vfree(p->lut);
+#else
 		free(p->lut, M_NETMAP);
+#endif
 	}
 	p->lut = NULL;
 }
@@ -572,10 +589,14 @@ netmap_finalize_obj_allocator(struct netmap_obj_pool *p)
 {
 	int i, n;
 
-	p->lut = malloc(sizeof(struct lut_entry) * p->objtotal,
-		M_NETMAP, M_WAITOK | M_ZERO);
+	n = sizeof(struct lut_entry) * p->objtotal;
+#ifdef linux
+	p->lut = vmalloc(n);
+#else
+	p->lut = malloc(n, M_NETMAP, M_WAITOK | M_ZERO);
+#endif
 	if (p->lut == NULL) {
-		D("Unable to create lookup table for '%s' allocator", p->name);
+		D("Unable to create lookup table (%d bytes) for '%s'", n, p->name);
 		goto clean;
 	}
 
@@ -587,6 +608,7 @@ netmap_finalize_obj_allocator(struct netmap_obj_pool *p)
 		    p->name);
 		goto clean;
 	}
+	p->bitmap_slots = n;
 
 	/*
 	 * Allocate clusters, init pointers and bitmap
