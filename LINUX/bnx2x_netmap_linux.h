@@ -125,7 +125,7 @@ bnx2x_netmap_reg(struct ifnet *ifp, int onoff)
 		need_load = 1;
 	}
 
-if (1) // only load/unload
+if (0) // only load/unload
 	error = EINVAL;
 else
 	if (onoff) { /* enable netmap mode */
