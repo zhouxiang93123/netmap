@@ -1491,7 +1491,7 @@ netmap_attach(struct netmap_adapter *na, int num_queues)
 	}
 #ifdef linux
 	if (ifp->netdev_ops) {
-		D("netdev_ops %p", ifp->netdev_ops);
+		ND("netdev_ops %p", ifp->netdev_ops);
 		/* prepare a clone of the netdev ops */
 		na->nm_ndo = *ifp->netdev_ops;
 	}
