@@ -116,12 +116,12 @@ bnx2x_netmap_reg(struct ifnet *ifp, int onoff)
 	 */
 	D("setting netmap mode for %s to %s", ifp->if_xname, onoff ? "ON" : "OFF");
 	bnx2x_netmap_diag(ifp);
-	return EINVAL;
 
 	rtnl_lock(); // here is needed.
 	// bnx2x_nic_unload(adapter, UNLOAD_NORMAL);
 
 	if (onoff) { /* enable netmap mode */
+		// XXX drain pending transmissions ?
 		ifp->if_capenable |= IFCAP_NETMAP;
 
 		/* save if_transmit and replace with our routine */
@@ -336,10 +336,7 @@ ring_reset:
 		 * they are in sync with the 
 		 */
 		l = le16_to_cpu(*txdata->tx_cons_sb);
-		if (l >= kring->nkr_num_slots) { /* XXX can happen */
-			D("TDH wrap %d", l);
-			l -= kring->nkr_num_slots;
-		}
+		RD(10,"device reports tx_cons_sb %d", l);
 		delta = l - txdata->tx_pkt_cons; // XXX buffers, not slots
 		if (delta) {
 			/* some tx completed, increment hwavail. */

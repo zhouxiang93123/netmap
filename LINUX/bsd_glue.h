@@ -73,6 +73,9 @@ struct thread;
 #define htole32			cpu_to_le32
 #define htole64			cpu_to_le64
 
+#include <linux/jiffies.h>
+#define	time_second	(jiffies_to_msecs(jiffies) / 1000U )
+
 #define bzero(a, len)		memset(a, 0, len)
 #define bcopy(_s, _d, len) 	memcpy(_d, _s, len)
 
