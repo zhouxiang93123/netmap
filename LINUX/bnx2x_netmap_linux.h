@@ -68,7 +68,7 @@ For each Class Of Service (COS) we have NUM_TX_BD slots in total.
 #include <netmap/netmap_kern.h>
 #define SOFTC_T	bnx2x
 
-int bnx2x_netmap_ring_config(struct SOFTC_T *adapter, int ring_nr);
+int bnx2x_netmap_config(struct SOFTC_T *adapter);
 
 #ifdef NETMAP_BNX2X_MAIN
 /*
@@ -84,10 +84,17 @@ bnx2x_netmap_reg(struct ifnet *ifp, int onoff)
 
 	if (na == NULL)
 		return EINVAL;	/* no netmap support here */
+	/*
+	 * On enable, flush pending ops, set flag and reinit rings.
+	 * On disable, flush again, and restart the interface.
+	 * 
+	 */
 	rtnl_lock(); // here is needed.
-	bnx2x_nic_unload(adapter, UNLOAD_NORMAL);
+	D("setting netmap mode for %s to %s", ifp->if_xname, onoff ? "ON" : "OFF");
+	// bnx2x_nic_unload(adapter, UNLOAD_NORMAL);
+error = 1; // XXX
 
-	if (onoff) { /* enable netmap mode */
+	if (0 && onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
 
 		/* save if_transmit and replace with our routine */
@@ -104,7 +111,7 @@ bnx2x_netmap_reg(struct ifnet *ifp, int onoff)
 		ifp->if_capenable &= ~IFCAP_NETMAP;
 		/* initialize the card, this time in standard mode */
 	}
-	bnx2x_nic_load(adapter, LOAD_NORMAL);
+	// bnx2x_nic_load(adapter, LOAD_NORMAL);
 	rtnl_unlock();
 	return (error);
 }
@@ -207,6 +214,7 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 */
 	j = kring->nr_hwcur;
 	if (j != k) {	/* we have new packets to send */
+D("send from %d to %d fp %p txdata %p", j, k, fp, txdata);
 		l = txdata->tx_bd_prod;
 		for (n = 0; j != k; n++) {
 			struct netmap_slot *slot = &ring->slot[j];
@@ -217,6 +225,7 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			void *addr = PNMB(slot, &paddr);
 			uint16_t len = slot->len;
 
+D("start_bd j %d l %d is %p", j, l, tx_start_bd);
 			/*
 			 * Quick check for valid addr and len.
 			 * NMB() returns netmap_buffer_base for invalid
@@ -509,39 +518,45 @@ ring_reset:
  * so be careful on where we fetch the information.
  */
 int
-bnx2x_netmap_ring_config(struct SOFTC_T *adapter, int ring_nr)
+bnx2x_netmap_config(struct SOFTC_T *adapter)
 {
 	struct netmap_adapter *na = NA(adapter->dev);
-	struct netmap_slot *slot = netmap_reset(na, NR_TX, ring_nr, 0);
+	struct netmap_slot *slot;
 	struct bnx2x_fastpath *fp;
 	struct bnx2x_fp_txdata *txdata;
-	int j;
+	int j, ring_nr;
 
+	slot = netmap_reset(na, NR_TX, 0, 0);	// quick test on first ring
 	if (!slot)
 		return 0;	// not in netmap;
-	D("allocate memory for ring %d, tx/rx slots: %d %d max %d %d",
-		ring_nr, (int) NUM_TX_BD, (int)adapter->rx_ring_size,
+	D("# queues: tx %d rx %d", adapter->dev->num_tx_queues, adapter->dev->num_rx_queues);
+	D("allocate memory, tx/rx slots: %d %d max %d %d",
+		(int)adapter->tx_ring_size, (int)adapter->rx_ring_size,
 		na->num_tx_desc, na->num_rx_desc);
-	fp = &adapter->fp[ring_nr];
+	fp = &adapter->fp[0];
 	txdata = &fp->txdata[0];
+	for (ring_nr = 0; ring_nr < adapter->dev->num_tx_queues; ring_nr++)
+		netmap_reset(na, NR_TX, ring_nr, 0);
 	/*
 	 * Do nothing on the tx ring, addresses are set up at tx time.
 	 */
-	D("tx: pkt cons/prod %d -> %d, bd cons/prod %d -> %d, cons_sb %d",
+	D("tx: pkt cons/prod %d -> %d, bd cons/prod %d -> %d, cons_sb %p",
 		txdata->tx_pkt_cons, txdata->tx_pkt_prod,
 		txdata->tx_bd_cons, txdata->tx_bd_prod,
-		le16_to_cpu(*txdata->tx_cons_sb) );
+		txdata->tx_cons_sb );
 	/*
 	 * on the receive ring, must set buf addresses into the slots.
 	 */
-	slot = netmap_reset(na, NR_RX, ring_nr, 0);
-	D("rx: comp cons/prod %d -> %d, bd cons/prod %d -> %d, cons_sb %d",
-		fp->rx_comp_cons, fp->rx_comp_prod,
-		fp->rx_bd_cons, fp->rx_bd_prod,
-		le16_to_cpu(*fp->rx_cons_sb) );
-	for (j = 0; j < na->num_rx_desc; j++) {
-		uint64_t paddr;
-		void *addr = PNMB(slot + j, &paddr);
+	for (ring_nr = 0; ring_nr < adapter->dev->num_rx_queues; ring_nr++) {
+		slot = netmap_reset(na, NR_RX, ring_nr, 0);
+		D("rx: comp cons/prod %d -> %d, bd cons/prod %d -> %d, cons_sb %p",
+			fp->rx_comp_cons, fp->rx_comp_prod,
+			fp->rx_bd_cons, fp->rx_bd_prod,
+			fp->rx_cons_sb );
+		for (j = 0; j < na->num_rx_desc; j++) {
+			uint64_t paddr;
+			void *addr = PNMB(slot + j, &paddr);
+		}
 	}
 	return 1;
 }
