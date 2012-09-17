@@ -72,6 +72,29 @@ int bnx2x_netmap_config(struct SOFTC_T *adapter);
 
 #ifdef NETMAP_BNX2X_MAIN
 /*
+ * Some diagnostic to figure out the configuration.
+ */
+static void
+bnx2x_netmap_diag(struct ifnet *ifp)
+{
+	struct SOFTC_T *bp = netdev_priv(ifp);
+	struct bnx2x_fastpath *fp = &bp->fp[0];
+	struct bnx2x_fp_txdata *txdata = &fp->txdata[0];
+	int i, n;
+
+	D("---- device %s ---- fp0 %p txdata %p txq %d rxq %d -------",
+		ifp->if_xname, fp, txdata, ifp->num_tx_queues, ifp->num_rx_queues);
+	// txq is actually 48, whereas rxq is a reasonable number.
+	for (i = 0; i < ifp->num_rx_queues; i++) {
+		fp = &bp->fp[i];
+		txdata = &fp->txdata[0];
+		D("TX%2d: desc_ring %p cid %d txq_index %d cons_sb %p", i,
+			txdata->tx_desc_ring, txdata->cid, txdata->txq_index,
+			txdata->tx_cons_sb);
+	}
+}
+
+/*
  * Register/unregister. We are already under core lock.
  * Only called on the first register or the last unregister.
  */
@@ -90,7 +113,9 @@ bnx2x_netmap_reg(struct ifnet *ifp, int onoff)
 	 * 
 	 */
 	D("setting netmap mode for %s to %s", ifp->if_xname, onoff ? "ON" : "OFF");
-	return EINVAL; // test
+	bnx2x_netmap_diag(ifp);
+	return EINVAL;
+
 	rtnl_lock(); // here is needed.
 	// bnx2x_nic_unload(adapter, UNLOAD_NORMAL);
 
