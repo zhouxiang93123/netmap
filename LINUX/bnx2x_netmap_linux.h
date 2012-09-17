@@ -88,8 +88,10 @@ bnx2x_netmap_diag(struct ifnet *ifp)
 	for (i = 0; i < ifp->num_rx_queues; i++) {
 		fp = &bp->fp[i];
 		txdata = &fp->txdata[0];
-		D("TX%2d: desc_ring %p cid %d txq_index %d cons_sb %p", i,
-			txdata->tx_desc_ring, txdata->cid, txdata->txq_index,
+		D("TX%2d: desc_ring %p %p cid %d txq_index %d cons_sb %p", i,
+			txdata->tx_desc_ring,
+			&txdata->tx_desc_ring[10].start_bd,
+			txdata->cid, txdata->txq_index,
 			txdata->tx_cons_sb);
 	}
 }
