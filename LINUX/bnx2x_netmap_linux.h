@@ -82,10 +82,11 @@ bnx2x_netmap_diag(struct ifnet *ifp)
 	struct bnx2x_fp_txdata *txdata = &fp->txdata[0];
 	int i, n;
 
-	D("---- device %s ---- fp0 %p txdata %p txq %d rxq %d -------",
-		ifp->if_xname, fp, txdata, ifp->num_tx_queues, ifp->num_rx_queues);
+	D("---- device %s ---- fp0 %p txdata %p q %d txq %d rxq %d -------",
+		ifp->if_xname, fp, txdata, BNX2X_NUM_QUEUES(bp),
+		ifp->num_tx_queues, ifp->num_rx_queues);
 	// txq is actually 48, whereas rxq is a reasonable number.
-	for (i = 0; i < ifp->num_rx_queues; i++) {
+	for (i = 0; i < BNX2X_NUM_QUEUES(bp); i++) {
 		fp = &bp->fp[i];
 		txdata = &fp->txdata[0];
 		D("TX%2d: desc_ring %p %p cid %d txq_index %d cons_sb %p", i,
@@ -105,7 +106,7 @@ bnx2x_netmap_reg(struct ifnet *ifp, int onoff)
 {
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct netmap_adapter *na = NA(ifp);
-	int error = 0;
+	int error = 0, need_load = 0;
 
 	if (na == NULL)
 		return EINVAL;	/* no netmap support here */
@@ -118,27 +119,22 @@ bnx2x_netmap_reg(struct ifnet *ifp, int onoff)
 	bnx2x_netmap_diag(ifp);
 
 	rtnl_lock(); // here is needed.
-	// bnx2x_nic_unload(adapter, UNLOAD_NORMAL);
+	if (netif_running(ifp)) {
+		bnx2x_nic_unload(adapter, UNLOAD_NORMAL);
+		need_load = 1;
+	}
 
 	if (onoff) { /* enable netmap mode */
-		// XXX drain pending transmissions ?
 		ifp->if_capenable |= IFCAP_NETMAP;
-
 		/* save if_transmit and replace with our routine */
 		na->if_transmit = (void *)ifp->netdev_ops;
 		ifp->netdev_ops = &na->nm_ndo;
-
-		/*
-		 * reinitialize the adapter, now with netmap flag set,
-		 * so the rings will be set accordingly.
-		 */
-	} else { /* reset normal mode (explicit request or netmap failed) */
-		/* restore if_transmit */
+	} else { /* reset normal mode */
 		ifp->netdev_ops = (void *)na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
-		/* initialize the card, this time in standard mode */
 	}
-	// bnx2x_nic_load(adapter, LOAD_NORMAL);
+	if (need_load)
+		bnx2x_nic_load(adapter, LOAD_NORMAL);
 	rtnl_unlock();
 	return (error);
 }
@@ -542,9 +538,9 @@ ring_reset:
  * so be careful on where we fetch the information.
  */
 int
-bnx2x_netmap_config(struct SOFTC_T *adapter)
+bnx2x_netmap_config(struct SOFTC_T *bp)
 {
-	struct netmap_adapter *na = NA(adapter->dev);
+	struct netmap_adapter *na = NA(bp->dev);
 	struct netmap_slot *slot;
 	struct bnx2x_fastpath *fp;
 	struct bnx2x_fp_txdata *txdata;
@@ -553,14 +549,17 @@ bnx2x_netmap_config(struct SOFTC_T *adapter)
 	slot = netmap_reset(na, NR_TX, 0, 0);	// quick test on first ring
 	if (!slot)
 		return 0;	// not in netmap;
-	D("# queues: tx %d rx %d", adapter->dev->num_tx_queues, adapter->dev->num_rx_queues);
+	D("# queues: tx %d rx %d act %d",
+		bp->dev->num_tx_queues, bp->dev->num_rx_queues,
+		BNX2X_NUM_QUEUES(bp) );
 	D("allocate memory, tx/rx slots: %d %d max %d %d",
-		(int)adapter->tx_ring_size, (int)adapter->rx_ring_size,
+		(int)bp->tx_ring_size, (int)bp->rx_ring_size,
 		na->num_tx_desc, na->num_rx_desc);
-	fp = &adapter->fp[0];
+	fp = &bp->fp[0];
 	txdata = &fp->txdata[0];
-	for (ring_nr = 0; ring_nr < adapter->dev->num_tx_queues; ring_nr++)
+	for (ring_nr = 0; ring_nr < BNX2X_NUM_QUEUES(bp); ring_nr++) {
 		netmap_reset(na, NR_TX, ring_nr, 0);
+	}
 	/*
 	 * Do nothing on the tx ring, addresses are set up at tx time.
 	 */
@@ -571,7 +570,7 @@ bnx2x_netmap_config(struct SOFTC_T *adapter)
 	/*
 	 * on the receive ring, must set buf addresses into the slots.
 	 */
-	for (ring_nr = 0; ring_nr < adapter->dev->num_rx_queues; ring_nr++) {
+	for (ring_nr = 0; ring_nr < BNX2X_NUM_QUEUES(bp); ring_nr++) {
 		slot = netmap_reset(na, NR_RX, ring_nr, 0);
 		D("rx: comp cons/prod %d -> %d, bd cons/prod %d -> %d, cons_sb %p",
 			fp->rx_comp_cons, fp->rx_comp_prod,
