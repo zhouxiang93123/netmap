@@ -1,5 +1,5 @@
---- bnx2x/bnx2x_cmn.c	2012-09-11 20:50:55.812622063 -0700
-+++ ./bnx2x/bnx2x_cmn.c	2012-09-15 21:36:54.590110768 -0700
+--- broadcom/bnx2x/bnx2x_cmn.c	2012-09-11 20:50:55.812622063 -0700
++++ ./bnx2x/bnx2x_cmn.c	2012-09-16 19:01:36.061193373 -0700
 @@ -30,6 +30,9 @@
  #include "bnx2x_sp.h"
  
@@ -34,19 +34,29 @@
  	/* CQ "next element" is of the size of the regular element,
  	   that's why it's ok here */
  	hw_comp_cons = le16_to_cpu(*fp->rx_cons_sb);
-@@ -3288,7 +3301,9 @@ static int bnx2x_alloc_fp_mem_at(struct
+@@ -1981,6 +1994,9 @@ int bnx2x_nic_load(struct bnx2x *bp, int
+ 
+ 	/* Start fast path */
+ 
++#ifdef DEV_NETMAP
++	bnx2x_netmap_config(bp);
++#endif /* DEV_NETMAP */
+ 	/* Initialize Rx filter. */
+ 	netif_addr_lock_bh(bp->dev);
+ 	bnx2x_set_rx_mode(bp->dev);
+@@ -3288,7 +3304,9 @@ static int bnx2x_alloc_fp_mem_at(struct
  		if (ring_size < rx_ring_size)
  			goto alloc_mem_err;
  	}
 -
 +#ifdef DEV_NETMAP
-+	bnx2x_netmap_ring_config(bp, index);
++	// XXX bnx2x_netmap_ring_config(bp, index);
 +#endif /* DEV_NETMAP */
  	return 0;
  
  /* handles low memory cases */
---- bnx2x/bnx2x_main.c	2012-09-11 20:50:55.822622214 -0700
-+++ ./bnx2x/bnx2x_main.c	2012-09-16 13:23:51.437591675 -0700
+--- broadcom/bnx2x/bnx2x_main.c	2012-09-11 20:50:55.822622214 -0700
++++ ./bnx2x/bnx2x_main.c	2012-09-16 16:55:38.482587623 -0700
 @@ -599,6 +599,23 @@ static u64 bnx2x_wb_rd(struct bnx2x *bp,
  }
  #endif
