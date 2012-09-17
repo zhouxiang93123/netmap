@@ -116,25 +116,33 @@ bnx2x_netmap_reg(struct ifnet *ifp, int onoff)
 	 * 
 	 */
 	D("setting netmap mode for %s to %s", ifp->if_xname, onoff ? "ON" : "OFF");
-	bnx2x_netmap_diag(ifp);
+	// bnx2x_netmap_diag(ifp);
 
 	rtnl_lock(); // here is needed.
 	if (netif_running(ifp)) {
+		D("unloading the nic");
 		bnx2x_nic_unload(adapter, UNLOAD_NORMAL);
 		need_load = 1;
 	}
 
+if (1) // only load/unload
+	error = EINVAL;
+else
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
 		/* save if_transmit and replace with our routine */
 		na->if_transmit = (void *)ifp->netdev_ops;
 		ifp->netdev_ops = &na->nm_ndo;
+		D("-------------- set the SKIP_INTR flag");
+		na->na_flags |= NAF_SKIP_INTR; /* during load, use regular interrupts */
 	} else { /* reset normal mode */
 		ifp->netdev_ops = (void *)na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
 	}
-	if (need_load)
+	if (need_load) {
+		D("loading the NIC");
 		bnx2x_nic_load(adapter, LOAD_NORMAL);
+	}
 	rtnl_unlock();
 	return (error);
 }
@@ -217,6 +225,7 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k = ring->cur, l, n, lim = kring->nkr_num_slots - 1;
+	int error = 0;
 
 	/* if cur is invalid reinitialize the ring. */
 	if (k > lim)
@@ -237,7 +246,11 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 */
 	j = kring->nr_hwcur;
 	if (j != k) {	/* we have new packets to send */
-D("send from %d to %d fp %p txdata %p", j, k, fp, txdata);
+		D("send from %d to %d fp %p txdata %p desc_ring %p", j, k, fp, txdata, txdata->tx_desc_ring);
+		if (txdata->tx_desc_ring == NULL) {
+			error = EINVAL;
+			goto err;
+		}
 		l = txdata->tx_bd_prod;
 		for (n = 0; j != k; n++) {
 			struct netmap_slot *slot = &ring->slot[j];
@@ -347,8 +360,11 @@ ring_reset:
 	/* update avail to what the kernel knows */
 	ring->avail = kring->nr_hwavail;
 
+err:
 	if (do_lock)
 		mtx_unlock(&kring->q_lock);
+	if (error)
+		return netmap_ring_reinit(kring);
 	return 0;
 }
 
@@ -581,6 +597,9 @@ bnx2x_netmap_config(struct SOFTC_T *bp)
 			void *addr = PNMB(slot + j, &paddr);
 		}
 	}
+	/* now use regular interrupts */
+	D("------------- clear the SKIP_INTR flag");
+	na->na_flags &= ~NAF_SKIP_INTR;
 	return 1;
 }
 
