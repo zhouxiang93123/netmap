@@ -307,7 +307,7 @@ ring_reset:
 			 */
 
 			bd->bd_flags.as_bitfield = ETH_TX_BD_FLAGS_START_BD;
-			bd->vlan_or_ethertype = cpu_to_le16(txdata->tx_pkt_prod + n);
+			bd->vlan_or_ethertype = cpu_to_le16(txdata->tx_pkt_prod);
 
 			bd->addr_lo = cpu_to_le32(U64_LO(paddr));
 			bd->addr_hi = cpu_to_le32(U64_HI(paddr));
@@ -323,6 +323,7 @@ ring_reset:
 			SET_FLAG(bd->general_data, ETH_TX_START_BD_HDR_NBDS, 1 /* XXX */ );
 
 			j = (j == lim) ? 0 : j + 1;
+			txdata->tx_pkt_prod++;
 			l = NEXT_TX_IDX(l); // skip link fields.
 			/* clear the parsing block */
 			bzero(&txdata->tx_desc_ring[TX_BD(l)], sizeof(*bd));
@@ -345,8 +346,8 @@ RD(1, "------ txq %d cid %d bd %d[%d] tx_buf %d\n"
 		kring->nr_hwcur = k; /* the saved ring->cur */
 		/* decrease avail by number of packets  sent */
 		kring->nr_hwavail -= n;
-		txdata->tx_pkt_prod += n; /* this wraps mod 2^16 */
 		/* XXX Check how to deal with nkr_hwofs */
+		/* these two are always in sync. */
 		txdata->tx_bd_prod = l;
 		txdata->tx_db.data.prod = l;	// update doorbell
 
@@ -599,17 +600,23 @@ bnx2x_netmap_config(struct SOFTC_T *bp)
 	struct bnx2x_fastpath *fp;
 	struct bnx2x_fp_txdata *txdata;
 	int j, ring_nr;
+	int nq;	/* number of queues to use */
 
 	slot = netmap_reset(na, NR_TX, 0, 0);	// quick test on first ring
 	if (!slot)
 		return 0;	// not in netmap;
-	D("# queues: tx %d rx %d act %d",
+	nq = na->num_rx_rings;
+	D("# queues: tx %d rx %d act %d %d",
 		bp->dev->num_tx_queues, bp->dev->num_rx_queues,
-		BNX2X_NUM_QUEUES(bp) );
+		BNX2X_NUM_QUEUES(bp), nq );
+	if (BNX2X_NUM_QUEUES(bp) < nq) {
+		nq = BNX2X_NUM_QUEUES(bp);
+		D("******** wartning, truncate to %d rings", nq);
+	}
 	D("allocate memory, tx/rx slots: %d %d max %d %d",
 		(int)bp->tx_ring_size, (int)bp->rx_ring_size,
 		na->num_tx_desc, na->num_rx_desc);
-	for (ring_nr = 0; ring_nr < BNX2X_NUM_QUEUES(bp); ring_nr++) {
+	for (ring_nr = 0; ring_nr < nq; ring_nr++) {
 		netmap_reset(na, NR_TX, ring_nr, 0);
 	}
 	/*
@@ -624,7 +631,7 @@ bnx2x_netmap_config(struct SOFTC_T *bp)
 	/*
 	 * on the receive ring, must set buf addresses into the slots.
 	 */
-	for (ring_nr = 0; ring_nr < BNX2X_NUM_QUEUES(bp); ring_nr++) {
+	for (ring_nr = 0; ring_nr < nq; ring_nr++) {
 		slot = netmap_reset(na, NR_RX, ring_nr, 0);
 		fp = &bp->fp[ring_nr];
 		txdata = &fp->txdata[0];
@@ -661,12 +668,12 @@ bnx2x_netmap_attach(struct SOFTC_T *adapter)
 
 	na.ifp = dev;
 	na.separate_locks = 1;	/* this card has separate rx/tx locks */
-	/* apparently the card starts with rx_ring_size = 0, and this is set up
-	 * at a later time during the open() routine. So we force to use
-	 * tx_ring_size. Also note, this is the *net* number of entries,
+	/* The ring size is the number of tx bd, but since we use 2 per
+	 * packet, make the tx ring shorter.
+	 * Let's see what to do with the 
 	 * skipping those continuation blocks.
 	 */
-	na.num_tx_desc = adapter->tx_ring_size;
+	na.num_tx_desc = adapter->tx_ring_size / 2;
 	na.num_rx_desc = na.num_tx_desc; // XXX see above
 	na.nm_txsync = bnx2x_netmap_txsync;
 	na.nm_rxsync = bnx2x_netmap_rxsync;
@@ -675,8 +682,9 @@ bnx2x_netmap_attach(struct SOFTC_T *adapter)
 	 * but we still cosider it. If FCOE is supported, the last hw
 	 * queue is used for it.
  	 */
-	netmap_attach(&na, BNX2X_NUM_ETH_QUEUES(adapter));
-	D("%d queues, tx: %d rx %d slots", BNX2X_NUM_ETH_QUEUES(adapter), na.num_tx_desc, na.num_rx_desc);
+	netmap_attach(&na, 4); // BNX2X_NUM_ETH_QUEUES(adapter));
+	D("%d queues, tx: %d rx %d slots", na.num_rx_rings,
+			na.num_tx_desc, na.num_rx_desc);
 }
 #endif /* NETMAP_BNX2X_MAIN */
 /* end of file */
