@@ -265,7 +265,7 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			goto err;
 		}
 		l = txdata->tx_bd_prod;
-		RD(10,"=======>========== send from %d to %d at bd %d", j, k, l);
+		ND(10,"=======>========== send from %d to %d at bd %d", j, k, l);
 		for (n = 0; j != k; n++) {
 			struct netmap_slot *slot = &ring->slot[j];
 			struct eth_tx_start_bd *bd =
@@ -275,8 +275,8 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			uint16_t len = slot->len;
 			uint16_t mac_type = UNICAST_ADDRESS;
 
-nm_pkt_dump(j, addr, len);
-RD(5, "start_bd j %d l %d is %p", j, l, bd);
+			// nm_pkt_dump(j, addr, len);
+			ND(5, "start_bd j %d l %d is %p", j, l, bd);
 			/*
 			 * Quick check for valid addr and len.
 			 * PNMB() returns netmap_buffer_base for invalid
@@ -329,7 +329,7 @@ ring_reset:
 			bzero(&txdata->tx_desc_ring[TX_BD(l)], sizeof(*bd));
 			l = NEXT_TX_IDX(l); // skip link fields.
 { uint32_t *pbd = (void *)(bd + 1);
-RD(1, "------ txq %d cid %d bd %d[%d] tx_buf %d\n"
+ND(1, "------ txq %d cid %d bd %d[%d] tx_buf %d\n"
         "START: A 0x%08x 0x%08x nbd %d by %d vlan %d fl 0x%x gd 0x%x\n"
         "PARSE: 0x%08x 0x%08x 0x%08x 0x%08x",
 
@@ -354,7 +354,7 @@ RD(1, "------ txq %d cid %d bd %d[%d] tx_buf %d\n"
 		wmb();	/* synchronize writes to the NIC ring */
 		barrier();	// XXX
 		/* (re)start the transmitter up to slot l (excluded) */
-		RD(5, "doorbell cid %d data 0x%x", txdata->cid, txdata->tx_db.raw);
+		ND(5, "doorbell cid %d data 0x%x", txdata->cid, txdata->tx_db.raw);
 		DOORBELL(adapter, ring_nr, txdata->tx_db.raw);
 	}
 
@@ -381,7 +381,7 @@ RD(1, "------ txq %d cid %d bd %d[%d] tx_buf %d\n"
 		l = le16_to_cpu(*txdata->tx_cons_sb);
 		delta = l - txdata->tx_pkt_cons; // XXX buffers, not slots
 		if (delta) {
-			RD(5, "txr %d completed %d packets", ring_nr, delta);
+			ND(5, "txr %d completed %d packets", ring_nr, delta);
 			/* some tx completed, increment hwavail. */
 			if (delta < 0)
 				delta += kring->nkr_num_slots;
@@ -457,6 +457,7 @@ bnx2x_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	u_int k = ring->cur, resvd = ring->reserved;
 	uint16_t hw_comp_cons, sw_comp_cons;
 
+return 0; // XXX unsupported now
 
 	if (k > lim) /* userspace is cheating */
 		return netmap_ring_reinit(kring);
@@ -491,7 +492,7 @@ bnx2x_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		hw_comp_cons++;
 
 	rmb(); // XXX
-D("start ring %d k %d lim %d hw_comp_cons %d", ring_nr, k, lim, hw_comp_cons);
+ND("start ring %d k %d lim %d hw_comp_cons %d", ring_nr, k, lim, hw_comp_cons);
 goto done; // XXX debugging
 
 	if (netmap_no_pendintr || force_update) {
@@ -624,7 +625,7 @@ bnx2x_netmap_config(struct SOFTC_T *bp)
 	 */
 	fp = &bp->fp[0];
 	txdata = &fp->txdata[0];
-	D("tx: pkt cons/prod %d -> %d, bd cons/prod %d -> %d, cons_sb %p",
+	ND("tx: pkt cons/prod %d -> %d, bd cons/prod %d -> %d, cons_sb %p",
 		txdata->tx_pkt_cons, txdata->tx_pkt_prod,
 		txdata->tx_bd_cons, txdata->tx_bd_prod,
 		txdata->tx_cons_sb );
@@ -635,7 +636,7 @@ bnx2x_netmap_config(struct SOFTC_T *bp)
 		slot = netmap_reset(na, NR_RX, ring_nr, 0);
 		fp = &bp->fp[ring_nr];
 		txdata = &fp->txdata[0];
-		D("rx: comp cons/prod %d -> %d, bd cons/prod %d -> %d, cons_sb %p",
+		ND("rx: comp cons/prod %d -> %d, bd cons/prod %d -> %d, cons_sb %p",
 			fp->rx_comp_cons, fp->rx_comp_prod,
 			fp->rx_bd_cons, fp->rx_bd_prod,
 			fp->rx_cons_sb );
