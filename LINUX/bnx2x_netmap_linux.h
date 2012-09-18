@@ -70,17 +70,28 @@ For each Class Of Service (COS) we have NUM_TX_BD slots in total.
 
 int bnx2x_netmap_config(struct SOFTC_T *adapter);
 
+static inline void
+nm_pkt_dump(int i, char *buf, int len)
+{
+    uint8_t *s = buf+6, *d = buf;
+    RD(10, "%d len %4d %02x:%02x:%02x:%02x:%02x:%02x -> %02x:%02x:%02x:%02x:%02x:%02x",
+		i,
+		len,
+		s[0], s[1], s[2], s[3], s[4], s[5],
+		d[0], d[1], d[2], d[3], d[4], d[5]);
+}
+
 #ifdef NETMAP_BNX2X_MAIN
 /*
  * Some diagnostic to figure out the configuration.
  */
-static void
+static inline void
 bnx2x_netmap_diag(struct ifnet *ifp)
 {
 	struct SOFTC_T *bp = netdev_priv(ifp);
 	struct bnx2x_fastpath *fp = &bp->fp[0];
 	struct bnx2x_fp_txdata *txdata = &fp->txdata[0];
-	int i, n;
+	int i;
 
 	D("---- device %s ---- fp0 %p txdata %p q %d txq %d rxq %d -------",
 		ifp->if_xname, fp, txdata, BNX2X_NUM_QUEUES(bp),
@@ -261,6 +272,7 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			void *addr = PNMB(slot, &paddr);
 			uint16_t len = slot->len;
 
+nm_pkt_dump(j, addr, len);
 RD(5, "start_bd j %d l %d is %p", j, l, bd);
 			/*
 			 * Quick check for valid addr and len.
@@ -283,24 +295,20 @@ ring_reset:
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
 			/*
-			 * Fill the slot in the NIC ring.
-			 * vlan_or_ethertype is (presumably) the index that the XMIT engine will
-			 * report as consumed buffer.
-			 * address in the NIC ring. Other drivers do not
-			 * need this.
+			 * Fill the slot in the NIC ring. FreeBSD's if_bxe.c has
+			 * a lot of notes including:
+			 * - min number of nbd is 2 even if the parsing bd is not used,
+			 *   otherwise we get an MC assert! error
+			 * - if vlan is not used, firmware expect a packet number there.
+			 * - do we care for mac-type ?
 			 */
 
 			bd->bd_flags.as_bitfield = ETH_TX_BD_FLAGS_START_BD;
-			// XXX bnx2x writes the buffer index here, but i think
-			// this is not used anywhere.
-			bd->vlan_or_ethertype = cpu_to_le16(j);	// XXX producer index ?
+			bd->vlan_or_ethertype = cpu_to_le16(txdata->tx_pkt_prod + n);
 
 			bd->addr_lo = cpu_to_le32(U64_LO(paddr));
 			bd->addr_hi = cpu_to_le32(U64_HI(paddr));
 			bd->nbytes = cpu_to_le16(len);
-			/* XXX what is the minimum number of buffer descriptors ?
-			 * The std driver seems to use always 2.
-			 */
 			bd->nbd = cpu_to_le16(2);
 		{
 			int mac_type = UNICAST_ADDRESS;
@@ -315,14 +323,12 @@ ring_reset:
 			
 			SET_FLAG(bd->general_data, ETH_TX_START_BD_ETH_ADDR_TYPE, mac_type);
 		}
-			// XXX the docs say to use 1 for number of headers. Should not affect the total
-			// nor parsing blocks, though i do not understand how the firmware understands
-			// whether there is a parsing block.
 			SET_FLAG(bd->general_data, ETH_TX_START_BD_HDR_NBDS, 1 /* XXX */ );
 
 			/* XXX set len */
 			j = (j == lim) ? 0 : j + 1;
 			l = TX_BD(NEXT_TX_IDX(l)); // skip link fields.
+			/* clear the parsing block */
 			bzero(&txdata->tx_desc_ring[l], sizeof(*bd));
 			l = TX_BD(NEXT_TX_IDX(l)); // skip link fields.
 { uint32_t *pbd = (void *)(bd + 1);
@@ -349,8 +355,8 @@ RD(1, "------ txq %d cid %d bd %d[%d] tx_buf %d\n"
 
 		wmb();	/* synchronize writes to the NIC ring */
 		/* (re)start the transmitter up to slot l (excluded) */
-		D("doorbell cid %d data 0x%x", txdata->cid, txdata->tx_db.raw);
-		DOORBELL(adapter, txdata->cid, txdata->tx_db.raw);
+		RD(5, "doorbell cid %d data 0x%x", txdata->cid, txdata->tx_db.raw);
+		DOORBELL(adapter, ring_nr, txdata->tx_db.raw);
 	}
 
 	/*
@@ -359,7 +365,6 @@ RD(1, "------ txq %d cid %d bd %d[%d] tx_buf %d\n"
 	 */
 	if (1) {
 		int delta;
-		uint16_t *sb = txdata->tx_cons_sb;
 
 		/*
 		 * Record completed transmissions.
@@ -374,10 +379,9 @@ RD(1, "------ txq %d cid %d bd %d[%d] tx_buf %d\n"
 		 * track of the most recently completed transmission.
 		 */
 		l = le16_to_cpu(*txdata->tx_cons_sb);
-		RD(10,"device reports tx_cons_sb %d [%d %d %d %d]", l,
-			sb[-1], sb[0], sb[1], sb[2]);
 		delta = l - txdata->tx_pkt_cons; // XXX buffers, not slots
 		if (delta) {
+			RD(5, "txr %d completed %d packets", ring_nr, delta);
 			/* some tx completed, increment hwavail. */
 			if (delta < 0)
 				delta += kring->nkr_num_slots;
