@@ -1655,18 +1655,22 @@ netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
 
 	if (!(ifp->if_capenable & IFCAP_NETMAP))
 		return 0;
-RD(5, "received %s queue %d", work_done ? "RX" : "TX" , q);
+ND(5, "received %s queue %d", work_done ? "RX" : "TX" , q);
 	na = NA(ifp);
 	if (na->na_flags & NAF_SKIP_INTR) {
-		D("use regular interrupt");
+		ND("use regular interrupt");
 		return 0;
 	}
 
 	if (work_done) { /* RX path */
+		if (q >= na->num_rx_rings)
+			return 0;	// regular queue
 		r = na->rx_rings + q;
 		r->nr_kflags |= NKR_PENDINTR;
 		main_wq = (na->num_rx_rings > 1) ? &na->rx_si : NULL;
 	} else { /* tx path */
+		if (q >= na->num_tx_rings)
+			return 0;	// regular queue
 		r = na->tx_rings + q;
 		main_wq = (na->num_tx_rings > 1) ? &na->tx_si : NULL;
 		work_done = &q; /* dummy */
