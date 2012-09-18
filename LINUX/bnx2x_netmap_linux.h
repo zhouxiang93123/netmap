@@ -291,11 +291,17 @@ ring_reset:
 			 */
 
 			bd->bd_flags.as_bitfield = ETH_TX_BD_FLAGS_START_BD;
+			// XXX bnx2x writes the buffer index here, but i think
+			// this is not used anywhere.
 			bd->vlan_or_ethertype = cpu_to_le16(j);	// XXX producer index ?
+
 			bd->addr_lo = cpu_to_le32(U64_LO(paddr));
 			bd->addr_hi = cpu_to_le32(U64_HI(paddr));
 			bd->nbytes = cpu_to_le16(len);
-			bd->nbd = cpu_to_le16(1);
+			/* XXX what is the minimum number of buffer descriptors ?
+			 * The std driver seems to use always 2.
+			 */
+			bd->nbd = cpu_to_le16(2);
 		{
 			int mac_type = UNICAST_ADDRESS;
 #if 0 // XXX
@@ -317,11 +323,28 @@ ring_reset:
 			/* XXX set len */
 			j = (j == lim) ? 0 : j + 1;
 			l = TX_BD(NEXT_TX_IDX(l)); // skip link fields.
+			bzero(&txdata->tx_desc_ring[l], sizeof(*bd));
+			l = TX_BD(NEXT_TX_IDX(l)); // skip link fields.
+{ uint32_t *pbd = (void *)(bd + 1);
+RD(1, "------ txq %d cid %d bd %d[%d] tx_buf %d\n"
+        "START: A 0x%08x 0x%08x nbd %d by %d vlan %d fl 0x%x gd 0x%x\n"
+        "PARSE: 0x%08x 0x%08x 0x%08x 0x%08x",
+
+        ring_nr, txdata->cid, l - 2, bd->nbd,
+        txdata->tx_pkt_prod,
+        bd->addr_hi, bd->addr_lo, bd->nbd,
+        bd->nbytes, bd->vlan_or_ethertype,
+        bd->bd_flags.as_bitfield, bd->general_data,
+        pbd[0], pbd[1], pbd[2], pbd[3]
+        );
+}
+
 		}
 		kring->nr_hwcur = k; /* the saved ring->cur */
 		/* decrease avail by number of packets  sent */
 		kring->nr_hwavail -= n;
 		txdata->tx_bd_prod = l; /* XXX adjust kring->nkr_hwofs) ? */
+		txdata->tx_pkt_prod += n; /* XXX adjust kring->nkr_hwofs) ? */
 		txdata->tx_db.data.prod = l;	// update doorbell
 
 		wmb();	/* synchronize writes to the NIC ring */
@@ -340,12 +363,15 @@ ring_reset:
 
 		/*
 		 * Record completed transmissions.
-		 * The card writes the current index in memory in
+		 * The card writes the current (pkt ?) index in memory in
 		 * 	le16_to_cpu(*txdata->tx_cons_sb);
+		 * This seems to be a sequential index with no skips modulo 2^16
+		 * irrespective of the actual ring size.
+		 * In netmap we can use 1 pkt/1bd so the pkt_cons
+		 * is an index in the netmap buffer. The bd_index
+		 * however should be computed with some trick.
 		 * We (re)use the driver's txr->tx_pkt_cons to keep
 		 * track of the most recently completed transmission.
-		 * XXX the hw reports a 'pkt' index, but in netmap mode
-		 * they are in sync with the 
 		 */
 		l = le16_to_cpu(*txdata->tx_cons_sb);
 		RD(10,"device reports tx_cons_sb %d [%d %d %d %d]", l,
@@ -355,7 +381,7 @@ ring_reset:
 			/* some tx completed, increment hwavail. */
 			if (delta < 0)
 				delta += kring->nkr_num_slots;
-			txdata->tx_bd_cons = l;
+			txdata->tx_pkt_cons = l;
 			kring->nr_hwavail += delta;
 			if (kring->nr_hwavail > lim)
 				goto ring_reset;
