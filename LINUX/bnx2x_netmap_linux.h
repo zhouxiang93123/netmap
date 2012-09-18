@@ -246,25 +246,25 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 */
 	j = kring->nr_hwcur;
 	if (j != k) {	/* we have new packets to send */
-		D("send from %d to %d fp %p txdata %p desc_ring %p", j, k, fp, txdata, txdata->tx_desc_ring);
 		if (txdata->tx_desc_ring == NULL) {
+			D("------------------- bad! tx_desc_ring not set");
 			error = EINVAL;
 			goto err;
 		}
-		l = txdata->tx_bd_prod;
+		l = txdata->tx_bd_prod; // a free BD
+		RD(10,"=======>========== send from %d to %d at bd %d", j, k, l);
 		for (n = 0; j != k; n++) {
 			struct netmap_slot *slot = &ring->slot[j];
-			struct eth_tx_start_bd *tx_start_bd =
-				&txdata->tx_desc_ring[l].start_bd;
+			struct eth_tx_start_bd *bd = &txdata->tx_desc_ring[l].start_bd;
 			
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
 			uint16_t len = slot->len;
 
-D("start_bd j %d l %d is %p", j, l, tx_start_bd);
+RD(5, "start_bd j %d l %d is %p", j, l, bd);
 			/*
 			 * Quick check for valid addr and len.
-			 * NMB() returns netmap_buffer_base for invalid
+			 * PNMB() returns netmap_buffer_base for invalid
 			 * buffer indexes (but the address is still a
 			 * valid one to be used in a ring). slot->len is
 			 * unsigned so no need to check for negative values.
@@ -290,12 +290,12 @@ ring_reset:
 			 * need this.
 			 */
 
-			tx_start_bd->bd_flags.as_bitfield = ETH_TX_BD_FLAGS_START_BD;
-			tx_start_bd->vlan_or_ethertype = cpu_to_le16(j);	// XXX producer index ?
-			tx_start_bd->addr_lo = cpu_to_le32(U64_LO(paddr));
-			tx_start_bd->addr_hi = cpu_to_le32(U64_HI(paddr));
-			tx_start_bd->nbytes = cpu_to_le16(len);
-			tx_start_bd->nbd = cpu_to_le16(1);
+			bd->bd_flags.as_bitfield = ETH_TX_BD_FLAGS_START_BD;
+			bd->vlan_or_ethertype = cpu_to_le16(j);	// XXX producer index ?
+			bd->addr_lo = cpu_to_le32(U64_LO(paddr));
+			bd->addr_hi = cpu_to_le32(U64_HI(paddr));
+			bd->nbytes = cpu_to_le16(len);
+			bd->nbd = cpu_to_le16(1);
 		{
 			int mac_type = UNICAST_ADDRESS;
 #if 0 // XXX
@@ -307,12 +307,12 @@ ring_reset:
 			}
 #endif // XXX
 			
-			SET_FLAG(tx_start_bd->general_data, ETH_TX_START_BD_ETH_ADDR_TYPE, mac_type);
+			SET_FLAG(bd->general_data, ETH_TX_START_BD_ETH_ADDR_TYPE, mac_type);
 		}
 			// XXX the docs say to use 1 for number of headers. Should not affect the total
 			// nor parsing blocks, though i do not understand how the firmware understands
 			// whether there is a parsing block.
-			SET_FLAG(tx_start_bd->general_data, ETH_TX_START_BD_HDR_NBDS, 1 /* XXX */ );
+			SET_FLAG(bd->general_data, ETH_TX_START_BD_HDR_NBDS, 1 /* XXX */ );
 
 			/* XXX set len */
 			j = (j == lim) ? 0 : j + 1;
@@ -322,9 +322,11 @@ ring_reset:
 		/* decrease avail by number of packets  sent */
 		kring->nr_hwavail -= n;
 		txdata->tx_bd_prod = l; /* XXX adjust kring->nkr_hwofs) ? */
+		txdata->tx_db.data.prod = l;	// update doorbell
 
 		wmb();	/* synchronize writes to the NIC ring */
 		/* (re)start the transmitter up to slot l (excluded) */
+		D("doorbell cid %d data 0x%x", txdata->cid, txdata->tx_db.raw);
 		DOORBELL(adapter, txdata->cid, txdata->tx_db.raw);
 	}
 
@@ -334,6 +336,7 @@ ring_reset:
 	 */
 	if (1) {
 		int delta;
+		uint16_t *sb = txdata->tx_cons_sb;
 
 		/*
 		 * Record completed transmissions.
@@ -345,7 +348,8 @@ ring_reset:
 		 * they are in sync with the 
 		 */
 		l = le16_to_cpu(*txdata->tx_cons_sb);
-		RD(10,"device reports tx_cons_sb %d", l);
+		RD(10,"device reports tx_cons_sb %d [%d %d %d %d]", l,
+			sb[-1], sb[0], sb[1], sb[2]);
 		delta = l - txdata->tx_pkt_cons; // XXX buffers, not slots
 		if (delta) {
 			/* some tx completed, increment hwavail. */
@@ -419,7 +423,6 @@ bnx2x_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	u_int k = ring->cur, resvd = ring->reserved;
 	uint16_t hw_comp_cons, sw_comp_cons;
 
-D("start ring %d k %d lim %d", ring_nr, k, lim);
 
 	if (k > lim) /* userspace is cheating */
 		return netmap_ring_reinit(kring);
@@ -454,9 +457,10 @@ D("start ring %d k %d lim %d", ring_nr, k, lim);
 		hw_comp_cons++;
 
 	rmb(); // XXX
+D("start ring %d k %d lim %d hw_comp_cons %d", ring_nr, k, lim, hw_comp_cons);
+goto done; // XXX debugging
 
 	if (netmap_no_pendintr || force_update) {
-		n = 0;
 		for (n = 0; sw_comp_cons != hw_comp_cons; sw_comp_cons = RCQ_BD(NEXT_RCQ_IDX(sw_comp_cons)) ) {
 			union eth_rx_cqe *cqe = &rxr->rx_comp_ring[l];
 			struct eth_fast_path_rx_cqe *cqe_fp = &cqe->fast_path_cqe;
@@ -531,6 +535,7 @@ D("start ring %d k %d lim %d", ring_nr, k, lim);
 		bnx2x_update_rx_prod(adapter, rxr, l, sw_comp_prod,
 				     rxr->rx_sge_prod);
 	}
+done:
 	/* tell userspace that there are new packets */
 	ring->avail = kring->nr_hwavail - resvd;
 
@@ -571,14 +576,14 @@ bnx2x_netmap_config(struct SOFTC_T *bp)
 	D("allocate memory, tx/rx slots: %d %d max %d %d",
 		(int)bp->tx_ring_size, (int)bp->rx_ring_size,
 		na->num_tx_desc, na->num_rx_desc);
-	fp = &bp->fp[0];
-	txdata = &fp->txdata[0];
 	for (ring_nr = 0; ring_nr < BNX2X_NUM_QUEUES(bp); ring_nr++) {
 		netmap_reset(na, NR_TX, ring_nr, 0);
 	}
 	/*
 	 * Do nothing on the tx ring, addresses are set up at tx time.
 	 */
+	fp = &bp->fp[0];
+	txdata = &fp->txdata[0];
 	D("tx: pkt cons/prod %d -> %d, bd cons/prod %d -> %d, cons_sb %p",
 		txdata->tx_pkt_cons, txdata->tx_pkt_prod,
 		txdata->tx_bd_cons, txdata->tx_bd_prod,
@@ -588,6 +593,8 @@ bnx2x_netmap_config(struct SOFTC_T *bp)
 	 */
 	for (ring_nr = 0; ring_nr < BNX2X_NUM_QUEUES(bp); ring_nr++) {
 		slot = netmap_reset(na, NR_RX, ring_nr, 0);
+		fp = &bp->fp[ring_nr];
+		txdata = &fp->txdata[0];
 		D("rx: comp cons/prod %d -> %d, bd cons/prod %d -> %d, cons_sb %p",
 			fp->rx_comp_cons, fp->rx_comp_prod,
 			fp->rx_bd_cons, fp->rx_bd_prod,
