@@ -31,6 +31,16 @@
  * The programming manual is publicly available at
  *	http://www.broadcom.com/collateral/pg/57710_57711-PG200-R.pdf
  *	http://www.broadcom.com/collateral/pg/57XX-PG105-R.pdf
+ * but they do not match the code in the Linux or FreeBSD driversi (bnx2x, bxe).
+ * The FreeBSD driver has a number of comments in the code that explain a lot
+ * of the constraints in the firmware.
+ *
+ * Of particular relevance:
+
+The buffer descriptor (bd) and packet (pkt) indexes handled by
+the firmware are 16-bit values, no matter how big the rings are.
+The current driver then has a number of BD slots which is also
+a power of 2 so truncation does the right thing when accessing the arrays.
 
 Configuration in the linux driver:
 BCM_PAGE_SIZE		4096		// Pages are 4 Kbytes
@@ -109,7 +119,7 @@ bnx2x_netmap_diag(struct ifnet *ifp)
 }
 
 /*
- * Register/unregister. We are already under core lock.
+ * Register/unregister. We are already under (netmap) core lock.
  * Only called on the first register or the last unregister.
  */
 static int
@@ -124,12 +134,11 @@ bnx2x_netmap_reg(struct ifnet *ifp, int onoff)
 	/*
 	 * On enable, flush pending ops, set flag and reinit rings.
 	 * On disable, flush again, and restart the interface.
-	 * 
 	 */
 	D("setting netmap mode for %s to %s", ifp->if_xname, onoff ? "ON" : "OFF");
 	// bnx2x_netmap_diag(ifp);
 
-	rtnl_lock(); // here is needed.
+	rtnl_lock(); // required by bnx2x_nic_unload()
 	if (netif_running(ifp)) {
 		D("unloading the nic");
 		bnx2x_nic_unload(adapter, UNLOAD_NORMAL);
@@ -192,13 +201,13 @@ The linux driver numbers queues 0..15 for COS=0, 16..31 for COS=1,
 and so on. The low 4 bits are used to indicate the fastpath context.
 
 The tx ring is made of one or more pages containing Buffer Descriptors (BD)
+stored in fp->tx_desc_ring[],
 each 16-byte long (NOTE: different from the rx side). The last BD in a page
 (also 16 bytes) points to the next page (8 for physical address + 8 reserved bytes).
 These page are presumably contiguous in virtual address space so all it takes
 is to skip the reserved entries when we reach the last entry on the page
 (MAX_TX_DESC_CNT - 1, or 255).
 
-Unlike the standard driver we can limit ourselves to a single BD per packet.
 The driver differs from the documentation. In particular the END_BD flag
 seems not to exist anymore, presumably the firmware can derive the number
 of buffers from the START_BD flag plus nbd.
@@ -207,14 +216,12 @@ The field to initialize are (all in LE format)
 	addr_lo, addr_hi	LE32, physical buffer address
 	nbytes			LE16, packet size
 	vlan			LE16 ?? producer index ???
-	nbd			L8 1 only one buffer
-	bd_flags.as_bitfield	L8 START_BD XXX no END_BD, derived from the nbd field ?
-	general_data		L8 0 0..5: header_nbd; 6-7: ethernet_type
+	nbd			L8 2 seems the min required
+	bd_flags.as_bitfield	L8 START_BD XXX no END_BD
+	general_data		L8 0 0..5: header_nbd; 6-7: addr type
 
-and once we are done 'ring the doorbell' which presumably tells the NIC
-to look at further buffers in the tx queue.
-The doorbell is just a write to a register which includes which
-'fastpath' context (i.e. set of queues) to look at.
+and once we are done 'ring the doorbell' (write to a register)
+to tell the NIC the first empty slot in the queue.
 
 	struct bnx2x_fastpath *fp = &bp->fp[ring_nr % 16];
 	struct bnx2x_fp_txdata *txdata = &fp->txdata[ring_nr / 16];
@@ -235,7 +242,8 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	u_int j, k = ring->cur, l, n, lim = kring->nkr_num_slots - 1;
+	u_int j, k = ring->cur, n, lim = kring->nkr_num_slots - 1;
+	uint16_t l;
 	int error = 0;
 
 	/* if cur is invalid reinitialize the ring. */
@@ -246,14 +254,8 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 
 	/*
 	 * Process new packets to send. j is the current index in the
-	 * netmap ring, l is the corresponding index in the NIC ring
-	 * (txdata->tx_bd_prod). The two differ because of CONT entries
-	 * in the NIC ring, and also because upon reset we reset
-	 * the NIC ring but leave the netmap ring unchanged.
-	 * For the transmit ring, we have
-	 *
-	 *		j = kring->nr_hwcur
-	 *		l = ... (also txdata->tx_bd_prod;)
+	 * netmap ring, l is the corresponding bd_prod index (uint16_t).
+	 * XXX for the NIC ring index we must use TX_BD(l)
 	 */
 	j = kring->nr_hwcur;
 	if (j != k) {	/* we have new packets to send */
@@ -262,15 +264,16 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			error = EINVAL;
 			goto err;
 		}
-		l = txdata->tx_bd_prod; // a free BD
+		l = txdata->tx_bd_prod;
 		RD(10,"=======>========== send from %d to %d at bd %d", j, k, l);
 		for (n = 0; j != k; n++) {
 			struct netmap_slot *slot = &ring->slot[j];
-			struct eth_tx_start_bd *bd = &txdata->tx_desc_ring[l].start_bd;
-			
+			struct eth_tx_start_bd *bd =
+				&txdata->tx_desc_ring[TX_BD(l)].start_bd;
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
 			uint16_t len = slot->len;
+			uint16_t mac_type = UNICAST_ADDRESS;
 
 nm_pkt_dump(j, addr, len);
 RD(5, "start_bd j %d l %d is %p", j, l, bd);
@@ -310,27 +313,20 @@ ring_reset:
 			bd->addr_hi = cpu_to_le32(U64_HI(paddr));
 			bd->nbytes = cpu_to_le16(len);
 			bd->nbd = cpu_to_le16(2);
-		{
-			int mac_type = UNICAST_ADDRESS;
-#if 0 // XXX
-			if (unlikely(is_multicast_ether_addr(eth->h_dest))) {
-				if (is_broadcast_ether_addr(eth->h_dest))
+			if (unlikely(is_multicast_ether_addr(addr))) {
+				if (is_broadcast_ether_addr(addr))
 					mac_type = BROADCAST_ADDRESS;
 				else
 					mac_type = MULTICAST_ADDRESS;
 			}
-#endif // XXX
-			
 			SET_FLAG(bd->general_data, ETH_TX_START_BD_ETH_ADDR_TYPE, mac_type);
-		}
 			SET_FLAG(bd->general_data, ETH_TX_START_BD_HDR_NBDS, 1 /* XXX */ );
 
-			/* XXX set len */
 			j = (j == lim) ? 0 : j + 1;
-			l = TX_BD(NEXT_TX_IDX(l)); // skip link fields.
+			l = NEXT_TX_IDX(l); // skip link fields.
 			/* clear the parsing block */
-			bzero(&txdata->tx_desc_ring[l], sizeof(*bd));
-			l = TX_BD(NEXT_TX_IDX(l)); // skip link fields.
+			bzero(&txdata->tx_desc_ring[TX_BD(l)], sizeof(*bd));
+			l = NEXT_TX_IDX(l); // skip link fields.
 { uint32_t *pbd = (void *)(bd + 1);
 RD(1, "------ txq %d cid %d bd %d[%d] tx_buf %d\n"
         "START: A 0x%08x 0x%08x nbd %d by %d vlan %d fl 0x%x gd 0x%x\n"
@@ -349,11 +345,13 @@ RD(1, "------ txq %d cid %d bd %d[%d] tx_buf %d\n"
 		kring->nr_hwcur = k; /* the saved ring->cur */
 		/* decrease avail by number of packets  sent */
 		kring->nr_hwavail -= n;
-		txdata->tx_bd_prod = l; /* XXX adjust kring->nkr_hwofs) ? */
-		txdata->tx_pkt_prod += n; /* XXX adjust kring->nkr_hwofs) ? */
+		txdata->tx_pkt_prod += n; /* this wraps mod 2^16 */
+		/* XXX Check how to deal with nkr_hwofs */
+		txdata->tx_bd_prod = l;
 		txdata->tx_db.data.prod = l;	// update doorbell
 
 		wmb();	/* synchronize writes to the NIC ring */
+		barrier();	// XXX
 		/* (re)start the transmitter up to slot l (excluded) */
 		RD(5, "doorbell cid %d data 0x%x", txdata->cid, txdata->tx_db.raw);
 		DOORBELL(adapter, ring_nr, txdata->tx_db.raw);
@@ -372,6 +370,7 @@ RD(1, "------ txq %d cid %d bd %d[%d] tx_buf %d\n"
 		 * 	le16_to_cpu(*txdata->tx_cons_sb);
 		 * This seems to be a sequential index with no skips modulo 2^16
 		 * irrespective of the actual ring size.
+		 * We need to adjust buffer and packet indexes.
 		 * In netmap we can use 1 pkt/1bd so the pkt_cons
 		 * is an index in the netmap buffer. The bd_index
 		 * however should be computed with some trick.
@@ -385,8 +384,12 @@ RD(1, "------ txq %d cid %d bd %d[%d] tx_buf %d\n"
 			/* some tx completed, increment hwavail. */
 			if (delta < 0)
 				delta += kring->nkr_num_slots;
-			txdata->tx_pkt_cons = l;
 			kring->nr_hwavail += delta;
+			/* XXX lazy solution - consume 2 buffers */
+			for (;txdata->tx_pkt_cons != l; txdata->tx_pkt_cons++) {
+				txdata->tx_bd_cons = NEXT_TX_IDX(txdata->tx_bd_cons);
+				txdata->tx_bd_cons = NEXT_TX_IDX(txdata->tx_bd_cons);
+			}
 			if (kring->nr_hwavail > lim)
 				goto ring_reset;
 		}
