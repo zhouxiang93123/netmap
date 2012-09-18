@@ -653,7 +653,7 @@ bnx2x_netmap_attach(struct SOFTC_T *adapter)
 	bzero(&na, sizeof(na));
 
 	na.ifp = dev;
-	na.separate_locks = 0;	/* this card has separate rx/tx locks */
+	na.separate_locks = 1;	/* this card has separate rx/tx locks */
 	/* apparently the card starts with rx_ring_size = 0, and this is set up
 	 * at a later time during the open() routine. So we force to use
 	 * tx_ring_size. Also note, this is the *net* number of entries,
