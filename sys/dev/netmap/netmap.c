@@ -56,7 +56,6 @@
 
 #ifdef linux
 #include "bsd_glue.h"
-#include <asm/bitops.h>
 static netdev_tx_t linux_netmap_start(struct sk_buff *skb, struct net_device *dev);
 #endif /* linux */
 
