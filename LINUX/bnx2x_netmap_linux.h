@@ -41,33 +41,24 @@ The buffer descriptor (bd) and packet (pkt) indexes handled by
 the firmware are 16-bit values, no matter how big the rings are.
 The current driver then has a number of BD slots which is also
 a power of 2 so truncation does the right thing when accessing the arrays.
+Conversion of these indexes to NIC ring indexes should be done
+using TX_BD() and RX_BD() macros
 
-Configuration in the linux driver:
-BCM_PAGE_SIZE		4096		// Pages are 4 Kbytes
-					rx_bd = 8 bytes
-					tx_bd = 16 bytes
-					cont_desc = 16 bytes
-TX_DESC_CNT		4096/16=256	includes the cont.
-NEXT_PAGE_TX_DESC_CNT	1
-NUM_TX_RINGS		16		XXX this is really pages, not rings.
-NUM_TX_BD		256*NUM_TX_RINGS	gross, includes the cont.
-MAX_TX_BD		NUM_TX_BD-1	only to deal with indexes
+In the linux driver, NUM_TX_RINGS and NUM_RX_RINGS do not indicate
+NIC rings but the number of 4K pages used to store the rings.
+NIC rings are made of 8(rx) or 16(tx) byte entries, with the
+last 16 bytes in each page containing the pointer to the next page.
+Hence index increment should use the NEXT_TX_IDX() and NEXT_RX_IDX()
+macros to skip the link entries.
 
-MAX_TX_DESC_CNT		255		actual, per ring
-MAX_TX_AVAIL		255*16-2	overall
-TX_BD(x)		((x) & MAX_TX_BD)	modulo, all rings
-TX_BD_POFF(x)		((x) & MAX_TX_DESC_CNT)	modulo, single ring
+RX completions and other events are reported through a Request Completion Queue
+(RCQ) with 16-byte entries, again linked with the usual scheme.
+Navigate through them with the NEXT_RCQ_IDX() macro, and truncate
+the values with RCQ_BD()
 
-NUM_RX_RINGS		8		XXX this is really pages, not rings.
-RX_DESC_CNT		4096/sizeof(rx_bd) = 512	includes cont
-NEXT_PAGE_RX_DESC_CNT	2
-MAX_RX_DESC_CNT		510
-RX_DESC_MASK		511				within page ?
-NUM_RX_BD		RX_DESC_CNT*NUM_RX_RINGS=4096
-MAX_RX_BD		NUM_RX_BD-1
-MAX_RX_AVAIL		MAX_RX_DESC_CNT*NUM_RX_RINGS - 2	4078, pure coincidence.
+The TX ring REQUIRES at least two BD per packet even though the
+programming manual says differently.
 
-buffer descriptors are allocated in bnx2x_alloc_fp_mem_at().
 For each Class Of Service (COS) we have NUM_TX_BD slots in total.
 
  */
@@ -80,18 +71,19 @@ For each Class Of Service (COS) we have NUM_TX_BD slots in total.
 
 int bnx2x_netmap_config(struct SOFTC_T *adapter);
 
+#ifdef NETMAP_BNX2X_MAIN
+#warning --------------- compiling main code ----------------
 static inline void
 nm_pkt_dump(int i, char *buf, int len)
 {
     uint8_t *s = buf+6, *d = buf;
-    RD(10, "%d len %4d %02x:%02x:%02x:%02x:%02x:%02x -> %02x:%02x:%02x:%02x:%02x:%02x",
+    ND(10, "%d len %4d %02x:%02x:%02x:%02x:%02x:%02x -> %02x:%02x:%02x:%02x:%02x:%02x",
 		i,
 		len,
 		s[0], s[1], s[2], s[3], s[4], s[5],
 		d[0], d[1], d[2], d[3], d[4], d[5]);
 }
 
-#ifdef NETMAP_BNX2X_MAIN
 /*
  * Some diagnostic to figure out the configuration.
  */
@@ -154,7 +146,7 @@ else
 		na->if_transmit = (void *)ifp->netdev_ops;
 		ifp->netdev_ops = &na->nm_ndo;
 		D("-------------- set the SKIP_INTR flag");
-		na->na_flags |= NAF_SKIP_INTR; /* during load, use regular interrupts */
+		// XXX na->na_flags |= NAF_SKIP_INTR; /* during load, use regular interrupts */
 	} else { /* reset normal mode */
 		ifp->netdev_ops = (void *)na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
@@ -258,6 +250,10 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 * XXX for the NIC ring index we must use TX_BD(l)
 	 */
 	j = kring->nr_hwcur;
+	if (j > lim) {
+		D("q %d nwcur overflow %d", j);
+		goto ring_reset;
+	}
 	if (j != k) {	/* we have new packets to send */
 		if (txdata->tx_desc_ring == NULL) {
 			D("------------------- bad! tx_desc_ring not set");
@@ -288,6 +284,7 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 ring_reset:
 				if (do_lock)
 					mtx_unlock(&kring->q_lock);
+				D("ring %d error, resetting", ring_nr);
 				return netmap_ring_reinit(kring);
 			}
 
@@ -328,24 +325,11 @@ ring_reset:
 			/* clear the parsing block */
 			bzero(&txdata->tx_desc_ring[TX_BD(l)], sizeof(*bd));
 			l = NEXT_TX_IDX(l); // skip link fields.
-{ uint32_t *pbd = (void *)(bd + 1);
-ND(1, "------ txq %d cid %d bd %d[%d] tx_buf %d\n"
-        "START: A 0x%08x 0x%08x nbd %d by %d vlan %d fl 0x%x gd 0x%x\n"
-        "PARSE: 0x%08x 0x%08x 0x%08x 0x%08x",
-
-        ring_nr, txdata->cid, l - 2, bd->nbd,
-        txdata->tx_pkt_prod,
-        bd->addr_hi, bd->addr_lo, bd->nbd,
-        bd->nbytes, bd->vlan_or_ethertype,
-        bd->bd_flags.as_bitfield, bd->general_data,
-        pbd[0], pbd[1], pbd[2], pbd[3]
-        );
-}
-
 		}
 		kring->nr_hwcur = k; /* the saved ring->cur */
 		/* decrease avail by number of packets  sent */
 		kring->nr_hwavail -= n;
+
 		/* XXX Check how to deal with nkr_hwofs */
 		/* these two are always in sync. */
 		txdata->tx_bd_prod = l;
@@ -362,8 +346,8 @@ ND(1, "------ txq %d cid %d bd %d[%d] tx_buf %d\n"
 	 * Reclaim buffers for completed transmissions, as in bnx2x_tx_int().
 	 * Maybe we could do it lazily.
 	 */
-	if (1) {
-		int delta;
+	for (n=0;n < 5;n++) {
+		uint16_t delta;
 
 		/*
 		 * Record completed transmissions.
@@ -380,11 +364,15 @@ ND(1, "------ txq %d cid %d bd %d[%d] tx_buf %d\n"
 		 */
 		l = le16_to_cpu(*txdata->tx_cons_sb);
 		delta = l - txdata->tx_pkt_cons; // XXX buffers, not slots
+		if (delta == 0) {
+			if (n > 1 || (n == 0 && txdata->tx_pkt_cons !=
+				    txdata->tx_pkt_prod))
+				ND(5, "txr[%d] exit after %d cycles, pending %d", ring_nr, n, (uint16_t)(txdata->tx_pkt_prod - txdata->tx_pkt_cons));
+			break;
+		}
 		if (delta) {
 			ND(5, "txr %d completed %d packets", ring_nr, delta);
 			/* some tx completed, increment hwavail. */
-			if (delta < 0)
-				delta += kring->nkr_num_slots;
 			kring->nr_hwavail += delta;
 			/* XXX lazy solution - consume 2 buffers */
 			for (;txdata->tx_pkt_cons != l; txdata->tx_pkt_cons++) {
@@ -395,8 +383,20 @@ ND(1, "------ txq %d cid %d bd %d[%d] tx_buf %d\n"
 				goto ring_reset;
 		}
 	}
+	if (0 && txdata->tx_pkt_cons != txdata->tx_pkt_prod) {
+		// XXX kick the sender
+		wmb();	/* synchronize writes to the NIC ring */
+		barrier();	// XXX
+		/* (re)start the transmitter up to slot l (excluded) */
+		ND(5, "doorbell cid %d data 0x%x", txdata->cid, txdata->tx_db.raw);
+		DOORBELL(adapter, ring_nr, txdata->tx_db.raw);
+	}
 	/* update avail to what the kernel knows */
+	if (ring->avail == 0 && kring->nr_hwavail >0)
+		ND(3,"txring %d restarted", ring_nr);
 	ring->avail = kring->nr_hwavail;
+	if (ring->avail == 0)
+		ND(3,"txring %d full", ring_nr);
 
 err:
 	if (do_lock)
@@ -647,7 +647,7 @@ bnx2x_netmap_config(struct SOFTC_T *bp)
 	}
 	/* now use regular interrupts */
 	D("------------- clear the SKIP_INTR flag");
-	na->na_flags &= ~NAF_SKIP_INTR;
+	// XXX na->na_flags &= ~NAF_SKIP_INTR;
 	return 1;
 }
 
@@ -674,7 +674,7 @@ bnx2x_netmap_attach(struct SOFTC_T *adapter)
 	 * Let's see what to do with the 
 	 * skipping those continuation blocks.
 	 */
-	na.num_tx_desc = adapter->tx_ring_size / 2;
+	na.num_tx_desc = adapter->tx_ring_size / 2 - 10;
 	na.num_rx_desc = na.num_tx_desc; // XXX see above
 	na.nm_txsync = bnx2x_netmap_txsync;
 	na.nm_rxsync = bnx2x_netmap_rxsync;
@@ -683,7 +683,7 @@ bnx2x_netmap_attach(struct SOFTC_T *adapter)
 	 * but we still cosider it. If FCOE is supported, the last hw
 	 * queue is used for it.
  	 */
-	netmap_attach(&na, 4); // BNX2X_NUM_ETH_QUEUES(adapter));
+	netmap_attach(&na, BNX2X_NUM_ETH_QUEUES(adapter));
 	D("%d queues, tx: %d rx %d slots", na.num_rx_rings,
 			na.num_tx_desc, na.num_rx_desc);
 }

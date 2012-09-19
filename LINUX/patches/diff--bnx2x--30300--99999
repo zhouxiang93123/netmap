@@ -1,5 +1,5 @@
---- broadcom/bnx2x/bnx2x_cmn.c	2012-09-11 20:50:55.812622063 -0700
-+++ ./bnx2x/bnx2x_cmn.c	2012-09-16 19:01:36.061193373 -0700
+--- old/bnx2x/bnx2x_cmn.c	2012-09-11 20:50:55.812622063 -0700
++++ new/bnx2x/bnx2x_cmn.c	2012-09-19 11:53:47.395311293 -0700
 @@ -30,6 +30,9 @@
  #include "bnx2x_sp.h"
  
@@ -10,31 +10,7 @@
  
  /**
   * bnx2x_move_fp - move content of the fastpath structure.
-@@ -142,6 +145,11 @@ int bnx2x_tx_int(struct bnx2x *bp, struc
- 		return -1;
- #endif
- 
-+#ifdef DEV_NETMAP
-+	if (netmap_tx_irq(bp->dev, txdata->txq_index))
-+		return 1; /* seems to be ignored */
-+#endif /* DEV_NETMAP */
-+
- 	txq = netdev_get_tx_queue(bp->dev, txdata->txq_index);
- 	hw_cons = le16_to_cpu(*txdata->tx_cons_sb);
- 	sw_cons = txdata->tx_pkt_cons;
-@@ -602,6 +610,11 @@ int bnx2x_rx_int(struct bnx2x_fastpath *
- 		return 0;
- #endif
- 
-+#ifdef DEV_NETMAP
-+	if (netmap_rx_irq(bp->dev, fp->index, &rx_pkt))
-+		return true; /* no more interrupts */
-+#endif /* DEV_NETMAP */
-+
- 	/* CQ "next element" is of the size of the regular element,
- 	   that's why it's ok here */
- 	hw_comp_cons = le16_to_cpu(*fp->rx_cons_sb);
-@@ -1981,6 +1994,9 @@ int bnx2x_nic_load(struct bnx2x *bp, int
+@@ -1981,6 +1984,9 @@ int bnx2x_nic_load(struct bnx2x *bp, int
  
  	/* Start fast path */
  
@@ -44,35 +20,74 @@
  	/* Initialize Rx filter. */
  	netif_addr_lock_bh(bp->dev);
  	bnx2x_set_rx_mode(bp->dev);
-@@ -3288,7 +3304,9 @@ static int bnx2x_alloc_fp_mem_at(struct
- 		if (ring_size < rx_ring_size)
- 			goto alloc_mem_err;
- 	}
--
-+#ifdef DEV_NETMAP
-+	// XXX bnx2x_netmap_ring_config(bp, index);
-+#endif /* DEV_NETMAP */
- 	return 0;
+@@ -2252,6 +2258,50 @@ int bnx2x_poll(struct napi_struct *napi,
+ 						 napi);
+ 	struct bnx2x *bp = fp->bp;
  
- /* handles low memory cases */
---- broadcom/bnx2x/bnx2x_main.c	2012-09-11 20:50:55.822622214 -0700
-+++ ./bnx2x/bnx2x_main.c	2012-09-16 16:55:38.482587623 -0700
-@@ -599,6 +599,23 @@ static u64 bnx2x_wb_rd(struct bnx2x *bp,
++#ifdef DEV_NETMAP
++	/* fake no work if we are in netmap mode */
++	struct netmap_adapter *na = NA(fp->bp->dev);
++	if (!(na && na->ifp->if_capenable & IFCAP_NETMAP))
++		goto normal_path;
++
++	/* grab tx interrupts (we only care for cos 0 */
++	netmap_tx_irq(bp->dev, fp->txdata[0].txq_index);
++
++#if 0
++	/* XXX receive logic */
++	if (0 && netmap_rx_irq(bp->dev, fp->index, &rx_pkt))
++		return true; /* no more interrupts */
++#endif /* 0 */
++
++	/* temporarily duplicate the rx logic, see below */
++	ND(5, "q[%d] rx intr start", fp->index);
++	while (1) {
++		if (bnx2x_has_rx_work(fp)) {
++			work_done += bnx2x_rx_int(fp, budget - work_done);
++			/* must not complete if we consumed full budget */
++			if (work_done >= budget)
++				break;
++		}
++		/* Fall out from the NAPI loop if needed */
++		if (!(bnx2x_has_rx_work(fp))) {
++			bnx2x_update_fpsb_idx(fp);
++			rmb();
++			if (!(bnx2x_has_rx_work(fp))) {
++				napi_complete(napi);
++				/* Re-enable interrupts */
++				bnx2x_ack_sb(bp, fp->igu_sb_id, USTORM_ID,
++					     le16_to_cpu(fp->fp_hc_idx),
++					     IGU_INT_ENABLE, 1);
++				break;
++			}
++		}
++	}
++	ND(5, "q[%d] rx intr done", fp->index);
++
++	return work_done;
++
++normal_path:
++#endif /* DEV_NETMAP */
+ 	while (1) {
+ #ifdef BNX2X_STOP_ON_ERROR
+ 		if (unlikely(bp->panic)) {
+--- /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/broadcom/bnx2x/bnx2x_main.c	2012-09-11 20:50:55.822622214 -0700
++++ new/bnx2x/bnx2x_main.c	2012-09-18 15:39:52.089289293 -0700
+@@ -599,6 +599,22 @@ static u64 bnx2x_wb_rd(struct bnx2x *bp,
  }
  #endif
  
-+
 +#if defined(CONFIG_NETMAP) || defined(CONFIG_NETMAP_MODULE)
 +/*
 + * This driver uses multiple source files. The netmap header is included
-+ * in all places where we have netmap hooks, and actual code is included
-+ * only in the file with #define NETMAP_BNX2X_MAIN.
++ * in all (2) files where we need netmap hooks, while new functions are
++ * compiled only in the file with #define NETMAP_BNX2X_MAIN.
 + *
-+ * Intercept points:
-+ * - initialization is in bnx2x_open() (this file).
-+ * - for RX and TX interrupts, modify bnx2x_tx_int() and bnx2x_rx_int()
-+ *   same as it is done on the ixgbe. (bnx2x_cmn.c)
-+ * - ring (re) init is in bnx2x_alloc_fp_mem_at() (bnx2x_cmn.c)
++ * NETMAP Intercept points:
++ * - netmap_attach() is in bnx2x_init_one() (this file).
++ * - netmap_[tr]x_irq() attach into bnx2x_tx_int() and bnx2x_rx_int()
++ * - ring (re)init is globally done in bnx2x_nic_load()
++ * both in bnx2x_cmn.c
 + */
 +#define NETMAP_BNX2X_MAIN
 +#include <bnx2x_netmap_linux.h>
@@ -81,7 +96,7 @@
  static int bnx2x_mc_assert(struct bnx2x *bp)
  {
  	char last_idx;
-@@ -11227,6 +11244,9 @@ static int __devinit bnx2x_init_one(stru
+@@ -11227,6 +11243,9 @@ static int __devinit bnx2x_init_one(stru
  	            pcie_speed == 2 ? "5GHz (Gen2)" : "2.5GHz",
  		    dev->base_addr, bp->pdev->irq, dev->dev_addr);
  
