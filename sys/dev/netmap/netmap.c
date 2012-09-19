@@ -806,7 +806,7 @@ netmap_ring_reinit(struct netmap_kring *kring)
 	u_int i, lim = kring->nkr_num_slots - 1;
 	int errors = 0;
 
-	D("called for %s", kring->na->ifp->if_xname);
+	RD(10,"called for %s", kring->na->ifp->if_xname);
 	if (ring->cur > lim)
 		errors++;
 	for (i = 0; i <= lim; i++) {
@@ -828,9 +828,9 @@ netmap_ring_reinit(struct netmap_kring *kring)
 		int pos = kring - kring->na->tx_rings;
 		int n = kring->na->num_tx_rings + 1;
 
-		D("total %d errors", errors);
+		RD(10, "total %d errors", errors);
 		errors++;
-		D("%s %s[%d] reinit, cur %d -> %d avail %d -> %d",
+		RD(10, "%s %s[%d] reinit, cur %d -> %d avail %d -> %d",
 			kring->na->ifp->if_xname,
 			pos < n ?  "TX" : "RX", pos < n ? pos : pos - n,
 			ring->cur, kring->nr_hwcur,
@@ -1608,7 +1608,7 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, int n,
 	kring->nkr_hwofs = new_hwofs;
 	if (tx == NR_TX)
 		kring->nr_hwavail = kring->nkr_num_slots - 1;
-	D("new hwofs %d on %s %s[%d]",
+	RD(10, "new hwofs %d on %s %s[%d]",
 			kring->nkr_hwofs, na->ifp->if_xname,
 			tx == NR_TX ? "TX" : "RX", n);
 
@@ -1655,7 +1655,7 @@ netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
 
 	if (!(ifp->if_capenable & IFCAP_NETMAP))
 		return 0;
-ND(5, "received %s queue %d", work_done ? "RX" : "TX" , q);
+	ND(5, "received %s queue %d", work_done ? "RX" : "TX" , q);
 	na = NA(ifp);
 	if (na->na_flags & NAF_SKIP_INTR) {
 		ND("use regular interrupt");
