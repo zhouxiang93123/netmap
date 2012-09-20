@@ -242,7 +242,8 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	if (k > lim)
 		return netmap_ring_reinit(kring);
 	if (do_lock)
-		mtx_lock(&kring->q_lock);
+		mtx_lock(&na->core_lock); // XXX exp
+		// mtx_lock(&kring->q_lock);
 
 	/*
 	 * Process new packets to send. j is the current index in the
@@ -252,7 +253,8 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	j = kring->nr_hwcur;
 	if (j > lim) {
 		D("q %d nwcur overflow %d", j);
-		goto ring_reset;
+		error = EINVAL;
+		goto err;
 	}
 	if (j != k) {	/* we have new packets to send */
 		if (txdata->tx_desc_ring == NULL) {
@@ -281,11 +283,9 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			 * unsigned so no need to check for negative values.
 			 */
 			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
-ring_reset:
-				if (do_lock)
-					mtx_unlock(&kring->q_lock);
 				D("ring %d error, resetting", ring_nr);
-				return netmap_ring_reinit(kring);
+				error = EINVAL;
+				goto err;
 			}
 
 			slot->flags &= ~NS_REPORT;
@@ -379,12 +379,15 @@ ring_reset:
 				txdata->tx_bd_cons = NEXT_TX_IDX(txdata->tx_bd_cons);
 				txdata->tx_bd_cons = NEXT_TX_IDX(txdata->tx_bd_cons);
 			}
-			if (kring->nr_hwavail > lim)
-				goto ring_reset;
+			if (kring->nr_hwavail > lim) {
+				D("ring %d hwavail %d > lim", ring_nr, kring->nr_hwavail);
+				error = EINVAL;
+				goto err;
+			}
 		}
 	}
-	if (0 && txdata->tx_pkt_cons != txdata->tx_pkt_prod) {
-		// XXX kick the sender
+	if (txdata->tx_pkt_cons != txdata->tx_pkt_prod) {
+		// XXX kick the sender, does not seem to help.
 		wmb();	/* synchronize writes to the NIC ring */
 		barrier();	// XXX
 		/* (re)start the transmitter up to slot l (excluded) */
@@ -400,7 +403,8 @@ ring_reset:
 
 err:
 	if (do_lock)
-		mtx_unlock(&kring->q_lock);
+		mtx_unlock(&na->core_lock);
+		// mtx_unlock(&kring->q_lock);
 	if (error)
 		return netmap_ring_reinit(kring);
 	return 0;
@@ -668,7 +672,8 @@ bnx2x_netmap_attach(struct SOFTC_T *adapter)
 	bzero(&na, sizeof(na));
 
 	na.ifp = dev;
-	na.separate_locks = 1;	/* this card has separate rx/tx locks */
+	na.separate_locks = 0; // XXX experimental
+	/* this card has separate rx/tx locks */
 	/* The ring size is the number of tx bd, but since we use 2 per
 	 * packet, make the tx ring shorter.
 	 * Let's see what to do with the 
