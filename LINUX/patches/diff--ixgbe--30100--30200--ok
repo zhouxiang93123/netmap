@@ -1,5 +1,6 @@
---- /home/giuseppe/Compile/linux/drivers/net/ixgbe/ixgbe_main.c	2012-07-31 21:52:48.682822636 +0200
-+++ net/ixgbe/ixgbe_main.c	2012-07-31 22:07:33.318823283 +0200
+diff -pur net/ixgbe/ixgbe_main.c ixgbe/ixgbe_main.c
+--- net/ixgbe/ixgbe_main.c	2012-09-11 14:57:18.389789803 +0200
++++ ixgbe/ixgbe_main.c	2012-09-11 15:03:55.961796755 +0200
 @@ -249,6 +249,22 @@ static const struct ixgbe_reg_info ixgbe
  	{}
  };
@@ -76,14 +77,13 @@
  	ixgbe_alloc_rx_buffers(ring, ixgbe_desc_unused(ring));
  }
  
-@@ -5608,6 +5649,10 @@ static int __ixgbe_shutdown(struct pci_d
+@@ -5448,6 +5489,9 @@ static int ixgbe_open(struct net_device
+ 		goto err_up;
  
- 	pci_disable_device(pdev);
- 
+ 	netif_tx_start_all_queues(netdev);
 +#ifdef DEV_NETMAP
 +	ixgbe_netmap_attach(adapter);
 +#endif /* DEV_NETMAP */
-+
+ 
  	return 0;
- }
  

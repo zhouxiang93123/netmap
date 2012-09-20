@@ -1,6 +1,7 @@
---- /usr/src/linux-3.3.8-gentoo/drivers/net/ethernet/intel/ixgbe/ixgbe_main.c	2012-03-19 00:15:34.000000000 +0100
-+++ intel/ixgbe/ixgbe_main.c	2012-08-13 09:36:59.000000000 +0200
-@@ -191,6 +191,22 @@ static const struct ixgbe_reg_info ixgbe
+diff -urp net/ethernet/intel/ixgbe/ixgbe_main.c ixgbe/ixgbe_main.c
+--- net/ethernet/intel/ixgbe/ixgbe_main.c	2012-09-11 17:24:03.121943823 +0200
++++ net/ixgbe/ixgbe_main.c	2012-09-11 17:32:13.053952394 +0200
+@@ -188,6 +188,22 @@ static const struct ixgbe_reg_info ixgbe
  	{}
  };
  
@@ -23,7 +24,7 @@
  
  /*
   * ixgbe_regdump - register printout routine
-@@ -748,6 +764,17 @@ static bool ixgbe_clean_tx_irq(struct ix
+@@ -745,6 +761,17 @@ static bool ixgbe_clean_tx_irq(struct ix
  	unsigned int budget = q_vector->tx.work_limit;
  	u16 i = tx_ring->next_to_clean;
  
@@ -41,7 +42,7 @@
  	tx_buffer = &tx_ring->tx_buffer_info[i];
  	tx_desc = IXGBE_TX_DESC_ADV(tx_ring, i);
  
-@@ -1256,6 +1283,14 @@ static bool ixgbe_clean_rx_irq(struct ix
+@@ -1253,6 +1280,14 @@ static bool ixgbe_clean_rx_irq(struct ix
  	u16 cleaned_count = 0;
  	bool pkt_is_rsc = false;
  
@@ -56,7 +57,7 @@
  	i = rx_ring->next_to_clean;
  	rx_desc = IXGBE_RX_DESC_ADV(rx_ring, i);
  	staterr = le32_to_cpu(rx_desc->wb.upper.status_error);
-@@ -2423,6 +2458,9 @@ void ixgbe_configure_tx_ring(struct ixgb
+@@ -2420,6 +2455,9 @@ void ixgbe_configure_tx_ring(struct ixgb
  	} while (--wait_loop && !(txdctl & IXGBE_TXDCTL_ENABLE));
  	if (!wait_loop)
  		e_err(drv, "Could not enable Tx Queue %d\n", reg_idx);
@@ -66,7 +67,7 @@
  }
  
  static void ixgbe_setup_mtqc(struct ixgbe_adapter *adapter)
-@@ -2786,6 +2824,10 @@ void ixgbe_configure_rx_ring(struct ixgb
+@@ -2783,6 +2821,10 @@ void ixgbe_configure_rx_ring(struct ixgb
  	IXGBE_WRITE_REG(hw, IXGBE_RXDCTL(reg_idx), rxdctl);
  
  	ixgbe_rx_desc_queue_enable(adapter, ring);
@@ -77,14 +78,13 @@
  	ixgbe_alloc_rx_buffers(ring, ixgbe_desc_unused(ring));
  }
  
-@@ -5509,6 +5551,10 @@ static int __ixgbe_shutdown(struct pci_d
+@@ -5341,6 +5383,9 @@ static int ixgbe_open(struct net_device
+ 		goto err_req_irq;
  
- 	pci_disable_device(pdev);
- 
+ 	ixgbe_up_complete(adapter);
 +#ifdef DEV_NETMAP
 +	ixgbe_netmap_attach(adapter);
 +#endif /* DEV_NETMAP */
-+
+ 
  	return 0;
- }
  
