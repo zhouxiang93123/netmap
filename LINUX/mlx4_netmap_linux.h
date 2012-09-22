@@ -34,7 +34,7 @@
 #include <bsd_glue.h>
 #include <net/netmap.h>
 #include <netmap/netmap_kern.h>
-#define SOFTC_T	mlx4_en_dev
+#define SOFTC_T	mlx4_en_priv
 
 int mlx4_netmap_config(struct SOFTC_T *adapter);
 
@@ -124,6 +124,7 @@ mlx4_netmap_reg(struct ifnet *ifp, int onoff)
 static int
 mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 {
+#if 0
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct bnx2x_fastpath *fp = &adapter->fp[ring_nr];
 	struct bnx2x_fp_txdata *txdata = &fp->txdata[0];
@@ -303,6 +304,7 @@ err:
 		// mtx_unlock(&kring->q_lock);
 	if (error)
 		return netmap_ring_reinit(kring);
+#endif // 0
 	return 0;
 }
 
@@ -327,7 +329,7 @@ static int
 mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 {
 	struct SOFTC_T *adapter = netdev_priv(ifp);
-	struct bnx2x_fastpath *rxr = &adapter->fp[ring_nr];
+	struct mlx4_en_rx_ring *rxr = &adapter->rx_ring[ring_nr];
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
@@ -335,8 +337,6 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	int force_update = do_lock || kring->nr_kflags & NKR_PENDINTR;
 	u_int k = ring->cur, resvd = ring->reserved;
 	uint16_t hw_comp_cons, sw_comp_cons;
-
-return 0; // XXX unsupported now
 
 	if (k > lim) /* userspace is cheating */
 		return netmap_ring_reinit(kring);
@@ -363,6 +363,7 @@ return 0; // XXX unsupported now
 	/* scan the completion queue to see what is going on.
 	 * Note that we do not use l here.
 	 */
+#if 0 // XXX
 	sw_comp_cons = RCQ_BD(rxr->rx_comp_cons);
 	l = rxr->rx_bd_cons;
 	j = netmap_idx_n2k(kring, j);
@@ -450,6 +451,7 @@ goto done; // XXX debugging
 				     rxr->rx_sge_prod);
 	}
 done:
+#endif // 0 XXX
 	/* tell userspace that there are new packets */
 	ring->avail = kring->nr_hwavail - resvd;
 
@@ -473,28 +475,20 @@ ring_reset:
  * so be careful on where we fetch the information.
  */
 int
-mlx4_netmap_config(struct SOFTC_T *bp)
+mlx4_netmap_config(struct SOFTC_T *priv)
 {
-	struct netmap_adapter *na = NA(bp->dev);
+	struct netmap_adapter *na = NA(priv->dev);
 	struct netmap_slot *slot;
-	struct bnx2x_fastpath *fp;
-	struct bnx2x_fp_txdata *txdata;
+	struct mlx4_en_rx_ring *rxr;
 	int j, ring_nr;
 	int nq;	/* number of queues to use */
 
 	slot = netmap_reset(na, NR_TX, 0, 0);	// quick test on first ring
 	if (!slot)
 		return 0;	// not in netmap;
-	nq = na->num_rx_rings;
-	D("# queues: tx %d rx %d act %d %d",
-		bp->dev->num_tx_queues, bp->dev->num_rx_queues,
-		BNX2X_NUM_QUEUES(bp), nq );
-	if (BNX2X_NUM_QUEUES(bp) < nq) {
-		nq = BNX2X_NUM_QUEUES(bp);
-		D("******** wartning, truncate to %d rings", nq);
-	}
+	nq = na->num_rx_rings;	// XXX check how many
 	D("allocate memory, tx/rx slots: %d %d max %d %d",
-		(int)bp->tx_ring_size, (int)bp->rx_ring_size,
+		(int)priv->tx_ring[0].size, (int)priv->rx_ring[0].size,
 		na->num_tx_desc, na->num_rx_desc);
 	for (ring_nr = 0; ring_nr < nq; ring_nr++) {
 		netmap_reset(na, NR_TX, ring_nr, 0);
@@ -502,23 +496,12 @@ mlx4_netmap_config(struct SOFTC_T *bp)
 	/*
 	 * Do nothing on the tx ring, addresses are set up at tx time.
 	 */
-	fp = &bp->fp[0];
-	txdata = &fp->txdata[0];
-	ND("tx: pkt cons/prod %d -> %d, bd cons/prod %d -> %d, cons_sb %p",
-		txdata->tx_pkt_cons, txdata->tx_pkt_prod,
-		txdata->tx_bd_cons, txdata->tx_bd_prod,
-		txdata->tx_cons_sb );
 	/*
 	 * on the receive ring, must set buf addresses into the slots.
 	 */
 	for (ring_nr = 0; ring_nr < nq; ring_nr++) {
 		slot = netmap_reset(na, NR_RX, ring_nr, 0);
-		fp = &bp->fp[ring_nr];
-		txdata = &fp->txdata[0];
-		ND("rx: comp cons/prod %d -> %d, bd cons/prod %d -> %d, cons_sb %p",
-			fp->rx_comp_cons, fp->rx_comp_prod,
-			fp->rx_bd_cons, fp->rx_bd_prod,
-			fp->rx_cons_sb );
+		rxr = &priv->rx_ring[ring_nr];
 		for (j = 0; j < na->num_rx_desc; j++) {
 			uint64_t paddr;
 			void *addr = PNMB(slot + j, &paddr);
@@ -539,10 +522,10 @@ mlx4_netmap_config(struct SOFTC_T *bp)
  * operate in standard mode.
  */
 static void
-mlx4_netmap_attach(struct SOFTC_T *adapter)
+mlx4_netmap_attach(struct SOFTC_T *priv)
 {
 	struct netmap_adapter na;
-	struct net_device *dev = adapter->dev;
+	struct net_device *dev = priv->dev;
 
 	bzero(&na, sizeof(na));
 
@@ -554,8 +537,8 @@ mlx4_netmap_attach(struct SOFTC_T *adapter)
 	 * Let's see what to do with the 
 	 * skipping those continuation blocks.
 	 */
-	na.num_tx_desc = adapter->tx_ring_size / 2 - 10;
-	na.num_rx_desc = na.num_tx_desc; // XXX see above
+	na.num_tx_desc = priv->tx_ring[0].size;
+	na.num_rx_desc = priv->rx_ring[0].size;
 	na.nm_txsync = mlx4_netmap_txsync;
 	na.nm_rxsync = mlx4_netmap_rxsync;
 	na.nm_register = mlx4_netmap_reg;
@@ -563,7 +546,7 @@ mlx4_netmap_attach(struct SOFTC_T *adapter)
 	 * but we still cosider it. If FCOE is supported, the last hw
 	 * queue is used for it.
  	 */
-	netmap_attach(&na, 2); // BNX2X_NUM_ETH_QUEUES(adapter));
+	netmap_attach(&na, priv->rx_ring_num);
 	D("%d queues, tx: %d rx %d slots", na.num_rx_rings,
 			na.num_tx_desc, na.num_rx_desc);
 }
