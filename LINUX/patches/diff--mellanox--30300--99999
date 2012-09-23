@@ -1,0 +1,63 @@
+diff -urp /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_netdev.c mellanox/mlx4/en_netdev.c
+--- /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_netdev.c	2012-09-11 20:50:55.982624673 -0700
++++ mellanox/mlx4/en_netdev.c	2012-09-22 17:26:34.555184853 -0700
+@@ -48,6 +48,39 @@
+ #include "mlx4_en.h"
+ #include "en_port.h"
+ 
++#if defined(CONFIG_NETMAP) || defined(CONFIG_NETMAP_MODULE)
++/*
++ * This driver is split in multiple small files.
++ * The main device descriptor has type struct mlx4_en_priv *priv;
++ * and we attach to the device in mlx4_en_init_netdev()
++ * (do port numbers start from 1 ?)
++ *
++ * The reconfig routine is in mlx4_en_start_port() (also here)
++ * which is called on a mlx4_en_restart() (watchdog), open and set-mtu.
++ *
++ *	priv->num_frags				??
++ *	DS_SIZE					??
++ *		apparently each rx desc is followed by frag.descriptors
++ *		and the rx desc is rounded up to a power of 2.
++ *
++ *   Receive code is in en_rx.c
++ *	priv->rx_ring_num			number of rx rings
++ *	rxr = prov->rx_ring[ring_ind]		rx ring descriptor
++ *	rxr->size				number of slots
++ *	rxr->prod				producer
++ *	   probably written into a mmio reg at *rxr->wqres.db.db
++ *	   trimmed to 16 bits.
++ *
++ *	Rx init routine:
++ *		mlx4_en_activate_rx_rings()
++ *		  mlx4_en_init_rx_desc()
++ *   Transmit code is in en_tx.c
++ */
++
++#define NETMAP_MLX4_MAIN
++#include <mlx4_netmap_linux.h>        /* extern stuff */
++#endif /* CONFIG_NETMAP */
++
+ int mlx4_en_setup_tc(struct net_device *dev, u8 up)
+ {
+ 	if (up != MLX4_EN_NUM_UP)
+@@ -1097,6 +1130,9 @@ int mlx4_en_start_port(struct net_device
+ 	mlx4_set_stats_bitmap(mdev->dev, &priv->stats_bitmap);
+ 
+ 	priv->port_up = true;
++#ifdef DEV_NETMAP
++	mlx4_netmap_config(priv);
++#endif /* DEV_NETMAP */
+ 	netif_tx_start_all_queues(dev);
+ 	return 0;
+ 
+@@ -1639,6 +1675,9 @@ int mlx4_en_init_netdev(struct mlx4_en_d
+ 	en_warn(priv, "Using %d RX rings\n", prof->rx_ring_num);
+ 
+ 	queue_delayed_work(mdev->workqueue, &priv->stats_task, STATS_DELAY);
++#ifdef DEV_NETMAP
++	mlx4_netmap_attach(priv);
++#endif /* DEV_NETMAP */
+ 	return 0;
+ 
+ out:
