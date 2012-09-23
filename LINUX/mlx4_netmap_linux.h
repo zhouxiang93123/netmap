@@ -199,21 +199,19 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 
 		// XXX see en_tx.c :: mlx4_en_xmit()
 
-		l = txr->prod & txr->size_mask;
 
 		RD(10,"=======>========== send from %d to %d at bd %d", j, k, l);
 		for (n = 0; j != k; n++) {
 			struct netmap_slot *slot = &ring->slot[j];
-			struct eth_tx_start_bd *bd =
-				&txdata->tx_desc_ring[TX_BD(l)].start_bd;
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
 			uint16_t len = slot->len;
-			uint16_t mac_type = UNICAST_ADDRESS;
 			struct mlx4_en_tx_desc *tx_desc;
+			struct mlx4_wqe_ctrl_seg *ctrl;
 
-
+			l = txr->prod & txr->size_mask;
 			tx_desc = txr->buf + l * TXBB_SIZE;
+			ctrl = &tx_desc->ctrl;
 
 			// nm_pkt_dump(j, addr, len);
 			ND(5, "start_bd j %d l %d is %p", j, l, bd);
@@ -237,36 +235,19 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
 			/*
-			 * Fill the slot in the NIC ring. FreeBSD's if_bxe.c has
-			 * a lot of notes including:
-			 * - min number of nbd is 2 even if the parsing bd is not used,
-			 *   otherwise we get an MC assert! error
-			 * - if vlan is not used, firmware expect a packet number there.
-			 * - do we care for mac-type ?
+			 * Fill the slot in the NIC ring.
 			 */
+			ctrl->vlan_tag = 0;	// not used
+			ctrl->ins_vlan = 0;	// NO
+			ctrl->fence_size = (len / 16) & 0x3f;	// XXX what ?
+			// XXX ask for interrupt, not too often.
+			ctrl->srcrb_flags = cpu_to_be32(MLX4_WQE_CTRL_CQ_UPDATE);
+			tx_desc->inl.byte_count = cpu_to_be32(1 << 31 | len);
 
-			bd->bd_flags.as_bitfield = ETH_TX_BD_FLAGS_START_BD;
-			bd->vlan_or_ethertype = cpu_to_le16(txdata->tx_pkt_prod);
-
-			bd->addr_lo = cpu_to_le32(U64_LO(paddr));
-			bd->addr_hi = cpu_to_le32(U64_HI(paddr));
-			bd->nbytes = cpu_to_le16(len);
-			bd->nbd = cpu_to_le16(2);
-			if (unlikely(is_multicast_ether_addr(addr))) {
-				if (is_broadcast_ether_addr(addr))
-					mac_type = BROADCAST_ADDRESS;
-				else
-					mac_type = MULTICAST_ADDRESS;
-			}
-			SET_FLAG(bd->general_data, ETH_TX_START_BD_ETH_ADDR_TYPE, mac_type);
-			SET_FLAG(bd->general_data, ETH_TX_START_BD_HDR_NBDS, 1 /* XXX */ );
+			// XXX do we need to copy the mac dst address ?
 
 			j = (j == lim) ? 0 : j + 1;
-			txdata->tx_pkt_prod++;
-			l = NEXT_TX_IDX(l); // skip link fields.
-			/* clear the parsing block */
-			bzero(&txdata->tx_desc_ring[TX_BD(l)], sizeof(*bd));
-			l = NEXT_TX_IDX(l); // skip link fields.
+			txr->prod++;
 		}
 		kring->nr_hwcur = k; /* the saved ring->cur */
 		/* decrease avail by number of packets  sent */
@@ -274,9 +255,6 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 
 		/* XXX Check how to deal with nkr_hwofs */
 		/* these two are always in sync. */
-		txr->prod = l;
-		txdata->tx_db.data.prod = l;	// update doorbell
-
 		wmb();	/* synchronize writes to the NIC ring */
 		/* (re)start the transmitter up to slot l (excluded) */
 		ND(5, "doorbell cid %d data 0x%x", txdata->cid, txdata->tx_db.raw);
