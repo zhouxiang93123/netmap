@@ -155,16 +155,27 @@ mlx4_netmap_reg(struct ifnet *ifp, int onoff)
 static int
 mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 {
-#if 0
-	struct SOFTC_T *adapter = netdev_priv(ifp);
-	struct bnx2x_fastpath *fp = &adapter->fp[ring_nr];
-	struct bnx2x_fp_txdata *txdata = &fp->txdata[0];
+	struct SOFTC_T *priv = netdev_priv(ifp);
+	struct mlx4_en_tx_ring *txr = &priv->tx_ring[ring_nr];
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k = ring->cur, n, lim = kring->nkr_num_slots - 1;
 	uint16_t l;
 	int error = 0;
+
+	struct mlx4_en_cq *cq;
+	struct mlx4_cq *mcq = &cq->mcq;
+
+	int size = cq->size;
+	struct mlx4_cqe *buf = cq->buf;
+	uint32_t size_mask = txr->size_mask;
+	struct mlx4_cqe *cqe;
+	u16 new_index, ring_index, index;
+        u32 txbbs_skipped = 0;
+	uint32_t cons_index = mcq->cons_index;
+	int factor = priv->cqe_factor;
+
 
 	/* if cur is invalid reinitialize the ring. */
 	if (k > lim)
@@ -173,6 +184,7 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		mtx_lock(&na->core_lock); // XXX exp
 		// mtx_lock(&kring->q_lock);
 
+#if 0 // XXX to be completed
 	/*
 	 * Process new packets to send. j is the current index in the
 	 * netmap ring, l is the corresponding bd_prod index (uint16_t).
@@ -269,59 +281,60 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		ND(5, "doorbell cid %d data 0x%x", txdata->cid, txdata->tx_db.raw);
 		DOORBELL(adapter, ring_nr, txdata->tx_db.raw);
 	}
+#endif // XXX to be completed
 
 	/*
-	 * Reclaim buffers for completed transmissions, as in bnx2x_tx_int().
-	 * Maybe we could do it lazily.
+	 * Reclaim buffers for completed transmissions.
 	 */
-	for (n=0;n < 5;n++) {
-		uint16_t delta;
+	/* Process all completed CQEs */
+	n = 0;
+        while (XNOR(cqe->owner_sr_opcode & MLX4_CQE_OWNER_MASK,
+                        cons_index & size)) {
+                /*
+                 * make sure we read the CQE after we read the
+                 * ownership bit
+                 */
+                rmb();
 
-		/*
-		 * Record completed transmissions.
-		 * The card writes the current (pkt ?) index in memory in
-		 * 	le16_to_cpu(*txdata->tx_cons_sb);
-		 * This seems to be a sequential index with no skips modulo 2^16
-		 * irrespective of the actual ring size.
-		 * We need to adjust buffer and packet indexes.
-		 * In netmap we can use 1 pkt/1bd so the pkt_cons
-		 * is an index in the netmap buffer. The bd_index
-		 * however should be computed with some trick.
-		 * We (re)use the driver's txr->tx_pkt_cons to keep
-		 * track of the most recently completed transmission.
-		 */
-		l = le16_to_cpu(*txdata->tx_cons_sb);
-		delta = l - txdata->tx_pkt_cons; // XXX buffers, not slots
-		if (delta == 0) {
-			if (n > 1 || (n == 0 && txdata->tx_pkt_cons !=
-				    txdata->tx_pkt_prod))
-				ND(5, "txr[%d] exit after %d cycles, pending %d", ring_nr, n, (uint16_t)(txdata->tx_pkt_prod - txdata->tx_pkt_cons));
-			break;
-		}
-		if (delta) {
-			ND(5, "txr %d completed %d packets", ring_nr, delta);
-			/* some tx completed, increment hwavail. */
-			kring->nr_hwavail += delta;
-			/* XXX lazy solution - consume 2 buffers */
-			for (;txdata->tx_pkt_cons != l; txdata->tx_pkt_cons++) {
-				txdata->tx_bd_cons = NEXT_TX_IDX(txdata->tx_bd_cons);
-				txdata->tx_bd_cons = NEXT_TX_IDX(txdata->tx_bd_cons);
-			}
-			if (kring->nr_hwavail > lim) {
-				D("ring %d hwavail %d > lim", ring_nr, kring->nr_hwavail);
-				error = EINVAL;
-				goto err;
-			}
+                /* Skip over last polled CQE */
+                new_index = be16_to_cpu(cqe->wqe_index) & size_mask;
+
+                do {
+                        txbbs_skipped += txr->last_nr_txbb;
+                        ring_index = (ring_index + txr->last_nr_txbb) & size_mask;
+                        /* free next descriptor */
+#if 0
+                        txr->last_nr_txbb = mlx4_en_free_tx_desc(
+                                        priv, ring, ring_index,
+                                        !!((txr->cons + txbbs_skipped) &
+                                                        txr->size));
+#endif
+                } while (ring_index != new_index);
+
+                ++cons_index;
+                index = cons_index & size_mask;
+                cqe = &buf[(index << factor) + factor];
+		n++;
+        }
+	if (n) {
+		RD(5, "txr %d completed %d packets", ring_nr, n);
+		/* some tx completed, increment hwavail. */
+		kring->nr_hwavail += n;
+		if (kring->nr_hwavail > lim) {
+			D("ring %d hwavail %d > lim", ring_nr, kring->nr_hwavail);
+			error = EINVAL;
+			goto err;
 		}
 	}
-	if (txdata->tx_pkt_cons != txdata->tx_pkt_prod) {
-		// XXX kick the sender, does not seem to help.
-		wmb();	/* synchronize writes to the NIC ring */
-		barrier();	// XXX
-		/* (re)start the transmitter up to slot l (excluded) */
-		ND(5, "doorbell cid %d data 0x%x", txdata->cid, txdata->tx_db.raw);
-		DOORBELL(adapter, ring_nr, txdata->tx_db.raw);
-	}
+	/*
+         * To prevent CQ overflow we first update CQ consumer and only then
+         * the ring consumer.
+         */
+        mcq->cons_index = cons_index;
+        mlx4_cq_set_ci(mcq);
+        wmb();
+        txr->cons += txbbs_skipped;
+
 	/* update avail to what the kernel knows */
 	if (ring->avail == 0 && kring->nr_hwavail >0)
 		ND(3,"txring %d restarted", ring_nr);
@@ -335,7 +348,6 @@ err:
 		// mtx_unlock(&kring->q_lock);
 	if (error)
 		return netmap_ring_reinit(kring);
-#endif // 0
 	return 0;
 }
 
@@ -426,6 +438,7 @@ goto done; // XXX debugging
 		}
 		kring->nr_kflags &= ~NKR_PENDINTR;
 	}
+#endif // XXX not done
 
 	/*
 	 * Skip past packets that userspace has already released
@@ -478,11 +491,9 @@ goto done; // XXX debugging
 		// XXXX cons = ...
 		wmb();
 		/* Update producers */
-		mlx4_update_rx_prod(adapter, rxr, l, sw_comp_prod,
-				     rxr->rx_sge_prod);
+	// XXX	mlx4_update_rx_prod(adapter, rxr, l, sw_comp_prod, rxr->rx_sge_prod);
 	}
 done:
-#endif // 0 XXX
 	/* tell userspace that there are new packets */
 	ring->avail = kring->nr_hwavail - resvd;
 
