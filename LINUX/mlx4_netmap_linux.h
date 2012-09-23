@@ -87,9 +87,10 @@ nm_pkt_dump(int i, char *buf, int len)
 static int
 mlx4_netmap_reg(struct ifnet *ifp, int onoff)
 {
-	struct SOFTC_T *adapter = netdev_priv(ifp);
+	struct SOFTC_T *priv = netdev_priv(ifp);
 	struct netmap_adapter *na = NA(ifp);
 	int error = 0, need_load = 0;
+	struct mlx4_en_dev *mdev = priv->mdev;
 
 	if (na == NULL)
 		return EINVAL;	/* no netmap support here */
@@ -101,7 +102,8 @@ mlx4_netmap_reg(struct ifnet *ifp, int onoff)
 	rtnl_lock(); // ???
 	if (netif_running(ifp)) {
 		D("unloading the nic");
-		// mlx4_nic_unload(adapter, UNLOAD_NORMAL);
+		mutex_lock(&mdev->state_lock);
+		mlx4_en_stop_port(ifp);
 		need_load = 1;
 	}
 
@@ -118,7 +120,8 @@ mlx4_netmap_reg(struct ifnet *ifp, int onoff)
 	}
 	if (need_load) {
 		D("loading the NIC");
-		// mlx4_nic_load(adapter, LOAD_NORMAL);
+		error = mlx4_en_start_port(ifp);
+		mutex_unlock(&mdev->state_lock);
 	}
 	rtnl_unlock();
 	return (error);
@@ -544,7 +547,7 @@ mlx4_netmap_config(struct SOFTC_T *priv)
 
 
 /*
- * The attach routine, called near the end of bnx2x_init_one(),
+ * The attach routine, called near the end of mlx4_en_init_netdev(),
  * fills the parameters for netmap_attach() and calls it.
  * It cannot fail, in the worst case (such as no memory)
  * netmap mode will be disabled and the driver will only
@@ -563,26 +566,23 @@ mlx4_netmap_attach(struct SOFTC_T *priv)
 	na.separate_locks = 0; // XXX experimental
 	rxq = priv->rx_ring_num;
 	txq = priv->tx_ring_num;
+	/* this card has 1k tx queues, so better limit the number */
+	nq = 4;
+	if (rxq < nq)
+		nq = rxq;
+	if (txq < nq)
+		nq = txq;
 
 	D("hw configured for %d/%d tx/rx rings", txq, rxq);
 	if (txq < 1 && rxq < 1)
 		txq = rxq = 1;
 	/* this card has separate rx/tx locks */
-	/* The ring size is the number of tx bd, but since we use 2 per
-	 * packet, make the tx ring shorter.
-	 * Let's see what to do with the 
-	 * skipping those continuation blocks.
-	 */
 	na.num_tx_desc = priv->tx_ring[0].size;
 	na.num_rx_desc = priv->rx_ring[0].size;
 	na.nm_txsync = mlx4_netmap_txsync;
 	na.nm_rxsync = mlx4_netmap_rxsync;
 	na.nm_register = mlx4_netmap_reg;
-	/* same number of tx and rx queues. queue 0 is somewhat special
-	 * but we still cosider it. If FCOE is supported, the last hw
-	 * queue is used for it.
- 	 */
-	netmap_attach(&na, priv->rx_ring_num);
+	netmap_attach(&na, nq);
 	D("%d queues, tx: %d rx %d slots", na.num_rx_rings,
 			na.num_tx_desc, na.num_rx_desc);
 }

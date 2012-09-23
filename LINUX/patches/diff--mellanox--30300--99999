@@ -1,6 +1,6 @@
 diff -urp /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_netdev.c mellanox/mlx4/en_netdev.c
 --- /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_netdev.c	2012-09-11 20:50:55.982624673 -0700
-+++ mellanox/mlx4/en_netdev.c	2012-09-22 17:26:34.555184853 -0700
++++ ./mellanox/mlx4/en_netdev.c	2012-09-22 17:26:34.555184853 -0700
 @@ -48,6 +48,39 @@
  #include "mlx4_en.h"
  #include "en_port.h"
