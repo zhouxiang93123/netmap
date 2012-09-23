@@ -36,7 +36,35 @@
 #include <netmap/netmap_kern.h>
 #define SOFTC_T	mlx4_en_priv
 
-int mlx4_netmap_config(struct SOFTC_T *adapter);
+/*
+ * This driver is split in multiple small files.
+ * The main device descriptor has type struct mlx4_en_priv *priv;
+ * and we attach to the device in mlx4_en_init_netdev()
+ * (do port numbers start from 1 ?)
+ *
+ * The reconfig routine is in mlx4_en_start_port() (also here)
+ * which is called on a mlx4_en_restart() (watchdog), open and set-mtu.
+ *
+ *      priv->num_frags                         ??
+ *      DS_SIZE                                 ??
+ *              apparently each rx desc is followed by frag.descriptors
+ *              and the rx desc is rounded up to a power of 2.
+ *
+ *   Receive code is in en_rx.c
+ *      priv->rx_ring_num                       number of rx rings
+ *      rxr = prov->rx_ring[ring_ind]           rx ring descriptor
+ *      rxr->size                               number of slots
+ *      rxr->prod                               producer
+ *         probably written into a mmio reg at *rxr->wqres.db.db
+ *         trimmed to 16 bits.
+ *
+ *      Rx init routine:
+ *              mlx4_en_activate_rx_rings()
+ *                mlx4_en_init_rx_desc()
+ *   Transmit code is in en_tx.c
+ */
+
+int mlx4_netmap_config(struct SOFTC_T *);
 
 #ifdef NETMAP_MLX4_MAIN
 #warning --------------- compiling main code ----------------
@@ -487,9 +515,10 @@ mlx4_netmap_config(struct SOFTC_T *priv)
 	if (!slot)
 		return 0;	// not in netmap;
 	nq = na->num_rx_rings;	// XXX check how many
-	D("allocate memory, tx/rx slots: %d %d max %d %d",
-		(int)priv->tx_ring[0].size, (int)priv->rx_ring[0].size,
-		na->num_tx_desc, na->num_rx_desc);
+	D("rings: netmap %d, driver tx %d rx %d", nq,
+		priv->tx_ring[0].size, priv->rx_ring[0].size);
+	return 0; // early fail
+
 	for (ring_nr = 0; ring_nr < nq; ring_nr++) {
 		netmap_reset(na, NR_TX, ring_nr, 0);
 	}
@@ -526,11 +555,18 @@ mlx4_netmap_attach(struct SOFTC_T *priv)
 {
 	struct netmap_adapter na;
 	struct net_device *dev = priv->dev;
+	int rxq, txq, nq;
 
 	bzero(&na, sizeof(na));
 
 	na.ifp = dev;
 	na.separate_locks = 0; // XXX experimental
+	rxq = priv->rx_ring_num;
+	txq = priv->tx_ring_num;
+
+	D("hw configured for %d/%d tx/rx rings", txq, rxq);
+	if (txq < 1 && rxq < 1)
+		txq = rxq = 1;
 	/* this card has separate rx/tx locks */
 	/* The ring size is the number of tx bd, but since we use 2 per
 	 * packet, make the tx ring shorter.
