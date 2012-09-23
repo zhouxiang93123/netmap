@@ -184,7 +184,6 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		mtx_lock(&na->core_lock); // XXX exp
 		// mtx_lock(&kring->q_lock);
 
-#if 0 // XXX to be completed
 	/*
 	 * Process new packets to send. j is the current index in the
 	 * netmap ring, l is the corresponding bd_prod index (uint16_t).
@@ -197,13 +196,12 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		goto err;
 	}
 	if (j != k) {	/* we have new packets to send */
-		if (txdata->tx_desc_ring == NULL) {
-			D("------------------- bad! tx_desc_ring not set");
-			error = EINVAL;
-			goto err;
-		}
-		l = txdata->tx_bd_prod;
-		ND(10,"=======>========== send from %d to %d at bd %d", j, k, l);
+
+		// XXX see en_tx.c :: mlx4_en_xmit()
+
+		l = txr->prod & txr->size_mask;
+
+		RD(10,"=======>========== send from %d to %d at bd %d", j, k, l);
 		for (n = 0; j != k; n++) {
 			struct netmap_slot *slot = &ring->slot[j];
 			struct eth_tx_start_bd *bd =
@@ -212,6 +210,10 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			void *addr = PNMB(slot, &paddr);
 			uint16_t len = slot->len;
 			uint16_t mac_type = UNICAST_ADDRESS;
+			struct mlx4_en_tx_desc *tx_desc;
+
+
+			tx_desc = txr->buf + l * TXBB_SIZE;
 
 			// nm_pkt_dump(j, addr, len);
 			ND(5, "start_bd j %d l %d is %p", j, l, bd);
@@ -272,16 +274,14 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 
 		/* XXX Check how to deal with nkr_hwofs */
 		/* these two are always in sync. */
-		txdata->tx_bd_prod = l;
+		txr->prod = l;
 		txdata->tx_db.data.prod = l;	// update doorbell
 
 		wmb();	/* synchronize writes to the NIC ring */
-		barrier();	// XXX
 		/* (re)start the transmitter up to slot l (excluded) */
 		ND(5, "doorbell cid %d data 0x%x", txdata->cid, txdata->tx_db.raw);
-		DOORBELL(adapter, ring_nr, txdata->tx_db.raw);
+		iowrite32be(txr->doorbell_qpn, txr->bf.uar->map + MLX4_SEND_DOORBELL);
 	}
-#endif // XXX to be completed
 
 	/*
 	 * Reclaim buffers for completed transmissions.
