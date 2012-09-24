@@ -100,7 +100,7 @@ mlx4_netmap_reg(struct ifnet *ifp, int onoff)
 	 * On disable, flush again, and restart the interface.
 	 */
 	D("setting netmap mode for %s to %s", ifp->if_xname, onoff ? "ON" : "OFF");
-	rtnl_lock(); // ???
+	// rtnl_lock(); // ???
 	if (netif_running(ifp)) {
 		D("unloading the nic");
 		mutex_lock(&mdev->state_lock);
@@ -108,6 +108,7 @@ mlx4_netmap_reg(struct ifnet *ifp, int onoff)
 		need_load = 1;
 	}
 
+retry:
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
 		/* save if_transmit and replace with our routine */
@@ -122,9 +123,14 @@ mlx4_netmap_reg(struct ifnet *ifp, int onoff)
 	if (need_load) {
 		D("loading the NIC");
 		error = mlx4_en_start_port(ifp);
+		D("start_port returns %d", error);
+		if (error && onoff) {
+			onoff = 0;
+			goto retry;
+		}
 		mutex_unlock(&mdev->state_lock);
 	}
-	rtnl_unlock();
+	// rtnl_unlock();
 	return (error);
 }
 
@@ -575,8 +581,8 @@ mlx4_netmap_rx_config(struct SOFTC_T *priv, int ring_nr)
 	if (!slot)
 		return 0;
 	rxr = &priv->rx_ring[ring_nr];
-	RD(5, "ring %d slots %d (driver says %d) frags %d", ring_nr,
-		kring->nkr_num_slots, rxr->actual_size, priv->num_frags);
+	RD(5, "ring %d slots %d (driver says %d) frags %d stride %d", ring_nr,
+		kring->nkr_num_slots, rxr->actual_size, priv->num_frags, rxr->stride);
 	if (kring->nkr_num_slots != rxr->actual_size)
 		return 1; // XXX error
 
@@ -597,6 +603,7 @@ mlx4_netmap_rx_config(struct SOFTC_T *priv, int ring_nr)
 			rx_desc->data[i].addr = 0;
 		}
 	}
+	RD(5, "ring %d done", ring_nr);
 	return 1;
 }
 
