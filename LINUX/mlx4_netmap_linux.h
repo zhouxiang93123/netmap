@@ -189,6 +189,9 @@ queue so we need to track it ourselves. HOWEVER mlx4_en_alloc_resources()
 uses the same index for cq and ring so tx_cq and tx_ring correspond,
 same for rx_cq and rx_ring.
 
+MAYBE it makes sense to build the data inline for short segments
+but i am not totally sure how this happens.
+
  */
 static int
 mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
@@ -223,9 +226,16 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	if (j != k) {	/* we have new packets to send */
 
 		// XXX see en_tx.c :: mlx4_en_xmit()
+		/*
+		 * In netmap the descriptor has one control segment
+		 * and one data segment. The control segment is 16 bytes,
+		 * the data segment is another 16 bytes mlx4_wqe_data_seg.
+		 * The alignment is TXBB_SIZE (64 bytes) though, so we are
+		 * forced to use 64 bytes each.
+		 */
 
 
-		RD(10,"=======>========== send from %d to %d at bd %d", j, k, l);
+		RD(10,"=======>========== send from %d to %d at bd %d", j, k, txr->prod);
 		for (n = 0; j != k; n++) {
 			struct netmap_slot *slot = &ring->slot[j];
 			uint64_t paddr;
@@ -233,6 +243,8 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			uint16_t len = slot->len;
 			struct mlx4_en_tx_desc *tx_desc;
 			struct mlx4_wqe_ctrl_seg *ctrl;
+			uint64_t mac;
+			uint32_t mac_l, mac_h;
 
 			l = txr->prod & txr->size_mask;
 			tx_desc = txr->buf + l * TXBB_SIZE;
@@ -264,14 +276,27 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			 */
 			ctrl->vlan_tag = 0;	// not used
 			ctrl->ins_vlan = 0;	// NO
-			ctrl->fence_size = (len / 16) & 0x3f;	// XXX what ?
-			// XXX ask for interrupt, not too often.
+			ctrl->fence_size = TXBB_SIZE/16;	// descriptor size in 16byte blocks
+			// XXX ask for interrupt, later report only if  NS_REPORT not too often.
 			ctrl->srcrb_flags = cpu_to_be32(MLX4_WQE_CTRL_CQ_UPDATE);
 			tx_desc->inl.byte_count = cpu_to_be32(1 << 31 | len);
 
 			// XXX do we need to copy the mac dst address ?
+			mac = mlx4_en_mac_to_u64(addr);
+			mac_h = (u32) ((mac & 0xffff00000000ULL) >> 16);
+			mac_l = (u32) (mac & 0xffffffff);
+			ctrl->srcrb_flags |= cpu_to_be32(mac_h);
+			ctrl->imm = cpu_to_be32(mac_l);
 
+			tx_desc->data.addr = cpu_to_be64(paddr);
+			tx_desc->data.lkey = cpu_to_be32(priv->mdev->mr.key);
+			wmb();		// XXX why here ?
+			tx_desc->data.byte_count = cpu_to_be32(len);
+			wmb();
 			j = (j == lim) ? 0 : j + 1;
+			ctrl->owner_opcode = cpu_to_be32(
+				((txr->prod & 0xffff) << 8) | MLX4_OPCODE_SEND |
+				((txr->prod & txr->size) ? MLX4_EN_BIT_DESC_OWN : 0) );
 			txr->prod++;
 		}
 		kring->nr_hwcur = k; /* the saved ring->cur */
