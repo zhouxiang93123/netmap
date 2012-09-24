@@ -1,6 +1,5 @@
-diff -urp /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_netdev.c mellanox/mlx4/en_netdev.c
---- /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_netdev.c	2012-09-11 20:50:55.982624673 -0700
-+++ ./mellanox/mlx4/en_netdev.c	2012-09-22 17:26:34.555184853 -0700
+--- mellanox/mlx4/en_netdev.c	2012-09-11 20:50:55.982624673 -0700
++++ ./mellanox/mlx4/en_netdev.c	2012-09-23 17:41:28.022247422 -0700
 @@ -48,6 +48,39 @@
  #include "mlx4_en.h"
  #include "en_port.h"
@@ -41,15 +40,15 @@ diff -urp /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mel
  int mlx4_en_setup_tc(struct net_device *dev, u8 up)
  {
  	if (up != MLX4_EN_NUM_UP)
-@@ -1097,6 +1130,9 @@ int mlx4_en_start_port(struct net_device
- 	mlx4_set_stats_bitmap(mdev->dev, &priv->stats_bitmap);
- 
- 	priv->port_up = true;
+@@ -1042,6 +1075,9 @@ int mlx4_en_start_port(struct net_device
+ 		/* Set initial ownership of all Tx TXBBs to SW (1) */
+ 		for (j = 0; j < tx_ring->buf_size; j += STAMP_STRIDE)
+ 			*((u32 *) (tx_ring->buf + j)) = 0xffffffff;
 +#ifdef DEV_NETMAP
-+	mlx4_netmap_config(priv);
++		mlx4_netmap_tx_config(priv, i);
 +#endif /* DEV_NETMAP */
- 	netif_tx_start_all_queues(dev);
- 	return 0;
+ 		++tx_index;
+ 	}
  
 @@ -1639,6 +1675,9 @@ int mlx4_en_init_netdev(struct mlx4_en_d
  	en_warn(priv, "Using %d RX rings\n", prof->rx_ring_num);
@@ -61,3 +60,25 @@ diff -urp /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mel
  	return 0;
  
  out:
+--- mellanox/mlx4/en_rx.c	2012-09-11 20:50:55.982624673 -0700
++++ ./mellanox/mlx4/en_rx.c	2012-09-23 17:19:47.832591249 -0700
+@@ -41,6 +41,9 @@
+ 
+ #include "mlx4_en.h"
+ 
++#if defined(CONFIG_NETMAP) || defined(CONFIG_NETMAP_MODULE)
++#include <mlx4_netmap_linux.h>
++#endif /* !DEV_NETMAP */
+ 
+ static int mlx4_en_alloc_frag(struct mlx4_en_priv *priv,
+ 			      struct mlx4_en_rx_desc *rx_desc,
+@@ -365,6 +368,9 @@ int mlx4_en_activate_rx_rings(struct mlx
+ 		ring = &priv->rx_ring[ring_ind];
+ 
+ 		ring->size_mask = ring->actual_size - 1;
++#ifdef DEV_NETMAP
++		mlx4_netmap_rx_config(priv, ring_ind);
++#endif /* DEV_NETMAP */
+ 		mlx4_en_update_rx_prod_db(ring);
+ 	}
+ 
