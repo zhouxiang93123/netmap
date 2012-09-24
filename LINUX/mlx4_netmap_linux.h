@@ -64,7 +64,8 @@
  *   Transmit code is in en_tx.c
  */
 
-int mlx4_netmap_config(struct SOFTC_T *);
+int mlx4_netmap_rx_config(struct SOFTC_T *priv, int ring_nr);
+int mlx4_netmap_tx_config(struct SOFTC_T *priv, int ring_nr);
 
 #ifdef NETMAP_MLX4_MAIN
 #warning --------------- compiling main code ----------------
@@ -72,7 +73,7 @@ static inline void
 nm_pkt_dump(int i, char *buf, int len)
 {
     uint8_t *s = buf+6, *d = buf;
-    ND(10, "%d len %4d %02x:%02x:%02x:%02x:%02x:%02x -> %02x:%02x:%02x:%02x:%02x:%02x",
+    RD(10, "%d len %4d %02x:%02x:%02x:%02x:%02x:%02x -> %02x:%02x:%02x:%02x:%02x:%02x",
 		i,
 		len,
 		s[0], s[1], s[2], s[3], s[4], s[5],
@@ -191,7 +192,7 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 */
 	j = kring->nr_hwcur;
 	if (j > lim) {
-		D("q %d nwcur overflow %d", j);
+		D("q %d nwcur overflow %d", j, lim);
 		error = EINVAL;
 		goto err;
 	}
@@ -345,6 +346,16 @@ err:
  * and set kring->nr_hwcur = ring->cur and ring->avail = kring->nr_hwavail.
  *
  * do_lock has a special meaning: please refer to txsync.
+
+MELLANOX:
+
+the ring has prod and cons indexes, the size is a power of 2,
+size and actual_size indicate how many entries can be allocated,
+stride is the size of each entry.
+
+mlx4_en_update_rx_prod_db() tells the NIC where it can go
+(to be used when new buffers are freed).
+ 
  */
 static int
 mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
@@ -489,48 +500,77 @@ ring_reset:
 /*
  * If in netmap mode, attach the netmap buffers to the ring and return true.
  * Otherwise return false.
- * Called at the end of bnx2x_alloc_fp_mem_at(), sets both tx and rx
- * buffer entries. At init time we allocate the max number of entries
- * for the card, but at runtime the card might use a smaller number,
- * so be careful on where we fetch the information.
+ * Called at the end of mlx4_en_start_port().
+ * XXX TODO: still incomplete.
  */
 int
-mlx4_netmap_config(struct SOFTC_T *priv)
+mlx4_netmap_tx_config(struct SOFTC_T *priv, int ring_nr)
 {
 	struct netmap_adapter *na = NA(priv->dev);
 	struct netmap_slot *slot;
 	struct mlx4_en_rx_ring *rxr;
-	int j, ring_nr;
-	int nq;	/* number of queues to use */
 
-	slot = netmap_reset(na, NR_TX, 0, 0);	// quick test on first ring
+/*
+ CONFIGURE TX RINGS IN NETMAP MODE
+ little if anything to do
+ The main code does
+	mlx4_en_activate_cq()
+	mlx4_en_activate_tx_ring()
+	<Set initial ownership of all Tx TXBBs to SW (1)>
+
+ */
+	slot = netmap_reset(na, NR_TX, ring_nr, 0);
 	if (!slot)
-		return 0;	// not in netmap;
-	nq = na->num_rx_rings;	// XXX check how many
-	D("rings: netmap %d, driver tx %d rx %d", nq,
-		priv->tx_ring[0].size, priv->rx_ring[0].size);
-	return 0; // early fail
+		return 0;			// not in netmap mode;
+	RD(5, "init tx ring %d with %d slots (driver %d)", ring_nr,
+		priv->tx_ring[ring_nr].size);
 
-	for (ring_nr = 0; ring_nr < nq; ring_nr++) {
-		netmap_reset(na, NR_TX, ring_nr, 0);
-	}
-	/*
-	 * Do nothing on the tx ring, addresses are set up at tx time.
-	 */
+	return 1;
+}
+
+int
+mlx4_netmap_rx_config(struct SOFTC_T *priv, int ring_nr)
+{
+	struct netmap_adapter *na = NA(priv->dev);
+        struct netmap_slot *slot;
+        struct mlx4_en_rx_ring *rxr;
+	struct netmap_kring *kring = &na->rx_rings[ring_nr];
+        int i, j;
+
 	/*
 	 * on the receive ring, must set buf addresses into the slots.
+
+	The ring is activated by mlx4_en_activate_rx_rings(), near the end
+	the rx ring is also 'started' with mlx4_en_update_rx_prod_db()
+	so we patch into that routine.
+
 	 */
-	for (ring_nr = 0; ring_nr < nq; ring_nr++) {
-		slot = netmap_reset(na, NR_RX, ring_nr, 0);
-		rxr = &priv->rx_ring[ring_nr];
-		for (j = 0; j < na->num_rx_desc; j++) {
-			uint64_t paddr;
-			void *addr = PNMB(slot + j, &paddr);
+	slot = netmap_reset(na, NR_RX, ring_nr, 0);
+	if (!slot)
+		return 0;
+	rxr = &priv->rx_ring[ring_nr];
+	RD(1, "init ring %d slots %d driver says %d frags %d", ring_nr,
+		kring->nkr_num_slots, rxr->actual_size, priv->num_frags);
+	if (kring->nkr_num_slots != rxr->actual_size)
+		return 1; // XXX error
+
+	for (i = 0; i < kring->nkr_num_slots; j++) {
+		uint64_t paddr;
+		void *addr = PNMB(slot + i, &paddr);
+		struct mlx4_en_rx_desc *rx_desc = rxr->buf + (i * rxr->stride);
+
+		// see mlx4_en_prepare_rx_desc() and mlx4_en_alloc_frag()
+		rx_desc->data[0].addr = cpu_to_be64(paddr);
+		rx_desc->data[0].byte_count = cpu_to_be32(NETMAP_BUF_SIZE);
+		rx_desc->data[0].lkey = cpu_to_be32(priv->mdev->mr.key);
+
+		/* we only use one fragment, so the rest is padding */
+		for (j = 1; j < priv->num_frags; j++) {
+			rx_desc->data[i].byte_count = 0;
+			rx_desc->data[i].lkey = cpu_to_be32(MLX4_EN_MEMTYPE_PAD);
+			rx_desc->data[i].addr = 0;
 		}
 	}
-	/* now use regular interrupts */
-	D("------------- clear the SKIP_INTR flag");
-	// XXX na->na_flags &= ~NAF_SKIP_INTR;
 	return 1;
 }
 
@@ -541,6 +581,9 @@ mlx4_netmap_config(struct SOFTC_T *priv)
  * It cannot fail, in the worst case (such as no memory)
  * netmap mode will be disabled and the driver will only
  * operate in standard mode.
+ *
+ * XXX TODO:
+ *   at the moment use a single lock, and only init a max of 4 queues.
  */
 static void
 mlx4_netmap_attach(struct SOFTC_T *priv)
