@@ -104,6 +104,12 @@ mlx4_netmap_reg(struct ifnet *ifp, int onoff)
 	if (netif_running(ifp)) {
 		D("unloading the nic");
 		mutex_lock(&mdev->state_lock);
+		if (onoff == 0) {
+			int i;
+			/* if we are in netmap mode, clean up the ring pointers */
+			for (i = 0; i < na->num_tx_rings; i++)
+				priv->tx_ring[i].prod = priv->tx_ring[i].cons;
+		}
 		mlx4_en_stop_port(ifp);
 		need_load = 1;
 	}
@@ -114,8 +120,6 @@ retry:
 		/* save if_transmit and replace with our routine */
 		na->if_transmit = (void *)ifp->netdev_ops;
 		ifp->netdev_ops = &na->nm_ndo;
-		D("-------------- set the SKIP_INTR flag");
-		// XXX na->na_flags |= NAF_SKIP_INTR; /* during load, use regular interrupts */
 	} else { /* reset normal mode */
 		ifp->netdev_ops = (void *)na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
@@ -541,6 +545,8 @@ mlx4_netmap_tx_config(struct SOFTC_T *priv, int ring_nr)
 	struct netmap_slot *slot;
 	struct mlx4_en_rx_ring *rxr;
 
+	ND(5, "priv %p ring_nr %d", priv, ring_nr);
+
 /*
  CONFIGURE TX RINGS IN NETMAP MODE
  little if anything to do
@@ -566,7 +572,7 @@ mlx4_netmap_rx_config(struct SOFTC_T *priv, int ring_nr)
 	struct netmap_adapter *na = NA(priv->dev);
         struct netmap_slot *slot;
         struct mlx4_en_rx_ring *rxr;
-	struct netmap_kring *kring = &na->rx_rings[ring_nr];
+	struct netmap_kring *kring;
         int i, j;
 
 	/*
@@ -580,13 +586,15 @@ mlx4_netmap_rx_config(struct SOFTC_T *priv, int ring_nr)
 	slot = netmap_reset(na, NR_RX, ring_nr, 0);
 	if (!slot)
 		return 0;
+	kring = &na->rx_rings[ring_nr];
 	rxr = &priv->rx_ring[ring_nr];
-	RD(5, "ring %d slots %d (driver says %d) frags %d stride %d", ring_nr,
+	ND(20, "ring %d slots %d (driver says %d) frags %d stride %d", ring_nr,
 		kring->nkr_num_slots, rxr->actual_size, priv->num_frags, rxr->stride);
 	if (kring->nkr_num_slots != rxr->actual_size)
 		return 1; // XXX error
+	return 0; // XXX for the time being... until we handle interrupts
 
-	for (i = 0; i < kring->nkr_num_slots; j++) {
+	for (i = 0; i < kring->nkr_num_slots; i++) {
 		uint64_t paddr;
 		void *addr = PNMB(slot + i, &paddr);
 		struct mlx4_en_rx_desc *rx_desc = rxr->buf + (i * rxr->stride);
