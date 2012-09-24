@@ -1593,9 +1593,13 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, int n,
 		return NULL;	/* nothing to reinitialize */
 
 	if (tx == NR_TX) {
+		if (n >= na->num_tx_rings)
+			return NULL;
 		kring = na->tx_rings + n;
 		new_hwofs = kring->nr_hwcur - new_cur;
 	} else {
+		if (n >= na->num_rx_rings)
+			return NULL;
 		kring = na->rx_rings + n;
 		new_hwofs = kring->nr_hwcur + kring->nr_hwavail - new_cur;
 	}
