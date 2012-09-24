@@ -153,44 +153,22 @@ mlx4_netmap_reg(struct ifnet *ifp, int onoff)
  * In this case, grab a lock around the body, and also reclaim transmitted
  * buffers irrespective of interrupt mitigation.
 
+OUTGOING (txr->prod)
+Tx packets need to fill a 64-byte block with one control block and
+one descriptor (both 16-byte). Probably we need to fill the other
+two data entries in the block with NULL entries as done in rx_config().
+One can request completion reports (intr) on all entries or only
+on selected ones. The std. driver reports every 16 packets.
+
+COMPLETION (txr->cons)
 TX events are reported through a Completion Queue (CQ) whose entries
 can be 32 or 64 bytes. In case of 64 bytes, the interesting part is
-at odd indexes. The trick to access the entries is the following
+at odd indexes. The "factor" variable does the addressing.
 
-(see mlx4_en_process_tx_cq() )
-
-	struct mlx4_en_cq *cq;
-	struct mlx4_cq *mcq = &cq->mcq;
-	struct mlx4_en_tx_ring *ring = &priv->tx_ring[cq->ring];
-	struct mlx4_cqe *cqe;
-
-	int size = cq->size;
-	u32 cons_index = mcq->cons_index;
-	u32 size_mask = ring->size_mask;
-
-
-	struct mlx4_cqe *buf = cq->buf;	// shorthand
-	int factor = priv->cqe_factor;	// 1 for 64 bytes, 0 for 32 bytes
-
-	index = cons_index & size_mask;
-	cqe = &buf[(index << factor) + factor];
-
-	ring_index = ring->cons & size_mask;
-
-	while (XNOR(cqe->owner_sr_opcode & MLX4_CQE_OWNER_MASK,
-                        cons_index & size)) {
-		// this is the index in the ring
-		new_index = be16_to_cpu(cqe->wqe_index) & size_mask;
-		// increment ring_index until reaches new_index
-	}
-
-There is link back from the txring to the completion
+There is no link back from the txring to the completion
 queue so we need to track it ourselves. HOWEVER mlx4_en_alloc_resources()
 uses the same index for cq and ring so tx_cq and tx_ring correspond,
 same for rx_cq and rx_ring.
-
-MAYBE it makes sense to build the data inline for short segments
-but i am not totally sure how this happens.
 
  */
 static int
@@ -202,7 +180,6 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k = ring->cur, n, lim = kring->nkr_num_slots - 1;
-	uint16_t l;
 	int error = 0;
 
 	/* if cur is invalid reinitialize the ring. */
@@ -234,7 +211,6 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		 * forced to use 64 bytes each.
 		 */
 
-
 		RD(10,"=======>========== send from %d to %d at bd %d", j, k, txr->prod);
 		for (n = 0; j != k; n++) {
 			struct netmap_slot *slot = &ring->slot[j];
@@ -246,12 +222,10 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			uint64_t mac;
 			uint32_t mac_l, mac_h;
 
-			l = txr->prod & txr->size_mask;
+			uint16_t l = txr->prod & txr->size_mask;
 			tx_desc = txr->buf + l * TXBB_SIZE;
 			ctrl = &tx_desc->ctrl;
 
-			// nm_pkt_dump(j, addr, len);
-			ND(5, "start_bd j %d l %d is %p", j, l, bd);
 			/*
 			 * Quick check for valid addr and len.
 			 * PNMB() returns netmap_buffer_base for invalid
@@ -321,7 +295,7 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	uint32_t size_mask = txr->size_mask;	// same in txq and cq ?.......
 	uint32_t cons_index = mcq->cons_index;
 	uint16_t new_index, ring_index;
-	int factor = priv->cqe_factor;
+	int factor = priv->cqe_factor;	// 1 for 64 bytes, 0 for 32 bytes
 
 	/*
 	 * Reclaim buffers for completed transmissions. The CQE tells us
@@ -422,6 +396,8 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 
 	if (k > lim) /* userspace is cheating */
 		return netmap_ring_reinit(kring);
+	RD(5, "ring %d", ring_nr);
+	return 0;	// XXX forced return
 
 	if (do_lock)
 		mtx_lock(&kring->q_lock);
@@ -435,7 +411,7 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 * in netmap mode. For the receive ring we have
 	 *
 	 *	j = (kring->nr_hwcur + kring->nr_hwavail) % ring_size
-	 *	l = rxr->next_to_check;
+	 *	l = producer index in NIC ring
 	 * and
 	 *	j == (l + kring->nkr_hwofs) % ring_size
 	 *
@@ -599,7 +575,7 @@ mlx4_netmap_rx_config(struct SOFTC_T *priv, int ring_nr)
 	if (!slot)
 		return 0;
 	rxr = &priv->rx_ring[ring_nr];
-	RD(1, "init ring %d slots %d driver says %d frags %d", ring_nr,
+	RD(5, "ring %d slots %d (driver says %d) frags %d", ring_nr,
 		kring->nkr_num_slots, rxr->actual_size, priv->num_frags);
 	if (kring->nkr_num_slots != rxr->actual_size)
 		return 1; // XXX error
@@ -655,7 +631,7 @@ mlx4_netmap_attach(struct SOFTC_T *priv)
 	if (txq < nq)
 		nq = txq;
 
-	D("hw configured for %d/%d tx/rx rings", txq, rxq);
+	D("hw configured for %d/%d tx/rx rings, use %d", txq, rxq, nq);
 	if (txq < 1 && rxq < 1)
 		txq = rxq = 1;
 	/* this card has separate rx/tx locks */
