@@ -152,6 +152,43 @@ mlx4_netmap_reg(struct ifnet *ifp, int onoff)
  * do_lock is set iff the function is called from the ioctl handler.
  * In this case, grab a lock around the body, and also reclaim transmitted
  * buffers irrespective of interrupt mitigation.
+
+TX events are reported through a Completion Queue (CQ) whose entries
+can be 32 or 64 bytes. In case of 64 bytes, the interesting part is
+at odd indexes. The trick to access the entries is the following
+
+(see mlx4_en_process_tx_cq() )
+
+	struct mlx4_en_cq *cq;
+	struct mlx4_cq *mcq = &cq->mcq;
+	struct mlx4_en_tx_ring *ring = &priv->tx_ring[cq->ring];
+	struct mlx4_cqe *cqe;
+
+	int size = cq->size;
+	u32 cons_index = mcq->cons_index;
+	u32 size_mask = ring->size_mask;
+
+
+	struct mlx4_cqe *buf = cq->buf;	// shorthand
+	int factor = priv->cqe_factor;	// 1 for 64 bytes, 0 for 32 bytes
+
+	index = cons_index & size_mask;
+	cqe = &buf[(index << factor) + factor];
+
+	ring_index = ring->cons & size_mask;
+
+	while (XNOR(cqe->owner_sr_opcode & MLX4_CQE_OWNER_MASK,
+                        cons_index & size)) {
+		// this is the index in the ring
+		new_index = be16_to_cpu(cqe->wqe_index) & size_mask;
+		// increment ring_index until reaches new_index
+	}
+
+There is link back from the txring to the completion
+queue so we need to track it ourselves. HOWEVER mlx4_en_alloc_resources()
+uses the same index for cq and ring so tx_cq and tx_ring correspond,
+same for rx_cq and rx_ring.
+
  */
 static int
 mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
@@ -164,19 +201,6 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	u_int j, k = ring->cur, n, lim = kring->nkr_num_slots - 1;
 	uint16_t l;
 	int error = 0;
-
-	struct mlx4_en_cq *cq;
-	struct mlx4_cq *mcq = &cq->mcq;
-
-	int size = cq->size;
-	struct mlx4_cqe *buf = cq->buf;
-	uint32_t size_mask = txr->size_mask;
-	struct mlx4_cqe *cqe;
-	u16 new_index, ring_index, index;
-        u32 txbbs_skipped = 0;
-	uint32_t cons_index = mcq->cons_index;
-	int factor = priv->cqe_factor;
-
 
 	/* if cur is invalid reinitialize the ring. */
 	if (k > lim)
@@ -262,13 +286,36 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		iowrite32be(txr->doorbell_qpn, txr->bf.uar->map + MLX4_SEND_DOORBELL);
 	}
 
+
+    {
+	struct mlx4_en_cq *cq = &priv->tx_cq[ring_nr];	// derive from the txring
+	struct mlx4_cq *mcq = &cq->mcq;
+
+	int size = cq->size;			// number of entries
+	struct mlx4_cqe *buf = cq->buf;		// base of cq entries
+	uint32_t size_mask = txr->size_mask;	// same in txq and cq ?.......
+	uint32_t cons_index = mcq->cons_index;
+	uint16_t new_index, ring_index;
+	int factor = priv->cqe_factor;
+
 	/*
-	 * Reclaim buffers for completed transmissions.
+	 * Reclaim buffers for completed transmissions. The CQE tells us
+	 * where the consumer (NIC) is. Bit 7 of the owner_sr_opcode
+	 * is the ownership bit. It toggles up and down so the
+	 * non-bitwise XNOR trick lets us detect toggles as the ring
+	 * wraps around. On even rounds, the second operand is 0 so
+	 * we exit when the MLX4_CQE_OWNER_MASK bit is 1, viceversa
+	 * on odd rounds.
 	 */
-	/* Process all completed CQEs */
-	n = 0;
-        while (XNOR(cqe->owner_sr_opcode & MLX4_CQE_OWNER_MASK,
-                        cons_index & size)) {
+	new_index = ring_index = txr->cons & size_mask;
+
+	for (;;) {
+		uint16_t index = mcq->cons_index & size_mask;
+		struct mlx4_cqe *cqe = &buf[(index << factor) + factor];
+
+		if (!XNOR(cqe->owner_sr_opcode & MLX4_CQE_OWNER_MASK,
+				cons_index & size))
+			break;
                 /*
                  * make sure we read the CQE after we read the
                  * ownership bit
@@ -277,27 +324,19 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 
                 /* Skip over last polled CQE */
                 new_index = be16_to_cpu(cqe->wqe_index) & size_mask;
-
-                do {
-                        txbbs_skipped += txr->last_nr_txbb;
-                        ring_index = (ring_index + txr->last_nr_txbb) & size_mask;
-                        /* free next descriptor */
-#if 0
-                        txr->last_nr_txbb = mlx4_en_free_tx_desc(
-                                        priv, ring, ring_index,
-                                        !!((txr->cons + txbbs_skipped) &
-                                                        txr->size));
-#endif
-                } while (ring_index != new_index);
-
-                ++cons_index;
-                index = cons_index & size_mask;
-                cqe = &buf[(index << factor) + factor];
-		n++;
-        }
+		mcq->cons_index++;
+	}
+	/* now we have updated cons-index, notify the card. */
+	/* XXX can we make it conditional ?  */
+	mlx4_cq_set_ci(mcq);
+	wmb();
+	/* XXX unsigned arithmetic below */
+	n = (new_index - ring_index) & size_mask;
+    }
 	if (n) {
 		RD(5, "txr %d completed %d packets", ring_nr, n);
 		/* some tx completed, increment hwavail. */
+		txr->cons += n;
 		kring->nr_hwavail += n;
 		if (kring->nr_hwavail > lim) {
 			D("ring %d hwavail %d > lim", ring_nr, kring->nr_hwavail);
@@ -305,21 +344,7 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			goto err;
 		}
 	}
-	/*
-         * To prevent CQ overflow we first update CQ consumer and only then
-         * the ring consumer.
-         */
-        mcq->cons_index = cons_index;
-        mlx4_cq_set_ci(mcq);
-        wmb();
-        txr->cons += txbbs_skipped;
-
-	/* update avail to what the kernel knows */
-	if (ring->avail == 0 && kring->nr_hwavail >0)
-		ND(3,"txring %d restarted", ring_nr);
 	ring->avail = kring->nr_hwavail;
-	if (ring->avail == 0)
-		ND(3,"txring %d full", ring_nr);
 
 err:
 	if (do_lock)
@@ -445,7 +470,6 @@ goto done; // XXX debugging
 		k = (k >= resvd) ? k - resvd : k + lim + 1 - resvd;
 	}
 	if (j != k) { /* userspace has released some packets. */
-		uint16_t sw_comp_prod = 0; // XXX
 		l = netmap_idx_k2n(kring, j);
 		for (n = 0; j != k; n++) {
 			/* collect per-slot info, with similar validations
@@ -523,6 +547,7 @@ mlx4_netmap_tx_config(struct SOFTC_T *priv, int ring_nr)
 	if (!slot)
 		return 0;			// not in netmap mode;
 	RD(5, "init tx ring %d with %d slots (driver %d)", ring_nr,
+		na->num_tx_desc,
 		priv->tx_ring[ring_nr].size);
 
 	return 1;
