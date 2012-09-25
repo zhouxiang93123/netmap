@@ -299,11 +299,11 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			tx_desc->data.byte_count = cpu_to_be32(len);
 			wmb();
 			j = (j == lim) ? 0 : j + 1;
+			txr->prod++; // XXX wrap ?
 			ctrl->owner_opcode = cpu_to_be32(
 				MLX4_OPCODE_SEND |
 				((txr->prod & txr->size) ? MLX4_EN_BIT_DESC_OWN : 0) );
 			RD(3, "dumped %d", txr->prod + mlx4_tx_desc_dump(tx_desc));
-			txr->prod++;
 		}
 		kring->nr_hwcur = k; /* the saved ring->cur */
 		/* decrease avail by number of packets  sent */
