@@ -67,6 +67,8 @@
 int mlx4_netmap_rx_config(struct SOFTC_T *priv, int ring_nr);
 int mlx4_netmap_tx_config(struct SOFTC_T *priv, int ring_nr);
 
+int mlx4_tx_desc_dump(struct mlx4_en_tx_desc *tx_desc);
+
 #ifdef NETMAP_MLX4_MAIN
 #warning --------------- compiling main code ----------------
 static inline void
@@ -79,6 +81,25 @@ nm_pkt_dump(int i, char *buf, int len)
 		s[0], s[1], s[2], s[3], s[4], s[5],
 		d[0], d[1], d[2], d[3], d[4], d[5]);
 }
+
+int
+mlx4_tx_desc_dump(struct mlx4_en_tx_desc *tx_desc)
+{
+	struct mlx4_wqe_ctrl_seg *ctrl = &tx_desc->ctrl;
+	uint32_t *p = (uint32_t *)tx_desc;
+	int i, l = ctrl->fence_size;
+
+	RD(5,"------- txdesc %p size 0x%x", tx_desc, ctrl->fence_size);
+	if (l > 4)
+		l = 4;
+	for (i = 0; i < l; i++) {
+		RD(20, "[%2d]: 0x%08x 0x%08x 0x%08x 0x%08x", i,
+			ntohl(p[0]), ntohl(p[1]), ntohl(p[2]), ntohl(p[3]));
+		p += 4;
+	} 
+	return 0;
+}
+
 
 
 /*
@@ -260,7 +281,7 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			 */
 			ctrl->vlan_tag = 0;	// not used
 			ctrl->ins_vlan = 0;	// NO
-			ctrl->fence_size = TXBB_SIZE/16;	// descriptor size in 16byte blocks
+			ctrl->fence_size = 2;	// used descriptor size in 16byte blocks
 			// XXX ask for interrupt, later report only if  NS_REPORT not too often.
 			ctrl->srcrb_flags = cpu_to_be32(MLX4_WQE_CTRL_CQ_UPDATE);
 			tx_desc->inl.byte_count = cpu_to_be32(1 << 31 | len);
@@ -279,8 +300,9 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			wmb();
 			j = (j == lim) ? 0 : j + 1;
 			ctrl->owner_opcode = cpu_to_be32(
-				((txr->prod & 0xffff) << 8) | MLX4_OPCODE_SEND |
+				MLX4_OPCODE_SEND |
 				((txr->prod & txr->size) ? MLX4_EN_BIT_DESC_OWN : 0) );
+			RD(3, "dumped %d", txr->prod + mlx4_tx_desc_dump(tx_desc));
 			txr->prod++;
 		}
 		kring->nr_hwcur = k; /* the saved ring->cur */
