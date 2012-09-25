@@ -123,7 +123,7 @@ mlx4_netmap_reg(struct ifnet *ifp, int onoff)
 	D("setting netmap mode for %s to %s", ifp->if_xname, onoff ? "ON" : "OFF");
 	// rtnl_lock(); // ???
 	if (netif_running(ifp)) {
-		D("unloading the nic");
+		D("unloading %s", ifp->if_xname);
 		mutex_lock(&mdev->state_lock);
 		if (onoff == 0) {
 			int i;
@@ -146,7 +146,7 @@ retry:
 		ifp->if_capenable &= ~IFCAP_NETMAP;
 	}
 	if (need_load) {
-		D("loading the NIC");
+		D("loading %s", ifp->if_xname);
 		error = mlx4_en_start_port(ifp);
 		D("start_port returns %d", error);
 		if (error && onoff) {
@@ -242,7 +242,7 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		 * forced to use 64 bytes each.
 		 */
 
-		RD(10,"=======>========== send from %d to %d at bd %d", j, k, txr->prod);
+		ND(10,"=======>========== send from %d to %d at bd %d", j, k, txr->prod);
 		for (n = 0; j != k; n++) {
 			struct netmap_slot *slot = &ring->slot[j];
 			uint64_t paddr;
@@ -303,7 +303,7 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			ctrl->owner_opcode = cpu_to_be32(
 				MLX4_OPCODE_SEND |
 				((txr->prod & txr->size) ? MLX4_EN_BIT_DESC_OWN : 0) );
-			RD(3, "dumped %d", txr->prod + mlx4_tx_desc_dump(tx_desc));
+			ND(3, "dumped %d", txr->prod + mlx4_tx_desc_dump(tx_desc));
 		}
 		kring->nr_hwcur = k; /* the saved ring->cur */
 		/* decrease avail by number of packets  sent */
@@ -359,11 +359,12 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	}
 	/* now we have updated cons-index, notify the card. */
 	/* XXX can we make it conditional ?  */
+	wmb();
 	mlx4_cq_set_ci(mcq);
+	mlx4_en_arm_cq(priv, cq); // XXX always ?
 	wmb();
 	/* XXX unsigned arithmetic below */
 	n = (new_index - ring_index) & size_mask;
-    }
 	if (n) {
 		RD(5, "txr %d completed %d packets", ring_nr, n);
 		/* some tx completed, increment hwavail. */
@@ -375,6 +376,11 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			goto err;
 		}
 	}
+	if (kring->nr_hwavail == 0) {
+		RD(5, "txq %d full, arm cq", ring_nr);
+		mlx4_en_arm_cq(priv, cq);
+	}
+    }
 	ring->avail = kring->nr_hwavail;
 
 err:
@@ -428,7 +434,7 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 
 	if (k > lim) /* userspace is cheating */
 		return netmap_ring_reinit(kring);
-	RD(5, "ring %d", ring_nr);
+	ND(5, "ring %d", ring_nr);
 	return 0;	// XXX forced return
 
 	if (do_lock)
@@ -566,6 +572,7 @@ mlx4_netmap_tx_config(struct SOFTC_T *priv, int ring_nr)
 	struct netmap_adapter *na = NA(priv->dev);
 	struct netmap_slot *slot;
 	struct mlx4_en_rx_ring *rxr;
+	struct mlx4_en_cq *cq;
 
 	ND(5, "priv %p ring_nr %d", priv, ring_nr);
 
@@ -584,6 +591,8 @@ mlx4_netmap_tx_config(struct SOFTC_T *priv, int ring_nr)
 	RD(5, "init tx ring %d with %d slots (driver %d)", ring_nr,
 		na->num_tx_desc,
 		priv->tx_ring[ring_nr].size);
+	/* enable interrupts on the netmap queues */
+	cq = &priv->tx_cq[ring_nr];	// derive from the txring
 
 	return 1;
 }
