@@ -1,5 +1,5 @@
 --- mellanox/mlx4/en_cq.c	2012-09-11 20:50:55.982624673 -0700
-+++ ./mellanox/mlx4/en_cq.c	2012-09-25 14:55:39.995504201 -0700
++++ ./mellanox/mlx4/en_cq.c	2012-09-25 19:59:14.163852149 -0700
 @@ -37,6 +37,10 @@
  
  #include "mlx4_en.h"
@@ -11,38 +11,6 @@
  static void mlx4_en_cq_event(struct mlx4_cq *cq, enum mlx4_event event)
  {
  	return;
-@@ -127,6 +131,15 @@ int mlx4_en_activate_cq(struct mlx4_en_p
- 	cq->mcq.event = mlx4_en_cq_event;
- 
- 	if (cq->is_tx) {
-+#if 0 // XXX def DEV_NETMAP
-+		struct netmap_adapter *na = NA(priv->dev);
-+		if (na && (priv->dev->if_capenable & IFCAP_NETMAP) && cq_idx < na->num_tx_rings) {
-+			RD(5, "activate napi on txq %d ring %d", cq_idx, cq->ring);
-+			netif_napi_add(cq->dev, &cq->napi, mlx4_en_poll_tx_cq, 64);
-+			napi_enable(&cq->napi);
-+			return 0;
-+		}
-+#endif /* !DEV_NETMAP */
- 		init_timer(&cq->timer);
- 		cq->timer.function = mlx4_en_poll_tx_cq;
- 		cq->timer.data = (unsigned long) cq;
-@@ -155,6 +168,15 @@ void mlx4_en_deactivate_cq(struct mlx4_e
- {
- 	struct mlx4_en_dev *mdev = priv->mdev;
- 
-+#if 0 // XXX def DEV_NETMAP
-+	struct netmap_adapter *na = NA(priv->dev);
-+
-+	if (cq->is_tx && na && (priv->dev->if_capenable & IFCAP_NETMAP) && cq->ring < na->num_tx_rings) {
-+		RD(5, "deactivate napi on txq %d", cq->ring);
-+		napi_disable(&cq->napi);
-+		netif_napi_del(&cq->napi);
-+	} else
-+#endif /* !DEV_NETMAP */
- 	if (cq->is_tx)
- 		del_timer(&cq->timer);
- 	else {
 --- mellanox/mlx4/en_netdev.c	2012-09-11 20:50:55.982624673 -0700
 +++ ./mellanox/mlx4/en_netdev.c	2012-09-23 17:46:55.489660556 -0700
 @@ -48,6 +48,39 @@
@@ -128,7 +96,7 @@
  	}
  
 --- mellanox/mlx4/en_tx.c	2012-09-11 20:50:55.982624673 -0700
-+++ ./mellanox/mlx4/en_tx.c	2012-09-25 15:14:26.126089836 -0700
++++ ./mellanox/mlx4/en_tx.c	2012-09-25 21:14:09.275218854 -0700
 @@ -55,6 +55,10 @@ MODULE_PARM_DESC(inline_thold, "threshol
  
  static u32 hashrnd __read_mostly;
@@ -140,33 +108,25 @@
  int mlx4_en_create_tx_ring(struct mlx4_en_priv *priv,
  			   struct mlx4_en_tx_ring *ring, u32 size,
  			   u16 stride)
-@@ -336,6 +340,15 @@ static void mlx4_en_process_tx_cq(struct
- 	if (!priv->port_up)
- 		return;
+@@ -396,6 +400,17 @@ void mlx4_en_tx_irq(struct mlx4_cq *mcq)
  
+ 	if (!spin_trylock(&ring->comp_lock))
+ 		return;
 +#ifdef DEV_NETMAP
-+{ static int cnt = 0;
-+	RD(1, "XXXXXX-------XXXXXXXXXXX-------- tx-irq %d count %d", cq->ring, cnt);
++	static int cnt = 0;
++	RD(5,"XXXXXX-------XXXXXXXXXXX-------- tx-irq %d count %d", (int)cq->ring, cnt++);
 +	if (netmap_tx_irq(cq->dev, cq->ring)) {
 +		RD(5, "wakeup queue %d", cq->ring);
-+		return;
++	} else {
++		RD(5, "XXXXXXXXX  tx_irq %d unexpected, ignoring", cq->ring);
 +	}
-+}
++	spin_unlock(&ring->comp_lock);
++	return;
 +#endif /* DEV_NETMAP */
- 	index = cons_index & size_mask;
- 	cqe = &buf[(index << factor) + factor];
- 	ring_index = ring->cons & size_mask;
-@@ -409,6 +422,9 @@ void mlx4_en_poll_tx_cq(unsigned long da
- 	struct mlx4_en_tx_ring *ring = &priv->tx_ring[cq->ring];
- 	u32 inflight;
- 
-+{static uint32_t ctr;
-+	RD(1, "XXXXXX-------XXXXXXXXXXX-------- poll_tx_cq %d count %d", cq->ring, ctr++);
-+}
- 	INC_PERF_COUNTER(priv->pstats.tx_poll);
- 
- 	if (!spin_trylock_irq(&ring->comp_lock)) {
-@@ -714,6 +730,7 @@ netdev_tx_t mlx4_en_xmit(struct sk_buff
+ 	mlx4_en_process_tx_cq(cq->dev, cq);
+ 	mod_timer(&cq->timer, jiffies + 1);
+ 	spin_unlock(&ring->comp_lock);
+@@ -714,6 +729,7 @@ netdev_tx_t mlx4_en_xmit(struct sk_buff
  	index = ring->prod & ring->size_mask;
  	bf_index = ring->prod;
  
@@ -174,7 +134,7 @@
  	/* See if we have enough space for whole descriptor TXBB for setting
  	 * SW ownership on next descriptor; if not, use a bounce buffer. */
  	if (likely(index + nr_txbb <= ring->size))
-@@ -799,6 +816,7 @@ netdev_tx_t mlx4_en_xmit(struct sk_buff
+@@ -799,6 +815,7 @@ netdev_tx_t mlx4_en_xmit(struct sk_buff
  	data += skb_shinfo(skb)->nr_frags + tx_info->linear - 1;
  
  	if (!is_inline(skb, &fragptr)) {
@@ -182,7 +142,7 @@
  		/* Map fragments */
  		for (i = skb_shinfo(skb)->nr_frags - 1; i >= 0; i--) {
  			frag = &skb_shinfo(skb)->frags[i];
-@@ -823,6 +841,7 @@ netdev_tx_t mlx4_en_xmit(struct sk_buff
+@@ -823,6 +840,7 @@ netdev_tx_t mlx4_en_xmit(struct sk_buff
  		}
  		tx_info->inl = 0;
  	} else {
@@ -190,19 +150,8 @@
  		build_inline_wqe(tx_desc, skb, real_size, &vlan_tag, tx_ind, fragptr);
  		tx_info->inl = 1;
  	}
-@@ -849,6 +868,7 @@ netdev_tx_t mlx4_en_xmit(struct sk_buff
- 
- 		mlx4_bf_copy(ring->bf.reg + ring->bf.offset, (unsigned long *) ctrl,
- 		     desc_size);
-+ND(5, "after mlx4_bf_copy, desc_size %d", desc_size);
- 
+@@ -861,6 +879,7 @@ netdev_tx_t mlx4_en_xmit(struct sk_buff
  		wmb();
- 
-@@ -859,8 +879,10 @@ netdev_tx_t mlx4_en_xmit(struct sk_buff
- 		wmb();
- 		tx_desc->ctrl.owner_opcode = op_own;
- 		wmb();
-+RD(5, "ringing doorbell at %d", ring->prod); // XXX DEV_NETMAP
  		iowrite32be(ring->doorbell_qpn, ring->bf.uar->map + MLX4_SEND_DOORBELL);
  	}
 +	ND(3, "dumped desc %d ring %d", ring->prod + mlx4_tx_desc_dump(tx_desc), tx_ind);
