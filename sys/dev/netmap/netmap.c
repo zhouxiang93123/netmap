@@ -1611,7 +1611,7 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, int n,
 	kring->nkr_hwofs = new_hwofs;
 	if (tx == NR_TX)
 		kring->nr_hwavail = kring->nkr_num_slots - 1;
-	RD(10, "new hwofs %d on %s %s[%d]",
+	ND(10, "new hwofs %d on %s %s[%d]",
 			kring->nkr_hwofs, na->ifp->if_xname,
 			tx == NR_TX ? "TX" : "RX", n);
 
