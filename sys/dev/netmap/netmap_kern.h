@@ -92,12 +92,12 @@
 /* rate limited, lps indicates how many per second */
 #define RD(lps, format, ...)					\
 	do {							\
-		static int t0, cnt;				\
+		static int t0, __cnt;				\
 		if (t0 != time_second) {			\
 			t0 = time_second;			\
-			cnt = 0;				\
+			__cnt = 0;				\
 		}						\
-		if (cnt++ < lps)				\
+		if (__cnt++ < lps)				\
 			D(format, ##__VA_ARGS__);		\
 	} while (0)
 
