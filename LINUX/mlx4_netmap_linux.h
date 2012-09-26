@@ -82,6 +82,10 @@ nm_pkt_dump(int i, char *buf, int len)
 		d[0], d[1], d[2], d[3], d[4], d[5]);
 }
 
+/* show the content of the descriptor. Only the first block is printed
+ * to make sure we do not fail on wraparounds (otherwise we would need
+ * base, index and ring size).
+ */
 int
 mlx4_tx_desc_dump(struct mlx4_en_tx_desc *tx_desc)
 {
@@ -241,13 +245,12 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	// XXX debugging, only print if sending something
 	n = (txr->prod - txr->cons - 1) & 0xffffff; // should be modulo 2^24 ?
 	if (n >= txr->size) {
-		RD(5, "txr %d overflow: cons %u prod %u size %d delta %d",
+		RD(5, "XXXXXXXXXXX txr %d overflow: cons %u prod %u size %d delta %d",
 		    ring_nr, txr->cons, txr->prod, txr->size, n);
 	}
 	/*
 	 * Process new packets to send. j is the current index in the
-	 * netmap ring, l is the corresponding bd_prod index (uint16_t).
-	 * XXX for the NIC ring index we must use TX_BD(l)
+	 * netmap ring, txr->prod is the entry in the NIC ring.
 	 */
 	j = kring->nr_hwcur;
 	if (j > lim) {
@@ -255,13 +258,12 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		error = EINVAL;
 		goto err;
 	}
-	// XXX debugging assuming lim is 2^x-1
-	if (kring->nr_hwcur != ring->cur)
-	    RD(5,"START: txr %d cons %u prod %u hwcur %u cur %u avail %d send %d",
-		ring_nr, txr->cons, txr->prod, kring->nr_hwcur, ring->cur, kring->nr_hwavail,
-			(ring->cur - kring->nr_hwcur) & lim);
+	// XXX debugging, assuming lim is 2^x-1
 	n = 0; // XXX debugging
 	if (j != k) {	/* we have new packets to send */
+		RD(5,"START: txr %d cons %u prod %u hwcur %u cur %u avail %d send %d",
+			ring_nr, txr->cons, txr->prod, kring->nr_hwcur, ring->cur, kring->nr_hwavail,
+			(k - j) & lim);
 
 		// XXX see en_tx.c :: mlx4_en_xmit()
 		/*
@@ -278,20 +280,11 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
 			uint16_t len = slot->len;
-
-			uint64_t mac;
-			uint32_t mac_l, mac_h;
 			uint32_t l = txr->prod & txr->size_mask;
 			struct mlx4_en_tx_desc *tx_desc = txr->buf + l * TXBB_SIZE;
 			struct mlx4_wqe_ctrl_seg *ctrl = &tx_desc->ctrl;
 
-			/*
-			 * Quick check for valid addr and len.
-			 * PNMB() returns netmap_buffer_base for invalid
-			 * buffer indexes (but the address is still a
-			 * valid one to be used in a ring). slot->len is
-			 * unsigned so no need to check for negative values.
-			 */
+			/* Quick check for valid addr and len. */
 			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
 				D("ring %d error, resetting", ring_nr);
 				error = EINVAL;
@@ -310,27 +303,29 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			ctrl->vlan_tag = 0;	// not used
 			ctrl->ins_vlan = 0;	// NO
 			ctrl->fence_size = 2;	// used descriptor size in 16byte blocks
-			// XXX ask for interrupt, later report only if  NS_REPORT not too often.
+			// request notification. XXX later report only if NS_REPORT or not too often.
 			ctrl->srcrb_flags = cpu_to_be32(MLX4_WQE_CTRL_CQ_UPDATE);
 
 			// XXX do we need to copy the mac dst address ?
-			mac = mlx4_en_mac_to_u64(addr);
-			mac_h = (u32) ((mac & 0xffff00000000ULL) >> 16);
-			mac_l = (u32) (mac & 0xffffffff);
-			ctrl->srcrb_flags |= cpu_to_be32(mac_h);
-			ctrl->imm = cpu_to_be32(mac_l);
+			{
+				uint64_t mac = mlx4_en_mac_to_u64(addr);
+				uint32_t mac_h = (u32) ((mac & 0xffff00000000ULL) >> 16);
+				uint32_t mac_l = (u32) (mac & 0xffffffff);
+
+				ctrl->srcrb_flags |= cpu_to_be32(mac_h);
+				ctrl->imm = cpu_to_be32(mac_l);
+			}
 
 			tx_desc->data.addr = cpu_to_be64(paddr);
 			tx_desc->data.lkey = cpu_to_be32(priv->mdev->mr.key);
 			wmb();		// XXX why here ?
 			tx_desc->data.byte_count = cpu_to_be32(len);
 			wmb();
-			j = (j == lim) ? 0 : j + 1;
 			ctrl->owner_opcode = cpu_to_be32(
 				MLX4_OPCODE_SEND |
 				((txr->prod & txr->size) ? MLX4_EN_BIT_DESC_OWN : 0) );
 			txr->prod++;
-			ND(3, "dumped %d", txr->prod + mlx4_tx_desc_dump(tx_desc));
+			j = (j == lim) ? 0 : j + 1;
 		}
 		kring->nr_hwcur = k; /* the saved ring->cur */
 		/* decrease avail by number of packets  sent */
@@ -371,7 +366,7 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 */
 	new_index = ring_index = txr->cons & size_mask;
 
-	for (;;) {
+	for (n = 0; n < 2*lim; n++) {
 		uint16_t index = mcq->cons_index & size_mask;
 		struct mlx4_cqe *cqe = &buf[(index << factor) + factor];
 
@@ -389,11 +384,15 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		ND(5, "txq %d new_index %d", ring_nr, new_index);
 		mcq->cons_index++;
 	}
+	if (n > lim) {
+		D("XXXXXXXXXXX too many notifications %d", n);
+	}
 	/* now we have updated cons-index, notify the card. */
 	/* XXX can we make it conditional ?  */
 	wmb();
 	mlx4_cq_set_ci(mcq);
-	mlx4_en_arm_cq(priv, cq); // XXX always ?
+	// XXX the following enables interrupts... */
+	// mlx4_en_arm_cq(priv, cq); // XXX always ?
 	wmb();
 	/* XXX unsigned arithmetic below */
 	n = (new_index - ring_index) & size_mask;
@@ -412,7 +411,7 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	}
 	if (kring->nr_hwavail == 0) {
 		RD(5, "txq %d full, arm cq", ring_nr);
-		mlx4_en_arm_cq(priv, cq);
+		// mlx4_en_arm_cq(priv, cq);
 	}
     }
 	ring->avail = kring->nr_hwavail;
@@ -622,7 +621,7 @@ mlx4_netmap_tx_config(struct SOFTC_T *priv, int ring_nr)
 	slot = netmap_reset(na, NR_TX, ring_nr, 0);
 	if (!slot)
 		return 0;			// not in netmap mode;
-	RD(5, "init tx ring %d with %d slots (driver %d)", ring_nr,
+	ND(5, "init tx ring %d with %d slots (driver %d)", ring_nr,
 		na->num_tx_desc,
 		priv->tx_ring[ring_nr].size);
 	/* enable interrupts on the netmap queues */
