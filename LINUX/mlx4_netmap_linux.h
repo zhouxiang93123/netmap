@@ -228,7 +228,7 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	u_int j, k = ring->cur, n, lim = kring->nkr_num_slots - 1;
+	u_int j, k = ring->cur, n = 0, lim = kring->nkr_num_slots - 1;
 	int error = 0;
 
 	/* if cur is invalid reinitialize the ring. */
@@ -238,7 +238,9 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		mtx_lock(&na->core_lock); // XXX exp
 		// mtx_lock(&kring->q_lock);
 
-	D("START: txr %d cons %u prod %u hwcur %u cur %u avail %d",
+	// XXX debugging, only print if sending something
+	if (kring->nr_hwcur != ring->cur)
+	    D("START: txr %d cons %u prod %u hwcur %u cur %u avail %d",
 		ring_nr, txr->cons, txr->prod, kring->nr_hwcur, ring->cur, kring->nr_hwavail);
 	n = (txr->prod - txr->cons - 1) & 0xffffff; // should be modulo 2^24 ?
 	if (n >= txr->size) {
@@ -256,6 +258,7 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		error = EINVAL;
 		goto err;
 	}
+	n = 0; // XXX debugging
 	if (j != k) {	/* we have new packets to send */
 
 		// XXX see en_tx.c :: mlx4_en_xmit()
@@ -339,8 +342,10 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		// XXX is this doorbell correct ?
 		iowrite32be(txr->doorbell_qpn, txr->bf.uar->map + MLX4_SEND_DOORBELL);
 	}
-	D("SENT: txr %d cons %u prod %u hwcur %u cur %u avail %d",
-		ring_nr, txr->cons, txr->prod, kring->nr_hwcur, ring->cur, kring->nr_hwavail);
+	// XXX debugging, only print if sent something
+	if (n)
+	    D("SENT: txr %d cons %u prod %u hwcur %u cur %u avail %d sent %d",
+		ring_nr, txr->cons, txr->prod, kring->nr_hwcur, ring->cur, kring->nr_hwavail, n);
 
     /* XXX now recover completed transmissions. */
     {
@@ -405,7 +410,7 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		RD(5, "txq %d full, arm cq", ring_nr);
 		mlx4_en_arm_cq(priv, cq);
 	}
-	D("RECOVER: txr %d cons %u prod %u hwcur %u cur %u avail %d n was %d",
+	RD(10, "RECOVER: txr %d cons %u prod %u hwcur %u cur %u avail %d n was %d",
 		ring_nr, txr->cons, txr->prod, kring->nr_hwcur, ring->cur, kring->nr_hwavail, n);
     }
 	ring->avail = kring->nr_hwavail;
