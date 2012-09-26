@@ -411,7 +411,7 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	}
 	if (kring->nr_hwavail == 0) {
 		RD(5, "txq %d full, arm cq", ring_nr);
-		// mlx4_en_arm_cq(priv, cq);
+		mlx4_en_arm_cq(priv, cq);
 	}
     }
 	ring->avail = kring->nr_hwavail;
