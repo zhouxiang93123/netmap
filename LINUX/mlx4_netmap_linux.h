@@ -261,7 +261,7 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	// XXX debugging, assuming lim is 2^x-1
 	n = 0; // XXX debugging
 	if (j != k) {	/* we have new packets to send */
-		RD(5,"START: txr %d cons %u prod %u hwcur %u cur %u avail %d send %d",
+		ND(5,"START: txr %d cons %u prod %u hwcur %u cur %u avail %d send %d",
 			ring_nr, txr->cons, txr->prod, kring->nr_hwcur, ring->cur, kring->nr_hwavail,
 			(k - j) & lim);
 
@@ -341,7 +341,7 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	}
 	// XXX debugging, only print if sent something
 	if (n)
-	    RD(5, "SENT: txr %d cons %u prod %u hwcur %u cur %u avail %d sent %d",
+	    ND(5, "SENT: txr %d cons %u prod %u hwcur %u cur %u avail %d sent %d",
 		ring_nr, txr->cons, txr->prod, kring->nr_hwcur, ring->cur, kring->nr_hwavail, n);
 
     /* XXX now recover completed transmissions. */
@@ -406,11 +406,12 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			error = EINVAL;
 			goto err;
 		}
-		RD(10, "RECOVER: txr %d cons %u prod %u hwcur %u cur %u avail %d n was %d",
+		ND(10, "RECOVER: txr %d cons %u prod %u hwcur %u cur %u avail %d n was %d",
 			ring_nr, txr->cons, txr->prod, kring->nr_hwcur, ring->cur, kring->nr_hwavail, n);
 	}
 	if (kring->nr_hwavail == 0) {
-		RD(5, "txq %d full, arm cq", ring_nr);
+		static int full_ctr;
+		RD(5, "txq %d full, arm cq (%d)", ring_nr, full_ctr++);
 		mlx4_en_arm_cq(priv, cq);
 	}
     }

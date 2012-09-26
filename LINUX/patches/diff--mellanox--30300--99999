@@ -1,5 +1,6 @@
+diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' drivers/net/ethernet/mellanox/mlx4/en_cq.c ./mellanox/mlx4/en_cq.c
 --- mellanox/mlx4/en_cq.c	2012-09-11 20:50:55.982624673 -0700
-+++ ./mellanox/mlx4/en_cq.c	2012-09-25 19:59:14.163852149 -0700
++++ ./mellanox/mlx4/en_cq.c	2012-09-25 21:55:41.093798712 -0700
 @@ -37,6 +37,10 @@
  
  #include "mlx4_en.h"
@@ -12,7 +13,7 @@
  {
  	return;
 --- mellanox/mlx4/en_netdev.c	2012-09-11 20:50:55.982624673 -0700
-+++ ./mellanox/mlx4/en_netdev.c	2012-09-23 17:46:55.489660556 -0700
++++ ./mellanox/mlx4/en_netdev.c	2012-09-25 21:55:41.093798712 -0700
 @@ -48,6 +48,39 @@
  #include "mlx4_en.h"
  #include "en_port.h"
@@ -74,7 +75,7 @@
  
  out:
 --- mellanox/mlx4/en_rx.c	2012-09-11 20:50:55.982624673 -0700
-+++ ./mellanox/mlx4/en_rx.c	2012-09-23 17:46:55.489660556 -0700
++++ ./mellanox/mlx4/en_rx.c	2012-09-25 21:55:41.103798624 -0700
 @@ -41,6 +41,9 @@
  
  #include "mlx4_en.h"
@@ -96,7 +97,7 @@
  	}
  
 --- mellanox/mlx4/en_tx.c	2012-09-11 20:50:55.982624673 -0700
-+++ ./mellanox/mlx4/en_tx.c	2012-09-25 21:14:09.275218854 -0700
++++ ./mellanox/mlx4/en_tx.c	2012-09-25 21:55:41.103798624 -0700
 @@ -55,6 +55,10 @@ MODULE_PARM_DESC(inline_thold, "threshol
  
  static u32 hashrnd __read_mostly;
@@ -126,35 +127,3 @@
  	mlx4_en_process_tx_cq(cq->dev, cq);
  	mod_timer(&cq->timer, jiffies + 1);
  	spin_unlock(&ring->comp_lock);
-@@ -714,6 +729,7 @@ netdev_tx_t mlx4_en_xmit(struct sk_buff
- 	index = ring->prod & ring->size_mask;
- 	bf_index = ring->prod;
- 
-+ND(5, "sending packet ring %d size %d", tx_ind, skb->len);
- 	/* See if we have enough space for whole descriptor TXBB for setting
- 	 * SW ownership on next descriptor; if not, use a bounce buffer. */
- 	if (likely(index + nr_txbb <= ring->size))
-@@ -799,6 +815,7 @@ netdev_tx_t mlx4_en_xmit(struct sk_buff
- 	data += skb_shinfo(skb)->nr_frags + tx_info->linear - 1;
- 
- 	if (!is_inline(skb, &fragptr)) {
-+ND(5, "ring %d packet not inline, size %d frags %d", tx_ind, skb_headlen(skb), skb_shinfo(skb)->nr_frags);
- 		/* Map fragments */
- 		for (i = skb_shinfo(skb)->nr_frags - 1; i >= 0; i--) {
- 			frag = &skb_shinfo(skb)->frags[i];
-@@ -823,6 +840,7 @@ netdev_tx_t mlx4_en_xmit(struct sk_buff
- 		}
- 		tx_info->inl = 0;
- 	} else {
-+ND(5, "ring %d packet inline, size %d frags %d", tx_ind, skb_headlen(skb), skb_shinfo(skb)->nr_frags);
- 		build_inline_wqe(tx_desc, skb, real_size, &vlan_tag, tx_ind, fragptr);
- 		tx_info->inl = 1;
- 	}
-@@ -861,6 +879,7 @@ netdev_tx_t mlx4_en_xmit(struct sk_buff
- 		wmb();
- 		iowrite32be(ring->doorbell_qpn, ring->bf.uar->map + MLX4_SEND_DOORBELL);
- 	}
-+	ND(3, "dumped desc %d ring %d", ring->prod + mlx4_tx_desc_dump(tx_desc), tx_ind);
- 
- 	/* Poll CQ here */
- 	mlx4_en_xmit_poll(priv, tx_ind);
