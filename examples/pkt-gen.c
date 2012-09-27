@@ -100,7 +100,7 @@ struct targ {
 	struct nmreq nmr;
 	struct netmap_if *nifp;
 	uint16_t	qfirst, qlast; /* range of queues to scan */
-	uint64_t count;
+	volatile uint64_t count;
 	struct timeval tic, toc;
 	int me;
 	pthread_t thread;
@@ -571,6 +571,7 @@ ponger_body(void *data)
 		for (i = targ->qfirst; i < targ->qlast; i++) {
 			rxring = NETMAP_RXRING(nifp, i);
 			while (rxring->avail > 0) {
+				uint16_t *spkt, *dpkt;
 				uint32_t cur = rxring->cur;
 				struct netmap_slot *slot = &rxring->slot[cur];
 				char *src, *dst;
@@ -584,7 +585,15 @@ ponger_body(void *data)
 				dst = NETMAP_BUF(txring,
 				    txring->slot[txcur].buf_idx);
 				/* copy... */
+				dpkt = (uint16_t *)dst;
+				spkt = (uint16_t *)src;
 				pkt_copy(src, dst, slot->len);
+				dpkt[0] = spkt[3];
+				dpkt[1] = spkt[4];
+				dpkt[2] = spkt[5];
+				dpkt[3] = spkt[0];
+				dpkt[4] = spkt[1];
+				dpkt[5] = spkt[2];
 				txring->slot[txcur].len = slot->len;
 				/* XXX swap src dst mac */
 				txcur = NETMAP_RING_NEXT(txring, txcur);
@@ -732,7 +741,8 @@ receiver_body(void *data)
 	struct pollfd fds[1];
 	struct netmap_if *nifp = targ->nifp;
 	struct netmap_ring *rxring;
-	int i, received = 0;
+	int i;
+	uint64_t received = 0;
 
 	if (setaffinity(targ->thread, targ->affinity))
 		goto quit;
@@ -777,8 +787,8 @@ receiver_body(void *data)
 			m = receive_packets(rxring, targ->g->burst,
 					SKIP_PAYLOAD);
 			received += m;
-			targ->count = received;
 		}
+		targ->count = received;
 
 		// tell the card we have read the data
 		//ioctl(fds[0].fd, NIOCRXSYNC, NULL);
@@ -1241,7 +1251,7 @@ main(int arc, char **argv)
 		if (pps < 10000)
 			continue;
 		pps = (my_count - prev)*1000000 / pps;
-		D("%" PRIu64 " pps", pps);
+		D("%" PRIu64 " pps %" PRIu64 " pkts", pps, (uint64_t)(my_count - prev));
 		prev = my_count;
 		toc = now;
 		if (done == g.nthreads)
