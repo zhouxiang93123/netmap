@@ -518,6 +518,7 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		for (n = 0; n <= 2*lim ; n++) {
 			int index = mcq->cons_index & size_mask;
 			struct mlx4_cqe *cqe = &buf[(index << factor) + factor];
+			prefetch(cqe+1);
 			if (!XNOR(cqe->owner_sr_opcode & MLX4_CQE_OWNER_MASK, mcq->cons_index & size))
 				break;
 
@@ -592,6 +593,7 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			rx_desc->data[0].byte_count = cpu_to_be32(NETMAP_BUF_SIZE);
 			rx_desc->data[0].lkey = cpu_to_be32(priv->mdev->mr.key);
 
+#if 0
 			/* we only use one fragment, so the rest is padding */
 			possible_frags = (rxr->stride - sizeof(struct mlx4_en_rx_desc)) / DS_SIZE;
 			for (jj = 1; jj < possible_frags; jj++) {
@@ -599,6 +601,7 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 				rx_desc->data[jj].lkey = cpu_to_be32(MLX4_EN_MEMTYPE_PAD);
 				rx_desc->data[jj].addr = 0;
 			}
+#endif
 
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
