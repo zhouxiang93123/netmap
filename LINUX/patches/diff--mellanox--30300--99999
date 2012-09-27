@@ -77,7 +77,7 @@ diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' /usr/local/google
  out:
 diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_rx.c ./mellanox/mlx4/en_rx.c
 --- /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_rx.c	2012-09-11 20:50:55.982624673 -0700
-+++ ./mellanox/mlx4/en_rx.c	2012-09-27 00:08:12.692097214 -0700
++++ ./mellanox/mlx4/en_rx.c	2012-09-27 00:13:16.099550954 -0700
 @@ -41,6 +41,9 @@
  
  #include "mlx4_en.h"
@@ -112,7 +112,7 @@ diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' /usr/local/google
  {
 +#ifdef DEV_NETMAP
 +	if (priv->dev->if_capenable & IFCAP_NETMAP)
-+		D("netmap mode, rx buf already freed");
++		ND("netmap mode, rx buf already freed");
 +	else
 +#endif /* DEV_NETMAP */
  	mlx4_en_free_rx_buf(priv, ring);
@@ -139,7 +139,7 @@ diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' /usr/local/google
 +        static int cnt = 0;
 +        ND(5,"XXXXXX-------XXXXXXXXXXX-------- poll-rx-cq %d count %d", (int)cq->ring, cnt++);
 +	if (netmap_rx_irq(cq->dev, cq->ring, &done)) {
-+		D("rx_irq %d for netmap, budget %d done %d", cq->ring, budget, done);
++		ND("rx_irq %d for netmap, budget %d done %d", cq->ring, budget, done);
 +	} else
 +#endif /* DEV_NETMAP */
  	done = mlx4_en_process_rx_cq(dev, cq, budget);

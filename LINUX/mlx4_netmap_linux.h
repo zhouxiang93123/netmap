@@ -470,7 +470,7 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 
 	if (k > lim) /* userspace is cheating */
 		return netmap_ring_reinit(kring);
-	RD(5, "START rxr %d cons %d prod %d kcur %d kavail %d cur %d avail %d",
+	ND(5, "START rxr %d cons %d prod %d kcur %d kavail %d cur %d avail %d",
 		ring_nr, rxr->cons, rxr->prod, kring->nr_hwcur, kring->nr_hwavail, ring->cur, ring->avail);
 
 	if (do_lock)
@@ -533,7 +533,7 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			ND(5, "received %d packets", n);
 			kring->nr_hwavail += n;
 			rxr->cons += n;
-			RD(5, "RECVD %d rxr %d cons %d prod %d kcur %d kavail %d cur %d avail %d",
+			ND(5, "RECVD %d rxr %d cons %d prod %d kcur %d kavail %d cur %d avail %d",
 				n,
 				ring_nr, rxr->cons, rxr->prod, kring->nr_hwcur, kring->nr_hwavail, ring->cur, ring->avail);
 
@@ -617,7 +617,7 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		*rxr->wqres.db.db = cpu_to_be32(rxr->prod & 0xffff);
 
 		ring->avail = kring->nr_hwavail - resvd;	// XXX dup here for debugging
-		RD(5, "FREED rxr %d cons %d prod %d kcur %d kavail %d cur %d avail %d",
+		ND(5, "FREED rxr %d cons %d prod %d kcur %d kavail %d cur %d avail %d",
 			ring_nr, rxr->cons, rxr->prod, kring->nr_hwcur, kring->nr_hwavail, ring->cur, ring->avail);
 
 	}
