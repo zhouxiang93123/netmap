@@ -138,13 +138,13 @@ mlx4_netmap_reg(struct ifnet *ifp, int onoff)
 			 */
 			for (i = 0; i < na->num_tx_rings; i++) {
 				struct mlx4_en_tx_ring *txr = &priv->tx_ring[i];
-				D("txr %d : cons %d prod %d txbb %d", i, txr->cons, txr->prod, txr->last_nr_txbb);
+				ND("txr %d : cons %d prod %d txbb %d", i, txr->cons, txr->prod, txr->last_nr_txbb);
 				txr->cons += txr->last_nr_txbb; // XXX should be 1
 				for (;txr->cons != txr->prod; txr->cons++) {
 					uint16_t j = txr->cons & txr->size_mask;
 					uint32_t new_val, *ptr = (uint32_t *)(txr->buf + j * TXBB_SIZE);
 					new_val = cpu_to_be32(STAMP_VAL | (!!(txr->cons & txr->size) << STAMP_SHIFT));
-					RD(10, "old 0x%08x new 0x%08x", *ptr,  new_val);
+					ND(10, "old 0x%08x new 0x%08x", *ptr,  new_val);
 					*ptr = new_val;
 				}
 			}
@@ -466,7 +466,6 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	u_int k = ring->cur, resvd = ring->reserved;
 	uint16_t hw_comp_cons, sw_comp_cons;
 
-
         if (!priv->port_up)	// XXX as in mlx4_en_process_rx_cq()
                 return 0;
 
@@ -479,7 +478,6 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 
 	if (do_lock)
 		mtx_lock(&kring->q_lock);
-	rmb();
 	/*
 	 * First part, import newly received packets into the netmap ring.
 	 *
@@ -492,12 +490,22 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 *	l = producer index in NIC ring
 	 * and
 	 *	j == (l + kring->nkr_hwofs) % ring_size
-	 *
-	 * rxr->next_to_check is set to 0 on a ring reinit
 	 */
 
 	/* scan the completion queue to see what is going on.
-	 * The mapping is 1:1
+	 * The mapping is 1:1. The hardware toggles the OWNER bit in the
+	 * descriptor at mcq->cons_index & size_mask, which is mapped 1:1
+	 * to an entry in the RXR.
+	 * XXX there are two notifications sent to the hw:
+	 *	mlx4_cq_set_ci(struct mlx4_cq *cq);
+	 *		*cq->set_ci_db = cpu_to_be32(cq->cons_index & 0xffffff);
+	 *	mlx4_en_update_rx_prod_db(rxr);
+	 *		*ring->wqres.db.db = cpu_to_be32(ring->prod & 0xffff);
+	 *	apparently they point to the same memory word
+	 *	(see mlx4_en_activate_cq() ) and are initialized to 0
+	 *	    DB is the doorbell page (sec.15.1.2 ?)
+	 *		wqres is set in mlx4_alloc_hwq_res()
+	 *		and in turn mlx4_alloc_hwq_res()
 	 */
 	if (1 || netmap_no_pendintr || force_update) {
 		struct mlx4_en_cq *cq = &priv->rx_cq[ring_nr];
@@ -529,7 +537,7 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			rxr->prod += n;
 			kring->nr_hwavail += n;
 
-			/* XXX acknowledge reception to the hardware */
+			/* XXX ack completion queue */
 			mlx4_cq_set_ci(mcq);
 		}
 		kring->nr_kflags &= ~NKR_PENDINTR;
@@ -552,6 +560,8 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	}
 	if (j != k) { /* userspace has released some packets. */
 		l = netmap_idx_k2n(kring, j); // XXX NIC index
+		if (l != rxr->cons & rxr->size_mask)
+			RD(5, "rxr %d offset mismatch l %d cons %d", l, rxr->cons & rxr->size_mask);
 		for (n = 0; j != k; n++) {
 			/* collect per-slot info, with similar validations
 			 * and flag handling as in the txsync code.
@@ -601,10 +611,12 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		kring->nr_hwavail -= n;
 		kring->nr_hwcur = k;
 
-		// mlx4_en_update_rx_prod_db(rxr); // XXX is an inline
+		/* and now tell the system that there are more buffers available.
+		 * should use mlx4_en_update_rx_prod_db(rxr) but it is static in
+		 * en_rx.c so we do not see it here
+		 */
 		*rxr->wqres.db.db = cpu_to_be32(rxr->prod & 0xffff);
 
-		/* Update producers */
 	}
 done:
 	/* tell userspace that there are new packets */
@@ -732,7 +744,7 @@ mlx4_netmap_attach(struct SOFTC_T *priv)
 	rxq = priv->rx_ring_num;
 	txq = priv->tx_ring_num;
 	/* this card has 1k tx queues, so better limit the number */
-	nq = 1;
+	nq = rxq;
 	if (rxq < nq)
 		nq = rxq;
 	if (txq < nq)
