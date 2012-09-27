@@ -1,6 +1,6 @@
 diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_cq.c ./mellanox/mlx4/en_cq.c
 --- /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_cq.c	2012-09-11 20:50:55.982624673 -0700
-+++ ./mellanox/mlx4/en_cq.c	2012-09-25 22:03:55.329548885 -0700
++++ ./mellanox/mlx4/en_cq.c	2012-09-27 00:05:22.703523430 -0700
 @@ -37,6 +37,10 @@
  
  #include "mlx4_en.h"
@@ -14,7 +14,7 @@ diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' /usr/local/google
  	return;
 diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_netdev.c ./mellanox/mlx4/en_netdev.c
 --- /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_netdev.c	2012-09-11 20:50:55.982624673 -0700
-+++ ./mellanox/mlx4/en_netdev.c	2012-09-25 22:03:55.329548885 -0700
++++ ./mellanox/mlx4/en_netdev.c	2012-09-27 00:05:22.703523430 -0700
 @@ -48,6 +48,39 @@
  #include "mlx4_en.h"
  #include "en_port.h"
@@ -77,7 +77,7 @@ diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' /usr/local/google
  out:
 diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_rx.c ./mellanox/mlx4/en_rx.c
 --- /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_rx.c	2012-09-11 20:50:55.982624673 -0700
-+++ ./mellanox/mlx4/en_rx.c	2012-09-26 22:19:55.496843356 -0700
++++ ./mellanox/mlx4/en_rx.c	2012-09-27 00:08:12.692097214 -0700
 @@ -41,6 +41,9 @@
  
  #include "mlx4_en.h"
@@ -88,13 +88,15 @@ diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' /usr/local/google
  
  static int mlx4_en_alloc_frag(struct mlx4_en_priv *priv,
  			      struct mlx4_en_rx_desc *rx_desc,
-@@ -365,9 +368,14 @@ int mlx4_en_activate_rx_rings(struct mlx
+@@ -365,9 +368,16 @@ int mlx4_en_activate_rx_rings(struct mlx
  		ring = &priv->rx_ring[ring_ind];
  
  		ring->size_mask = ring->actual_size - 1;
 +#ifdef DEV_NETMAP
 +		if (priv->dev->if_capenable & IFCAP_NETMAP) {
++			int saved_cons = ring->cons;
 +			mlx4_en_free_rx_buf(priv, ring);
++			ring->cons = saved_cons;
 +			mlx4_netmap_rx_config(priv, ring_ind);
 +		}
 +#endif /* DEV_NETMAP */
@@ -104,7 +106,7 @@ diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' /usr/local/google
  	return 0;
  
  err_buffers:
-@@ -402,6 +410,11 @@ void mlx4_en_destroy_rx_ring(struct mlx4
+@@ -402,6 +412,11 @@ void mlx4_en_destroy_rx_ring(struct mlx4
  void mlx4_en_deactivate_rx_ring(struct mlx4_en_priv *priv,
  				struct mlx4_en_rx_ring *ring)
  {
@@ -116,7 +118,7 @@ diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' /usr/local/google
  	mlx4_en_free_rx_buf(priv, ring);
  	if (ring->stride <= TXBB_SIZE)
  		ring->buf -= TXBB_SIZE;
-@@ -692,6 +705,12 @@ out:
+@@ -692,6 +707,12 @@ out:
  	wmb(); /* ensure HW sees CQ consumer before we post new buffers */
  	ring->cons = mcq->cons_index;
  	ring->prod += polled; /* Polled descriptors were realocated in place */
@@ -129,7 +131,7 @@ diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' /usr/local/google
  	mlx4_en_update_rx_prod_db(ring);
  	ring->csum_ok += csum_ok;
  	ring->csum_none += csum_none;
-@@ -718,6 +737,13 @@ int mlx4_en_poll_rx_cq(struct napi_struc
+@@ -718,6 +739,13 @@ int mlx4_en_poll_rx_cq(struct napi_struc
  	struct mlx4_en_priv *priv = netdev_priv(dev);
  	int done;
  
@@ -145,7 +147,7 @@ diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' /usr/local/google
  	/* If we used up all the quota - we're probably not done yet... */
 diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_tx.c ./mellanox/mlx4/en_tx.c
 --- /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_tx.c	2012-09-11 20:50:55.982624673 -0700
-+++ ./mellanox/mlx4/en_tx.c	2012-09-26 21:36:05.829137797 -0700
++++ ./mellanox/mlx4/en_tx.c	2012-09-27 00:05:22.713523348 -0700
 @@ -55,6 +55,10 @@ MODULE_PARM_DESC(inline_thold, "threshol
  
  static u32 hashrnd __read_mostly;
