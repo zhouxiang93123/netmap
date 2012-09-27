@@ -1,6 +1,6 @@
-diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' drivers/net/ethernet/mellanox/mlx4/en_cq.c ./mellanox/mlx4/en_cq.c
---- mellanox/mlx4/en_cq.c	2012-09-11 20:50:55.982624673 -0700
-+++ ./mellanox/mlx4/en_cq.c	2012-09-25 21:55:41.093798712 -0700
+diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_cq.c ./mellanox/mlx4/en_cq.c
+--- /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_cq.c	2012-09-11 20:50:55.982624673 -0700
++++ ./mellanox/mlx4/en_cq.c	2012-09-25 22:03:55.329548885 -0700
 @@ -37,6 +37,10 @@
  
  #include "mlx4_en.h"
@@ -12,8 +12,9 @@ diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' drivers/net/ether
  static void mlx4_en_cq_event(struct mlx4_cq *cq, enum mlx4_event event)
  {
  	return;
---- mellanox/mlx4/en_netdev.c	2012-09-11 20:50:55.982624673 -0700
-+++ ./mellanox/mlx4/en_netdev.c	2012-09-25 21:55:41.093798712 -0700
+diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_netdev.c ./mellanox/mlx4/en_netdev.c
+--- /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_netdev.c	2012-09-11 20:50:55.982624673 -0700
++++ ./mellanox/mlx4/en_netdev.c	2012-09-25 22:03:55.329548885 -0700
 @@ -48,6 +48,39 @@
  #include "mlx4_en.h"
  #include "en_port.h"
@@ -74,8 +75,9 @@ diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' drivers/net/ether
  	return 0;
  
  out:
---- mellanox/mlx4/en_rx.c	2012-09-11 20:50:55.982624673 -0700
-+++ ./mellanox/mlx4/en_rx.c	2012-09-25 21:55:41.103798624 -0700
+diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_rx.c ./mellanox/mlx4/en_rx.c
+--- /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_rx.c	2012-09-11 20:50:55.982624673 -0700
++++ ./mellanox/mlx4/en_rx.c	2012-09-26 22:19:55.496843356 -0700
 @@ -41,6 +41,9 @@
  
  #include "mlx4_en.h"
@@ -86,18 +88,64 @@ diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' drivers/net/ether
  
  static int mlx4_en_alloc_frag(struct mlx4_en_priv *priv,
  			      struct mlx4_en_rx_desc *rx_desc,
-@@ -365,6 +368,9 @@ int mlx4_en_activate_rx_rings(struct mlx
+@@ -365,9 +368,14 @@ int mlx4_en_activate_rx_rings(struct mlx
  		ring = &priv->rx_ring[ring_ind];
  
  		ring->size_mask = ring->actual_size - 1;
 +#ifdef DEV_NETMAP
-+		mlx4_netmap_rx_config(priv, ring_ind);
++		if (priv->dev->if_capenable & IFCAP_NETMAP) {
++			mlx4_en_free_rx_buf(priv, ring);
++			mlx4_netmap_rx_config(priv, ring_ind);
++		}
 +#endif /* DEV_NETMAP */
  		mlx4_en_update_rx_prod_db(ring);
  	}
+-
+ 	return 0;
  
---- mellanox/mlx4/en_tx.c	2012-09-11 20:50:55.982624673 -0700
-+++ ./mellanox/mlx4/en_tx.c	2012-09-25 21:55:41.103798624 -0700
+ err_buffers:
+@@ -402,6 +410,11 @@ void mlx4_en_destroy_rx_ring(struct mlx4
+ void mlx4_en_deactivate_rx_ring(struct mlx4_en_priv *priv,
+ 				struct mlx4_en_rx_ring *ring)
+ {
++#ifdef DEV_NETMAP
++	if (priv->dev->if_capenable & IFCAP_NETMAP)
++		D("netmap mode, rx buf already freed");
++	else
++#endif /* DEV_NETMAP */
+ 	mlx4_en_free_rx_buf(priv, ring);
+ 	if (ring->stride <= TXBB_SIZE)
+ 		ring->buf -= TXBB_SIZE;
+@@ -692,6 +705,12 @@ out:
+ 	wmb(); /* ensure HW sees CQ consumer before we post new buffers */
+ 	ring->cons = mcq->cons_index;
+ 	ring->prod += polled; /* Polled descriptors were realocated in place */
++
++	ND(5, "set_ci %d 0x%p val %d prod_db 0x%p val %d",
++		cq->ring,
++		mcq->set_ci_db, mcq->cons_index & 0xffffff,
++		ring->wqres.db.db, ring->prod & 0xffff);
++
+ 	mlx4_en_update_rx_prod_db(ring);
+ 	ring->csum_ok += csum_ok;
+ 	ring->csum_none += csum_none;
+@@ -718,6 +737,13 @@ int mlx4_en_poll_rx_cq(struct napi_struc
+ 	struct mlx4_en_priv *priv = netdev_priv(dev);
+ 	int done;
+ 
++#ifdef DEV_NETMAP
++        static int cnt = 0;
++        ND(5,"XXXXXX-------XXXXXXXXXXX-------- poll-rx-cq %d count %d", (int)cq->ring, cnt++);
++	if (netmap_rx_irq(cq->dev, cq->ring, &done)) {
++		D("rx_irq %d for netmap, budget %d done %d", cq->ring, budget, done);
++	} else
++#endif /* DEV_NETMAP */
+ 	done = mlx4_en_process_rx_cq(dev, cq, budget);
+ 
+ 	/* If we used up all the quota - we're probably not done yet... */
+diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_tx.c ./mellanox/mlx4/en_tx.c
+--- /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/mellanox/mlx4/en_tx.c	2012-09-11 20:50:55.982624673 -0700
++++ ./mellanox/mlx4/en_tx.c	2012-09-26 21:36:05.829137797 -0700
 @@ -55,6 +55,10 @@ MODULE_PARM_DESC(inline_thold, "threshol
  
  static u32 hashrnd __read_mostly;
@@ -115,9 +163,9 @@ diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' drivers/net/ether
  		return;
 +#ifdef DEV_NETMAP
 +	static int cnt = 0;
-+	RD(5,"XXXXXX-------XXXXXXXXXXX-------- tx-irq %d count %d", (int)cq->ring, cnt++);
++	ND(5,"XXXXXX-------XXXXXXXXXXX-------- tx-irq %d count %d", (int)cq->ring, cnt++);
 +	if (netmap_tx_irq(cq->dev, cq->ring)) {
-+		RD(5, "wakeup queue %d", cq->ring);
++		ND(5, "wakeup queue %d", cq->ring);
 +	} else {
 +		RD(5, "XXXXXXXXX  tx_irq %d unexpected, ignoring", cq->ring);
 +	}
