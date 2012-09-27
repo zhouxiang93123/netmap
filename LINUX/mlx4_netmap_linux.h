@@ -470,9 +470,8 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 
 	if (k > lim) /* userspace is cheating */
 		return netmap_ring_reinit(kring);
-	RD(5, "rxr %d cons %d prod %d kcur %d kavail %d cur %d avail %d",
+	RD(5, "START rxr %d cons %d prod %d kcur %d kavail %d cur %d avail %d",
 		ring_nr, rxr->cons, rxr->prod, kring->nr_hwcur, kring->nr_hwavail, ring->cur, ring->avail);
-	ND(5, "ring %d", ring_nr);
 
 	if (do_lock)
 		mtx_lock(&kring->q_lock);
@@ -516,7 +515,7 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		j = (kring->nr_hwcur + kring->nr_hwavail) % kring->nkr_num_slots;
 
 		/* Process all completed CQEs, use same logic as in TX */
-		for (n = 0; n <= lim ; n++) {
+		for (n = 0; n <= 2*lim ; n++) {
 			int index = mcq->cons_index & size_mask;
 			struct mlx4_cqe *cqe = &buf[(index << factor) + factor];
 			if (!XNOR(cqe->owner_sr_opcode & MLX4_CQE_OWNER_MASK, mcq->cons_index & size))
@@ -529,11 +528,13 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			j = (j == lim) ? 0 : j + 1;
 		}
 		if (n) { /* update the state variables */
-			if (n > lim)
+			if (n >= 2*lim)
 				D("XXXXXXXXXXXXX   too many received packets %d", n);
-			D("received %d packets", n);
-			rxr->prod += n;
+			ND(5, "received %d packets", n);
 			kring->nr_hwavail += n;
+			RD(5, "RECVD %d rxr %d cons %d prod %d kcur %d kavail %d cur %d avail %d",
+				n,
+				ring_nr, rxr->cons, rxr->prod, kring->nr_hwcur, kring->nr_hwavail, ring->cur, ring->avail);
 
 			/* XXX ack completion queue */
 			mlx4_cq_set_ci(mcq);
@@ -614,6 +615,10 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		 * en_rx.c so we do not see it here
 		 */
 		*rxr->wqres.db.db = cpu_to_be32(rxr->prod & 0xffff);
+
+		ring->avail = kring->nr_hwavail - resvd;	// XXX dup here for debugging
+		RD(5, "FREED rxr %d cons %d prod %d kcur %d kavail %d cur %d avail %d",
+			ring_nr, rxr->cons, rxr->prod, kring->nr_hwcur, kring->nr_hwavail, ring->cur, ring->avail);
 
 	}
 
@@ -696,10 +701,8 @@ mlx4_netmap_rx_config(struct SOFTC_T *priv, int ring_nr)
 			kring->nkr_num_slots, rxr->actual_size);
 		return 1; // XXX error
 	}
-	mlx4_en_deactivate_rx_ring(priv, rxr);
 	possible_frags = (rxr->stride - sizeof(struct mlx4_en_rx_desc)) / DS_SIZE;
-
-	RD(1, "possible frags %d", possible_frags);
+	RD(1, "stride %d possible frags %d descsize %d DS_SIZE %d", rxr->stride, possible_frags, sizeof(struct mlx4_en_rx_desc), DS_SIZE );
 	/* then fill the slots with our entries */
 	for (i = 0; i < kring->nkr_num_slots; i++) {
 		uint64_t paddr;
