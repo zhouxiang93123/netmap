@@ -456,8 +456,8 @@ mlx4_en_update_rx_prod_db() tells the NIC where it can go
 static int
 mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 {
-	struct SOFTC_T *adapter = netdev_priv(ifp);
-	struct mlx4_en_rx_ring *rxr = &adapter->rx_ring[ring_nr];
+	struct SOFTC_T *priv = netdev_priv(ifp);
+	struct mlx4_en_rx_ring *rxr = &priv->rx_ring[ring_nr];
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
@@ -466,6 +466,12 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	u_int k = ring->cur, resvd = ring->reserved;
 	uint16_t hw_comp_cons, sw_comp_cons;
 
+
+        if (!priv->port_up)	// XXX as in mlx4_en_process_rx_cq()
+                return 0;
+
+	RD(5, "rxr %d cons %d prod %d kcur %d kavail %d cur %d avail %d",
+		ring_nr, rxr->cons, rxr->prod, kring->nr_hwcur, kring->nr_hwavail, ring->cur, ring->avail);
 	if (k > lim) /* userspace is cheating */
 		return netmap_ring_reinit(kring);
 	ND(5, "ring %d", ring_nr);
@@ -491,41 +497,43 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 */
 
 	/* scan the completion queue to see what is going on.
-	 * Note that we do not use l here.
+	 * The mapping is 1:1
 	 */
-#if 0 // XXX
-	sw_comp_cons = RCQ_BD(rxr->rx_comp_cons);
-	l = rxr->rx_bd_cons;
-	j = netmap_idx_n2k(kring, j);
-	hw_comp_cons = le16_to_cpu(*rxr->rx_cons_sb);
-	if ((hw_comp_cons & MAX_RCQ_DESC_CNT) == MAX_RCQ_DESC_CNT)
-		hw_comp_cons++;
+	if (1 || netmap_no_pendintr || force_update) {
+		struct mlx4_en_cq *cq = &priv->rx_cq[ring_nr];
+		struct mlx4_cq *mcq = &cq->mcq;
+		int factor = priv->cqe_factor;
+		uint32_t size_mask = rxr->size_mask;
+		int size = cq->size;
+		struct mlx4_cqe *buf = cq->buf;
+		int index;
 
-	rmb(); // XXX
-ND("start ring %d k %d lim %d hw_comp_cons %d", ring_nr, k, lim, hw_comp_cons);
-goto done; // XXX debugging
+		/* Process all completed CQEs, use same logic as in TX */
+		for (n=0; n <= lim ; n++) {
+			int index = mcq->cons_index & size_mask;
+			struct mlx4_cqe *cqe = &buf[(index << factor) + factor];
+			struct mlx4_en_rx_desc *rx_desc = rxr->buf + (index << rxr->log_stride);
+			if (!XNOR(cqe->owner_sr_opcode & MLX4_CQE_OWNER_MASK, mcq->cons_index & size))
+				break;
 
-	if (netmap_no_pendintr || force_update) {
-		for (n = 0; sw_comp_cons != hw_comp_cons; sw_comp_cons = RCQ_BD(NEXT_RCQ_IDX(sw_comp_cons)) ) {
-			union eth_rx_cqe *cqe = &rxr->rx_comp_ring[l];
-			struct eth_fast_path_rx_cqe *cqe_fp = &cqe->fast_path_cqe;
-			// XXX fetch event, process slowpath as in the main driver,
-			if (1 /* slowpath */)
-				continue;
-			ring->slot[j].len = le16_to_cpu(cqe_fp->pkt_len_or_gro_seg_len);
+			rmb();	/* make sure data is up to date */
+			ring->slot[j].len = be32_to_cpu(cqe->byte_cnt) - rxr->fcs_del;
 
-			l = NEXT_RX_IDX(l);
+			mcq->cons_index++;
 			j = (j == lim) ? 0 : j + 1;
-			n++;
 		}
 		if (n) { /* update the state variables */
-			rxr->rx_comp_cons = sw_comp_cons; // XXX adjust nkr_hwofs
-			rxr->rx_bd_cons = l; // XXX adjust nkr_hwofs
+			if (n > lim)
+				D("XXXXXXXXXXXXX   too many received packets %d", n);
+			D("received %d packets", n);
+			rxr->prod += n;
 			kring->nr_hwavail += n;
+
+			/* XXX acknowledge reception to the hardware */
+			mlx4_cq_set_ci(mcq);
 		}
 		kring->nr_kflags &= ~NKR_PENDINTR;
 	}
-#endif // XXX not done
 
 	/*
 	 * Skip past packets that userspace has already released
@@ -543,7 +551,7 @@ goto done; // XXX debugging
 		k = (k >= resvd) ? k - resvd : k + lim + 1 - resvd;
 	}
 	if (j != k) { /* userspace has released some packets. */
-		l = netmap_idx_k2n(kring, j);
+		l = netmap_idx_k2n(kring, j); // XXX NIC index
 		for (n = 0; j != k; n++) {
 			/* collect per-slot info, with similar validations
 			 * and flag handling as in the txsync code.
@@ -553,11 +561,11 @@ goto done; // XXX debugging
 			 * address in the NIC ring, but other drivers
 			 * may not have this requirement.
 			 */
-#if 0 // XXX
 			struct netmap_slot *slot = &ring->slot[j];
-			union ixgbe_adv_rx_desc *curr = IXGBE_RX_DESC_ADV(rxr, l);
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
+			struct mlx4_en_rx_desc *rx_desc = rxr->buf + (l * rxr->stride);
+			int jj;
 
 			if (addr == netmap_buffer_base) /* bad buf */
 				goto ring_reset;
@@ -566,18 +574,37 @@ goto done; // XXX debugging
 				// netmap_reload_map(pdev, DMA_TO_DEVICE, old_addr, addr);
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
-			curr->wb.upper.status_error = 0;
-			curr->read.pkt_addr = htole64(paddr);
-#endif // XXX
+
+			/* XXX
+			 * The rx descriptor only contains buffer descriptors,
+			 * probably only the length is changed or not even that one.
+			 */
+			// see mlx4_en_prepare_rx_desc() and mlx4_en_alloc_frag()
+			rx_desc->data[0].addr = cpu_to_be64(paddr);
+			rx_desc->data[0].byte_count = cpu_to_be32(NETMAP_BUF_SIZE);
+			rx_desc->data[0].lkey = cpu_to_be32(priv->mdev->mr.key);
+
+			/* we only use one fragment, so the rest is padding */
+			for (jj = 1; jj < priv->num_frags; jj++) {
+				rx_desc->data[jj].byte_count = 0;
+				rx_desc->data[jj].lkey = cpu_to_be32(MLX4_EN_MEMTYPE_PAD);
+				rx_desc->data[jj].addr = 0;
+			}
+
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
 		}
+
+		/* XXX note that mcq->cons_index and ring->cons are not in sync */
+		wmb();
+		rxr->prod += n;
 		kring->nr_hwavail -= n;
 		kring->nr_hwcur = k;
-		// XXXX cons = ...
-		wmb();
+
+		// mlx4_en_update_rx_prod_db(rxr); // XXX is an inline
+		*rxr->wqres.db.db = cpu_to_be32(rxr->prod & 0xffff);
+
 		/* Update producers */
-	// XXX	mlx4_update_rx_prod(adapter, rxr, l, sw_comp_prod, rxr->rx_sge_prod);
 	}
 done:
 	/* tell userspace that there are new packets */
@@ -671,9 +698,9 @@ mlx4_netmap_rx_config(struct SOFTC_T *priv, int ring_nr)
 
 		/* we only use one fragment, so the rest is padding */
 		for (j = 1; j < priv->num_frags; j++) {
-			rx_desc->data[i].byte_count = 0;
-			rx_desc->data[i].lkey = cpu_to_be32(MLX4_EN_MEMTYPE_PAD);
-			rx_desc->data[i].addr = 0;
+			rx_desc->data[j].byte_count = 0;
+			rx_desc->data[j].lkey = cpu_to_be32(MLX4_EN_MEMTYPE_PAD);
+			rx_desc->data[j].addr = 0;
 		}
 	}
 	RD(5, "ring %d done", ring_nr);
@@ -705,7 +732,7 @@ mlx4_netmap_attach(struct SOFTC_T *priv)
 	rxq = priv->rx_ring_num;
 	txq = priv->tx_ring_num;
 	/* this card has 1k tx queues, so better limit the number */
-	nq = 4;
+	nq = 1;
 	if (rxq < nq)
 		nq = rxq;
 	if (txq < nq)
