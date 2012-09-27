@@ -464,7 +464,6 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;
 	int force_update = do_lock || kring->nr_kflags & NKR_PENDINTR;
 	u_int k = ring->cur, resvd = ring->reserved;
-	uint16_t hw_comp_cons, sw_comp_cons;
 
         if (!priv->port_up)	// XXX as in mlx4_en_process_rx_cq()
                 return 0;
@@ -513,13 +512,13 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		uint32_t size_mask = rxr->size_mask;
 		int size = cq->size;
 		struct mlx4_cqe *buf = cq->buf;
-		int index;
+
+		j = (kring->nr_hwcur + kring->nr_hwavail) % kring->nkr_num_slots;
 
 		/* Process all completed CQEs, use same logic as in TX */
-		for (n=0; n <= lim ; n++) {
+		for (n = 0; n <= lim ; n++) {
 			int index = mcq->cons_index & size_mask;
 			struct mlx4_cqe *cqe = &buf[(index << factor) + factor];
-			struct mlx4_en_rx_desc *rx_desc = rxr->buf + (index << rxr->log_stride);
 			if (!XNOR(cqe->owner_sr_opcode & MLX4_CQE_OWNER_MASK, mcq->cons_index & size))
 				break;
 
@@ -559,8 +558,8 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	}
 	if (j != k) { /* userspace has released some packets. */
 		l = netmap_idx_k2n(kring, j); // XXX NIC index
-		if (l != rxr->cons & rxr->size_mask)
-			RD(5, "rxr %d offset mismatch l %d cons %d", l, rxr->cons & rxr->size_mask);
+		if (l != (rxr->cons & rxr->size_mask))
+			RD(5, "rxr %d offset mismatch l %d cons %d", ring_nr, l, rxr->cons & rxr->size_mask);
 		for (n = 0; j != k; n++) {
 			/* collect per-slot info, with similar validations
 			 * and flag handling as in the txsync code.
@@ -617,7 +616,7 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		*rxr->wqres.db.db = cpu_to_be32(rxr->prod & 0xffff);
 
 	}
-done:
+
 	/* tell userspace that there are new packets */
 	ring->avail = kring->nr_hwavail - resvd;
 
@@ -643,7 +642,6 @@ mlx4_netmap_tx_config(struct SOFTC_T *priv, int ring_nr)
 {
 	struct netmap_adapter *na = NA(priv->dev);
 	struct netmap_slot *slot;
-	struct mlx4_en_rx_ring *rxr;
 	struct mlx4_en_cq *cq;
 
 	ND(5, "priv %p ring_nr %d", priv, ring_nr);
@@ -676,7 +674,7 @@ mlx4_netmap_rx_config(struct SOFTC_T *priv, int ring_nr)
         struct netmap_slot *slot;
         struct mlx4_en_rx_ring *rxr;
 	struct netmap_kring *kring;
-        int i, j;
+        int i, j, possible_frags;
 
 	/*
 	 * on the receive ring, must set buf addresses into the slots.
@@ -693,10 +691,16 @@ mlx4_netmap_rx_config(struct SOFTC_T *priv, int ring_nr)
 	rxr = &priv->rx_ring[ring_nr];
 	ND(20, "ring %d slots %d (driver says %d) frags %d stride %d", ring_nr,
 		kring->nkr_num_slots, rxr->actual_size, priv->num_frags, rxr->stride);
-	if (kring->nkr_num_slots != rxr->actual_size)
+	if (kring->nkr_num_slots != rxr->actual_size) {
+		D("mismatch between slots and actual size, %d vs %d",
+			kring->nkr_num_slots, rxr->actual_size);
 		return 1; // XXX error
-	return 0; // XXX for the time being... until we handle interrupts
+	}
+	mlx4_en_deactivate_rx_ring(priv, rxr);
+	possible_frags = (rxr->stride - sizeof(struct mlx4_en_rx_desc)) / DS_SIZE;
 
+	RD(1, "possible frags %d", possible_frags);
+	/* then fill the slots with our entries */
 	for (i = 0; i < kring->nkr_num_slots; i++) {
 		uint64_t paddr;
 		void *addr = PNMB(slot + i, &paddr);
@@ -708,7 +712,7 @@ mlx4_netmap_rx_config(struct SOFTC_T *priv, int ring_nr)
 		rx_desc->data[0].lkey = cpu_to_be32(priv->mdev->mr.key);
 
 		/* we only use one fragment, so the rest is padding */
-		for (j = 1; j < priv->num_frags; j++) {
+		for (j = 1; j < possible_frags; j++) {
 			rx_desc->data[j].byte_count = 0;
 			rx_desc->data[j].lkey = cpu_to_be32(MLX4_EN_MEMTYPE_PAD);
 			rx_desc->data[j].addr = 0;
