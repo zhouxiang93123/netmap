@@ -560,8 +560,6 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	}
 	if (j != k) { /* userspace has released some packets. */
 		l = netmap_idx_k2n(kring, j); // XXX NIC index
-		if (l != (rxr->cons & rxr->size_mask))
-			RD(5, "rxr %d offset mismatch l %d cons %d", ring_nr, l, rxr->cons & rxr->size_mask);
 		for (n = 0; j != k; n++) {
 			/* collect per-slot info, with similar validations
 			 * and flag handling as in the txsync code.
@@ -692,19 +690,20 @@ mlx4_netmap_rx_config(struct SOFTC_T *priv, int ring_nr)
 
 	 */
 	slot = netmap_reset(na, NR_RX, ring_nr, 0);
-	if (!slot)
+	if (!slot) // XXX should not happen
 		return 0;
 	kring = &na->rx_rings[ring_nr];
 	rxr = &priv->rx_ring[ring_nr];
 	ND(20, "ring %d slots %d (driver says %d) frags %d stride %d", ring_nr,
 		kring->nkr_num_slots, rxr->actual_size, priv->num_frags, rxr->stride);
+	rxr->prod--;	// XXX avoid wraparounds ?
 	if (kring->nkr_num_slots != rxr->actual_size) {
 		D("mismatch between slots and actual size, %d vs %d",
 			kring->nkr_num_slots, rxr->actual_size);
 		return 1; // XXX error
 	}
 	possible_frags = (rxr->stride - sizeof(struct mlx4_en_rx_desc)) / DS_SIZE;
-	RD(1, "stride %d possible frags %d descsize %d DS_SIZE %d", rxr->stride, possible_frags, sizeof(struct mlx4_en_rx_desc), DS_SIZE );
+	RD(1, "stride %d possible frags %d descsize %d DS_SIZE %d", rxr->stride, possible_frags, (int)sizeof(struct mlx4_en_rx_desc), (int)DS_SIZE );
 	/* then fill the slots with our entries */
 	for (i = 0; i < kring->nkr_num_slots; i++) {
 		uint64_t paddr;
