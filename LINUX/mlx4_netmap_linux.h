@@ -469,12 +469,11 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
         if (!priv->port_up)	// XXX as in mlx4_en_process_rx_cq()
                 return 0;
 
-	RD(5, "rxr %d cons %d prod %d kcur %d kavail %d cur %d avail %d",
-		ring_nr, rxr->cons, rxr->prod, kring->nr_hwcur, kring->nr_hwavail, ring->cur, ring->avail);
 	if (k > lim) /* userspace is cheating */
 		return netmap_ring_reinit(kring);
+	RD(5, "rxr %d cons %d prod %d kcur %d kavail %d cur %d avail %d",
+		ring_nr, rxr->cons, rxr->prod, kring->nr_hwcur, kring->nr_hwavail, ring->cur, ring->avail);
 	ND(5, "ring %d", ring_nr);
-	return 0;	// XXX forced return
 
 	if (do_lock)
 		mtx_lock(&kring->q_lock);
