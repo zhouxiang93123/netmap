@@ -484,7 +484,7 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 * in netmap mode. For the receive ring we have
 	 *
 	 *	j = (kring->nr_hwcur + kring->nr_hwavail) % ring_size
-	 *	l = producer index in NIC ring
+	 *	l = consumer index in NIC ring (the NIC is the consumer)
 	 * and
 	 *	j == (l + kring->nkr_hwofs) % ring_size
 	 */
@@ -532,6 +532,7 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 				D("XXXXXXXXXXXXX   too many received packets %d", n);
 			ND(5, "received %d packets", n);
 			kring->nr_hwavail += n;
+			rxr->cons += n;
 			RD(5, "RECVD %d rxr %d cons %d prod %d kcur %d kavail %d cur %d avail %d",
 				n,
 				ring_nr, rxr->cons, rxr->prod, kring->nr_hwcur, kring->nr_hwavail, ring->cur, ring->avail);
@@ -574,7 +575,7 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
 			struct mlx4_en_rx_desc *rx_desc = rxr->buf + (l * rxr->stride);
-			int jj;
+			int jj, possible_frags;
 
 			if (addr == netmap_buffer_base) /* bad buf */
 				goto ring_reset;
@@ -594,7 +595,8 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			rx_desc->data[0].lkey = cpu_to_be32(priv->mdev->mr.key);
 
 			/* we only use one fragment, so the rest is padding */
-			for (jj = 1; jj < priv->num_frags; jj++) {
+			possible_frags = (rxr->stride - sizeof(struct mlx4_en_rx_desc)) / DS_SIZE;
+			for (jj = 1; jj < possible_frags; jj++) {
 				rx_desc->data[jj].byte_count = 0;
 				rx_desc->data[jj].lkey = cpu_to_be32(MLX4_EN_MEMTYPE_PAD);
 				rx_desc->data[jj].addr = 0;
