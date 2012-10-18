@@ -435,7 +435,8 @@ netmap_new_bufs(struct netmap_if *nifp,
 	return (0);
 
 cleanup:
-	for (i--; i >= 0; i--) {
+	while (i > 0) {
+                i--;
 		netmap_obj_free(p, slot[i].buf_idx);
 	}
 	bzero(slot, n * sizeof(slot[0]));
