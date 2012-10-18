@@ -805,7 +805,7 @@ netmap_ring_reinit(struct netmap_kring *kring)
 	u_int i, lim = kring->nkr_num_slots - 1;
 	int errors = 0;
 
-	RD(10,"called for %s", kring->na->ifp->if_xname);
+	RD(10, "called for %s", kring->na->ifp->if_xname);
 	if (ring->cur > lim)
 		errors++;
 	for (i = 0; i <= lim; i++) {
