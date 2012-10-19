@@ -36,10 +36,11 @@
  *
  */
 
-const char *default_payload="netmap pkt-gen Luigi Rizzo and Matteo Landi\n"
+#include "nm_util.h"
+
+const char *default_payload="netmap pkt-gen payload\n"
 	"http://info.iet.unipi.it/~luigi/netmap/ ";
 
-#include "nm_util.h"
 int time_second;	// support for RD() debugging macro
 
 int verbose = 0;
@@ -86,11 +87,13 @@ struct glob_arg {
 	int use_pcap;
 	pcap_t *p;
 
+	int affinity;
 	int main_fd;
 	int report_interval;
 	void *(*td_body)(void *);
 	void *mmap_addr;
 	int mmap_size;
+	char *ifname;
 };
 
 
@@ -807,45 +810,55 @@ quit:
 	return (NULL);
 }
 
+/* very crude code to print a number in normalized form.
+ * Caller has to make sure that the buffer is large enough.
+ */
+static const char *
+norm(char *buf, double val)
+{
+	char *units[] = { "", "K", "M", "G" };
+	u_int i;
+
+	for (i = 0; val >=1000 && i < sizeof(units)/sizeof(char *); i++)
+		val /= 1000;
+	sprintf(buf, "%.2f %s", val, units[i]);
+	return buf;
+}
+
 static void
 tx_output(uint64_t sent, int size, double delta)
 {
-	double amount = 8.0 * (1.0 * size * sent) / delta;
-	double pps = sent / delta;
-	char units[4] = { '\0', 'K', 'M', 'G' };
-	int aunit = 0, punit = 0;
-
-	while (amount >= 1000) {
-		amount /= 1000;
-		aunit += 1;
-	}
-	while (pps >= 1000) {
-		pps /= 1000;
-		punit += 1;
-	}
+	double bw, raw_bw, pps;
+	char b1[40], b2[80], b3[80];
 
 	printf("Sent %" PRIu64 " packets, %d bytes each, in %.2f seconds.\n",
 	       sent, size, delta);
-	printf("Speed: %.2f%cpps. Bandwidth: %.2f%cbps.\n",
-	       pps, units[punit], amount, units[aunit]);
+	if (delta == 0)
+		delta = 1e-6;
+	if (size < 60)		/* correct for min packet size */
+		size = 60;
+	pps = sent / delta;
+	bw = (8.0 * size * sent) / delta;
+	/* raw packets have4 bytes crc + 20 bytes framing */
+	raw_bw = (8.0 * (size + 24) * sent) / delta;
+
+	printf("Speed: %spps Bandwidth: %sbps (raw %sbps)\n",
+		norm(b1, pps), norm(b2, bw), norm(b3, raw_bw) );
 }
 
 
 static void
 rx_output(uint64_t received, double delta)
 {
-
-	double pps = received / delta;
-	char units[4] = { '\0', 'K', 'M', 'G' };
-	int punit = 0;
-
-	while (pps >= 1000) {
-		pps /= 1000;
-		punit += 1;
-	}
+	double pps;
+	char b1[40];
 
 	printf("Received %" PRIu64 " packets, in %.2f seconds.\n", received, delta);
-	printf("Speed: %.2f%cpps.\n", pps, units[punit]);
+
+	if (delta == 0)
+		delta = 1e-6;
+	pps = received / delta;
+	printf("Speed: %spps\n", norm(b1, pps));
 }
 
 static void
@@ -878,6 +891,159 @@ usage(void)
 	exit(0);
 }
 
+static void
+start_threads(struct glob_arg *g)
+{
+	int i;
+
+	targs = calloc(g->nthreads, sizeof(*targs));
+	/*
+	 * Now create the desired number of threads, each one
+	 * using a single descriptor.
+ 	 */
+	for (i = 0; i < g->nthreads; i++) {
+		bzero(&targs[i], sizeof(targs[i]));
+		targs[i].fd = -1; /* default, with pcap */
+		targs[i].g = g;
+
+	    if (g->use_pcap == 0) {
+		struct nmreq tifreq;
+		int tfd;
+
+		/* register interface. */
+		tfd = open("/dev/netmap", O_RDWR);
+		if (tfd == -1) {
+			D("Unable to open /dev/netmap");
+			continue;
+		}
+		targs[i].fd = tfd;
+
+		bzero(&tifreq, sizeof(tifreq));
+		strncpy(tifreq.nr_name, g->ifname, sizeof(tifreq.nr_name));
+		tifreq.nr_version = NETMAP_API;
+		tifreq.nr_ringid = (g->nthreads > 1) ? (i | NETMAP_HW_RING) : 0;
+
+		/*
+		 * if we are acting as a receiver only, do not touch the transmit ring.
+		 * This is not the default because many apps may use the interface
+		 * in both directions, but a pure receiver does not.
+		 */
+		if (g->td_body == receiver_body) {
+			tifreq.nr_ringid |= NETMAP_NO_TX_POLL;
+		}
+
+		if ((ioctl(tfd, NIOCREGIF, &tifreq)) == -1) {
+			D("Unable to register %s", g->ifname);
+			continue;
+		}
+		targs[i].nmr = tifreq;
+		targs[i].nifp = NETMAP_IF(g->mmap_addr, tifreq.nr_offset);
+		/* start threads. */
+		targs[i].qfirst = (g->nthreads > 1) ? i : 0;
+		targs[i].qlast = (g->nthreads > 1) ? i+1 :
+			(g->td_body == receiver_body ? tifreq.nr_rx_rings : tifreq.nr_tx_rings);
+	    }
+		targs[i].used = 1;
+		targs[i].me = i;
+		if (g->affinity >= 0) {
+			if (g->affinity < g->cpus)
+				targs[i].affinity = g->affinity;
+			else
+				targs[i].affinity = i % g->cpus;
+		} else
+			targs[i].affinity = -1;
+		/* default, init packets */
+		initialize_packet(&targs[i]);
+
+		if (pthread_create(&targs[i].thread, NULL, g->td_body,
+				   &targs[i]) == -1) {
+			D("Unable to create thread %d", i);
+			targs[i].used = 0;
+		}
+	}
+}
+
+static void
+main_thread(struct glob_arg *g)
+{
+	int i;
+
+	uint64_t prev = 0;
+	uint64_t count = 0;
+	double delta_t;
+	struct timeval tic, toc;
+
+	gettimeofday(&toc, NULL);
+	for (;;) {
+		struct timeval now, delta;
+		uint64_t pps, usec, my_count, npkts;
+		int done = 0;
+
+		delta.tv_sec = g->report_interval/1000;
+		delta.tv_usec = (g->report_interval%1000)*1000;
+		select(0, NULL, NULL, NULL, &delta);
+		gettimeofday(&now, NULL);
+		time_second = now.tv_sec;
+		timersub(&now, &toc, &toc);
+		my_count = 0;
+		for (i = 0; i < g->nthreads; i++) {
+			my_count += targs[i].count;
+			if (targs[i].used == 0)
+				done++;
+		}
+		usec = toc.tv_sec* 1000000 + toc.tv_usec;
+		if (usec < 10000)
+			continue;
+		npkts = my_count - prev;
+		pps = (npkts*1000000 + usec/2) / usec;
+		D("%" PRIu64 " pps (%" PRIu64 " pkts in %" PRIu64 " usec)",
+			pps, npkts, usec);
+		prev = my_count;
+		toc = now;
+		if (done == g->nthreads)
+			break;
+	}
+
+	timerclear(&tic);
+	timerclear(&toc);
+	for (i = 0; i < g->nthreads; i++) {
+		/*
+		 * Join active threads, unregister interfaces and close
+		 * file descriptors.
+		 */
+		pthread_join(targs[i].thread, NULL);
+		close(targs[i].fd);
+
+		if (targs[i].completed == 0)
+			D("ouch, thread %d exited with error", i);
+
+		/*
+		 * Collect threads output and extract information about
+		 * how long it took to send all the packets.
+		 */
+		count += targs[i].count;
+		if (!timerisset(&tic) || timercmp(&targs[i].tic, &tic, <))
+			tic = targs[i].tic;
+		if (!timerisset(&toc) || timercmp(&targs[i].toc, &toc, >))
+			toc = targs[i].toc;
+	}
+
+	/* print output. */
+	timersub(&toc, &tic, &toc);
+	delta_t = toc.tv_sec + 1e-6* toc.tv_usec;
+	if (g->td_body == sender_body)
+		tx_output(count, g->pkt_size, delta_t);
+	else
+		rx_output(count, delta_t);
+
+	if (g->use_pcap == 0) {
+		ioctl(g->main_fd, NIOCUNREGIF, NULL); // XXX deprecated
+		munmap(g->mmap_addr, g->mmap_size);
+		close(g->main_fd);
+	}
+}
+
+
 struct sf {
 	char *key;
 	void *f;
@@ -891,26 +1057,24 @@ static struct sf func[] = {
 	{ NULL, NULL }
 };
 
-static int main_thread(struct glob_arg *);
 int
 main(int arc, char **argv)
 {
 	int i;
-	char pcap_errbuf[PCAP_ERRBUF_SIZE];
 
 	struct glob_arg g;
 
 	struct nmreq nmr;
 	int ch;
-	char *ifname = NULL;
 	int wait_link = 2;
 	int devqueues = 1;	/* how many device queues */
-	int affinity = -1;
 
 	bzero(&g, sizeof(g));
 
+	g.main_fd = -1;
 	g.td_body = receiver_body;
 	g.report_interval = 1000;	/* report interval */
+	g.affinity = -1;
 	/* ip addresses can also be a range x.x.x.x-x.x.x.y */
 	g.src_ip.name = "10.0.0.1";
 	g.dst_ip.name = "10.1.0.1";
@@ -951,11 +1115,11 @@ main(int arc, char **argv)
 			break;
 
 		case 'a':       /* force affinity */
-			affinity = atoi(optarg);
+			g.affinity = atoi(optarg);
 			break;
 
 		case 'i':	/* interface */
-			ifname = optarg;
+			g.ifname = optarg;
 			break;
 
 		case 't':	/* send, deprecated */
@@ -1015,7 +1179,7 @@ main(int arc, char **argv)
 		}
 	}
 
-	if (ifname == NULL) {
+	if (g.ifname == NULL) {
 		D("missing ifname");
 		usage();
 	}
@@ -1036,7 +1200,7 @@ main(int arc, char **argv)
 	if (g.src_mac.name == NULL) {
 		static char mybuf[20] = "00:00:00:00:00:00";
 		/* retrieve source mac address. */
-		if (source_hwaddr(ifname, mybuf) == -1) {
+		if (source_hwaddr(g.ifname, mybuf) == -1) {
 			D("Unable to retrieve source mac");
 			// continue, fail later
 		}
@@ -1049,14 +1213,15 @@ main(int arc, char **argv)
 	extract_mac_range(&g.dst_mac);
 
     if (g.use_pcap) {
-	D("using pcap on %s", ifname);
-	g.p = pcap_open_live(ifname, 0, 1, 100, pcap_errbuf);
+	char pcap_errbuf[PCAP_ERRBUF_SIZE];
+
+	D("using pcap on %s", g.ifname);
+	pcap_errbuf[0] = '\0'; // init the buffer
+	g.p = pcap_open_live(g.ifname, 0, 1, 100, pcap_errbuf);
 	if (g.p == NULL) {
-		D("cannot open pcap on %s", ifname);
+		D("cannot open pcap on %s", g.ifname);
 		usage();
 	}
-	g.mmap_addr = NULL;
-	g.main_fd = -1;
     } else {
 	bzero(&nmr, sizeof(nmr));
 	nmr.nr_version = NETMAP_API;
@@ -1081,9 +1246,9 @@ main(int arc, char **argv)
 		}
 		bzero(&nmr, sizeof(nmr));
 		nmr.nr_version = NETMAP_API;
-		strncpy(nmr.nr_name, ifname, sizeof(nmr.nr_name));
+		strncpy(nmr.nr_name, g.ifname, sizeof(nmr.nr_name));
 		if ((ioctl(g.main_fd, NIOCGINFO, &nmr)) == -1) {
-			D("Unable to get if info for %s", ifname);
+			D("Unable to get if info for %s", g.ifname);
 		}
 		devqueues = nmr.nr_rx_rings;
 	}
@@ -1099,7 +1264,7 @@ main(int arc, char **argv)
 	 * inside the body of the threads, we prefer to keep this
 	 * operation here to simplify the thread logic.
 	 */
-	D("mmapping %d Kbytes", nmr.nr_memsize>>10);
+	D("mapping %d Kbytes", nmr.nr_memsize>>10);
 	g.mmap_size = nmr.nr_memsize;
 	g.mmap_addr = (struct netmap_d *) mmap(0, nmr.nr_memsize,
 					    PROT_WRITE | PROT_READ,
@@ -1119,7 +1284,7 @@ main(int arc, char **argv)
 	 */
 	nmr.nr_version = NETMAP_API;
 	if (ioctl(g.main_fd, NIOCREGIF, &nmr) == -1) {
-		D("Unable to register interface %s", ifname);
+		D("Unable to register interface %s", g.ifname);
 		//continue, fail later
 	}
 
@@ -1128,7 +1293,7 @@ main(int arc, char **argv)
 	fprintf(stdout,
 		"%s %s: %d queues, %d threads and %d cpus.\n",
 		(g.td_body == sender_body) ? "Sending on" : "Receiving from",
-		ifname,
+		g.ifname,
 		devqueues,
 		g.nthreads,
 		g.cpus);
@@ -1162,164 +1327,16 @@ main(int arc, char **argv)
 	signal(SIGINT, sigint_h);
 
 	if (g.use_pcap) {
-		g.p = pcap_open_live(ifname, 0, 1, 100, NULL);
+		g.p = pcap_open_live(g.ifname, 0, 1, 100, NULL);
 		if (g.p == NULL) {
-			D("cannot open pcap on %s", ifname);
+			D("cannot open pcap on %s", g.ifname);
 			usage();
 		} else
-			D("using pcap %p on %s", g.p, ifname);
+			D("using pcap %p on %s", g.p, g.ifname);
 	}
-
-	targs = calloc(g.nthreads, sizeof(*targs));
-	/*
-	 * Now create the desired number of threads, each one
-	 * using a single descriptor.
- 	 */
-	for (i = 0; i < g.nthreads; i++) {
-		bzero(&targs[i], sizeof(targs[i]));
-		targs[i].fd = -1; /* default, with pcap */
-		targs[i].g = &g;
-
-	    if (g.use_pcap == 0) {
-		struct nmreq tifreq;
-		int tfd;
-
-		/* register interface. */
-		tfd = open("/dev/netmap", O_RDWR);
-		if (tfd == -1) {
-			D("Unable to open /dev/netmap");
-			continue;
-		}
-		targs[i].fd = tfd;
-
-		bzero(&tifreq, sizeof(tifreq));
-		strncpy(tifreq.nr_name, ifname, sizeof(tifreq.nr_name));
-		tifreq.nr_version = NETMAP_API;
-		tifreq.nr_ringid = (g.nthreads > 1) ? (i | NETMAP_HW_RING) : 0;
-
-		/*
-		 * if we are acting as a receiver only, do not touch the transmit ring.
-		 * This is not the default because many apps may use the interface
-		 * in both directions, but a pure receiver does not.
-		 */
-		if (g.td_body == receiver_body) {
-			tifreq.nr_ringid |= NETMAP_NO_TX_POLL;
-		}
-
-		if ((ioctl(tfd, NIOCREGIF, &tifreq)) == -1) {
-			D("Unable to register %s", ifname);
-			continue;
-		}
-		targs[i].nmr = tifreq;
-		targs[i].nifp = NETMAP_IF(g.mmap_addr, tifreq.nr_offset);
-		/* start threads. */
-		targs[i].qfirst = (g.nthreads > 1) ? i : 0;
-		targs[i].qlast = (g.nthreads > 1) ? i+1 :
-			(g.td_body == receiver_body ? tifreq.nr_rx_rings : tifreq.nr_tx_rings);
-	    }
-		targs[i].used = 1;
-		targs[i].me = i;
-		if (affinity >= 0) {
-			if (affinity < g.cpus)
-				targs[i].affinity = affinity;
-			else
-				targs[i].affinity = i % g.cpus;
-		} else
-			targs[i].affinity = -1;
-		/* default, init packets */
-		initialize_packet(&targs[i]);
-
-		if (pthread_create(&targs[i].thread, NULL, g.td_body,
-				   &targs[i]) == -1) {
-			D("Unable to create thread %d", i);
-			targs[i].used = 0;
-		}
-	}
-	return main_thread(&g);
+	start_threads(&g);
+	main_thread(&g);
+	return 0;
 }
 
-static int
-main_thread(struct glob_arg *g)
-{
-	int i;
-
-    {
-	uint64_t prev = 0;
-	uint64_t count = 0;
-	double delta_t;
-	struct timeval tic, toc;
-
-	gettimeofday(&toc, NULL);
-	for (;;) {
-		struct timeval now, delta;
-		uint64_t pps, usec, my_count, npkts;
-		int done = 0;
-
-		delta.tv_sec = g->report_interval/1000;
-		delta.tv_usec = (g->report_interval%1000)*1000;
-		select(0, NULL, NULL, NULL, &delta);
-		gettimeofday(&now, NULL);
-		time_second = now.tv_sec;
-		timersub(&now, &toc, &toc);
-		my_count = 0;
-		for (i = 0; i < g->nthreads; i++) {
-			my_count += targs[i].count;
-			if (targs[i].used == 0)
-				done++;
-		}
-		usec = toc.tv_sec* 1000000 + toc.tv_usec;
-		if (usec < 10000)
-			continue;
-		npkts = my_count - prev;
-		pps = (npkts*1000000 + usec/2) / usec;
-		D("%" PRIu64 " pps (%" PRIu64 " pkts in %" PRIu64 " usec)",
-			pps, npkts, usec);
-		prev = my_count;
-		toc = now;
-		if (done == g->nthreads)
-			break;
-	}
-
-	timerclear(&tic);
-	timerclear(&toc);
-	for (i = 0; i < g->nthreads; i++) {
-		/*
-		 * Join active threads, unregister interfaces and close
-		 * file descriptors.
-		 */
-		pthread_join(targs[i].thread, NULL);
-		ioctl(targs[i].fd, NIOCUNREGIF, &targs[i].nmr);
-		close(targs[i].fd);
-
-		if (targs[i].completed == 0)
-			continue;
-
-		/*
-		 * Collect threads output and extract information about
-		 * how long it took to send all the packets.
-		 */
-		count += targs[i].count;
-		if (!timerisset(&tic) || timercmp(&targs[i].tic, &tic, <))
-			tic = targs[i].tic;
-		if (!timerisset(&toc) || timercmp(&targs[i].toc, &toc, >))
-			toc = targs[i].toc;
-	}
-
-	/* print output. */
-	timersub(&toc, &tic, &toc);
-	delta_t = toc.tv_sec + 1e-6* toc.tv_usec;
-	if (g->td_body == sender_body)
-		tx_output(count, g->pkt_size, delta_t);
-	else
-		rx_output(count, delta_t);
-    }
-
-    if (g->use_pcap == 0) {
-	ioctl(g->main_fd, NIOCUNREGIF, NULL); // XXX deprecated
-	munmap(g->mmap_addr, g->mmap_size);
-	close(g->main_fd);
-    }
-
-	return (0);
-}
 /* end of file */
