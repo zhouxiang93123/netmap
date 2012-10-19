@@ -67,11 +67,6 @@
 #define IFF_PPROMISC   IFF_PROMISC
 #endif /* __APPLE__ */
 
-#ifdef __FreeBSD__
-#include <sys/endian.h> /* le64toh */
-#include <machine/param.h>
-#endif /* __FreeBSD__ */
-
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <netinet/udp.h>
@@ -96,23 +91,26 @@ struct pcap_pkthdr;
 
 #include <pthread.h>	/* pthread_* */
 
-#if defined(__FreeBSD__)
-#include <pthread_np.h> /* pthread w/ affinity */
-#include <sys/cpuset.h> /* cpu_set */
-#include <net/if_dl.h>  /* LLADDR */
-#endif
-
-#if defined(__APPLE__)
-#include <net/if_dl.h>  /* LLADDR */
-#define clock_gettime(a,b)	\
-	do {struct timespec t0 = {0,0};	*(b) = t0; } while (0)
-#endif
-
 #ifdef linux
 #define CLOCK_REALTIME_PRECISE CLOCK_REALTIME
 #include <netinet/ether.h>      /* ether_aton */
 #include <linux/if_packet.h>    /* sockaddr_ll */
-#endif /* linux */
+#endif	/* linux */
+
+#ifdef __FreeBSD__
+#include <sys/endian.h> /* le64toh */
+#include <machine/param.h>
+
+#include <pthread_np.h> /* pthread w/ affinity */
+#include <sys/cpuset.h> /* cpu_set */
+#include <net/if_dl.h>  /* LLADDR */
+#endif	/* __FreeBSD__ */
+
+#ifdef __APPLE__
+#include <net/if_dl.h>  /* LLADDR */
+#define clock_gettime(a,b)	\
+	do {struct timespec t0 = {0,0};	*(b) = t0; } while (0)
+#endif	/* __APPLE__ */
 
 static inline int min(int a, int b) { return a < b ? a : b; }
 extern int time_second;
@@ -134,10 +132,6 @@ extern int time_second;
 			D(format, ##__VA_ARGS__);	\
 	} while (0)
 
-
-#ifndef EXPERIMENTAL
-#define EXPERIMENTAL 0
-#endif
 
 
 // XXX does it work on 32-bit machines ?
@@ -170,34 +164,6 @@ pkt_copy(const void *_src, void *_dst, int l)
 	}
 }
 
-#if EXPERIMENTAL
-/* Wrapper around `rdtsc' to take reliable timestamps flushing the pipeline */
-#define netmap_rdtsc(t) \
-	do { \
-		u_int __regs[4];					\
-		do_cpuid(0, __regs);					\
-		(t) = rdtsc();						\
-	} while (0)
-
-static __inline void
-do_cpuid(u_int ax, u_int *p)
-{
-	__asm __volatile("cpuid"
-			 : "=a" (p[0]), "=b" (p[1]), "=c" (p[2]), "=d" (p[3])
-			 :  "0" (ax));
-}
-
-static __inline uint64_t
-rdtsc(void)
-{
-	uint64_t rv;
-
-	__asm __volatile("rdtsc" : "=A" (rv));
-	return (rv);
-}
-#endif /* EXPERIMENTAL */
-
-//struct my_ring;
 /*
  * info on a ring we handle
  */
