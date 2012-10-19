@@ -417,18 +417,18 @@ netmap_new_bufs(struct netmap_if *nifp,
 
 	(void)nifp;	/* UNUSED */
 	for (i = 0; i < n; i++) {
-	        /* XXX get index instead of vaddr */
 		void *vaddr = netmap_buf_malloc(&pos, &index);
 		if (vaddr == NULL) {
 			D("unable to locate empty packet buffer");
 			goto cleanup;
 		}
-
-		slot[i].buf_idx = index; // netmap_buf_index(vaddr);
-		KASSERT(slot[i].buf_idx != 0,
-		    ("Assigning buf_idx=0 to just created slot"));
+		slot[i].buf_idx = index;
 		slot[i].len = p->_objsize;
-		slot[i].flags = NS_BUF_CHANGED; // XXX GAETANO hack
+		/* XXX setting flags=NS_BUF_CHANGED forces a pointer reload
+		 * in the NIC ring. This is a hack that hides missing
+		 * initializations in the drivers, and should go away.
+		 */
+		slot[i].flags = NS_BUF_CHANGED;
 	}
 
 	ND("allocated %d buffers, %d available, first at %d", n, p->objfree, pos);
@@ -448,11 +448,12 @@ static void
 netmap_free_buf(struct netmap_if *nifp, uint32_t i)
 {
 	struct netmap_obj_pool *p = &nm_mem.pools[NETMAP_BUF_POOL];
+
 	if (i < 2 || i >= p->objtotal) {
 		D("Cannot free buf#%d: should be in [2, %d[", i, p->objtotal);
 		return;
 	}
-	netmap_obj_free(&nm_mem.pools[NETMAP_BUF_POOL], i);
+	netmap_obj_free(p, i);
 }
 
 static void
