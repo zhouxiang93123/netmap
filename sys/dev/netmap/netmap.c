@@ -511,7 +511,7 @@ netmap_mmap_single(struct cdev *cdev, vm_ooffset_t *foff,
 		objsize, objp, prot);
 	obj = vm_pager_allocate(OBJT_DEVICE, cdev, objsize, prot, *foff,
             curthread->td_ucred);
-	D("returns obj %p", obj);
+	ND("returns obj %p", obj);
 	if (obj == NULL)
 		return EINVAL;
 	if (saved_cdev_pager_ops.cdev_pg_fault == NULL) {
@@ -556,7 +556,7 @@ netmap_mmap(__unused struct cdev *dev,
 
 	error = devfs_get_cdevpriv((void **)&priv);
 	if (error == EBADF) {	/* called on fault, memory is initialized */
-		RD(5, "handling fault at ofs 0x%x", offset);
+		ND(5, "handling fault at ofs 0x%x", offset);
 		error = 0;
 	} else if (error == 0)	/* make sure memory is set */
 		error = netmap_get_memory(priv);
@@ -951,7 +951,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		}
 		/* update configuration */
 		error = netmap_get_memory(priv);
-		D("get_memory returned %d", error);
+		ND("get_memory returned %d", error);
 		if (error)
 			break;
 		/* memsize is always valid */
@@ -1069,11 +1069,8 @@ error:
 		break;
 
 	case NIOCUNREGIF:
-		if (nmr->nr_version != NETMAP_API) {
-			D("API mismatch got %d have %d",
-				nmr->nr_version, NETMAP_API);
-			nmr->nr_version = NETMAP_API;
-		}
+		// XXX we have no data here ?
+		D("deprecated, data is %p", nmr);
 		error = EINVAL;
 		break;
 
