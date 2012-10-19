@@ -10,8 +10,10 @@ CFLAGS = -O2 -pipe
 CFLAGS += -Werror -Wall
 CFLAGS += -I ../sys # -I/home/luigi/FreeBSD/head/sys -I../sys
 CFLAGS += -Wextra
+CFLAGS += -DNO_PCAP
 
-LDFLAGS += -lpthread -lpcap
+LDFLAGS += -lpthread
+#LDFLAGS += -lpcap
 LDFLAGS += -lrt	# on linux
 #SRCS = pkt-gen.c
 

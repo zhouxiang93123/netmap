@@ -53,20 +53,6 @@
 #include <net/ethernet.h>
 #include <net/if.h>	/* ifreq */
 
-#ifdef linux
-#define ifr_flagshigh  ifr_flags
-#define ifr_curcap     ifr_flags
-#define ifr_reqcap     ifr_flags
-#define IFF_PPROMISC   IFF_PROMISC
-#include <linux/ethtool.h>
-#include <linux/sockios.h>
-#endif /* linux */
-
-#ifdef __APPLE__
-#define ifr_flagshigh  ifr_flags	// XXX
-#define IFF_PPROMISC   IFF_PROMISC
-#endif /* __APPLE__ */
-
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <netinet/udp.h>
@@ -92,6 +78,13 @@ struct pcap_pkthdr;
 #include <pthread.h>	/* pthread_* */
 
 #ifdef linux
+#define ifr_flagshigh  ifr_flags
+#define ifr_curcap     ifr_flags
+#define ifr_reqcap     ifr_flags
+#define IFF_PPROMISC   IFF_PROMISC
+#include <linux/ethtool.h>
+#include <linux/sockios.h>
+
 #define CLOCK_REALTIME_PRECISE CLOCK_REALTIME
 #include <netinet/ether.h>      /* ether_aton */
 #include <linux/if_packet.h>    /* sockaddr_ll */
@@ -107,6 +100,8 @@ struct pcap_pkthdr;
 #endif	/* __FreeBSD__ */
 
 #ifdef __APPLE__
+#define ifr_flagshigh  ifr_flags	// XXX
+#define IFF_PPROMISC   IFF_PROMISC
 #include <net/if_dl.h>  /* LLADDR */
 #define clock_gettime(a,b)	\
 	do {struct timespec t0 = {0,0};	*(b) = t0; } while (0)
