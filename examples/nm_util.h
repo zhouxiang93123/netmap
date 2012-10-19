@@ -178,5 +178,5 @@ struct my_ring {
 };
 int netmap_open(struct my_ring *me, int ringid, int promisc);
 int netmap_close(struct my_ring *me);
-int nm_do_ioctl(struct my_ring *me, int what, int subcmd);
+int nm_do_ioctl(struct my_ring *me, u_long what, int subcmd);
 #endif /* _NM_UTIL_H */

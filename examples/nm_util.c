@@ -37,7 +37,7 @@
 extern int verbose;
 
 int
-nm_do_ioctl(struct my_ring *me, int what, int subcmd)
+nm_do_ioctl(struct my_ring *me, u_long what, int subcmd)
 {
 	struct ifreq ifr;
 	int error;
@@ -106,7 +106,7 @@ done:
 	close(fd);
 #endif
 	if (error)
-		D("ioctl error %d %d", error, what);
+		D("ioctl error %d %lu", error, what);
 	return error;
 }
 
