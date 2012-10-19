@@ -85,6 +85,12 @@ struct glob_arg {
 #define OPT_TS		16	/* add a timestamp */
 	int use_pcap;
 	pcap_t *p;
+
+	int main_fd;
+	int report_interval;
+	void *(*td_body)(void *);
+	void *mmap_addr;
+	int mmap_size;
 };
 
 
@@ -852,7 +858,7 @@ usage(void)
 		"\t-i interface		interface name\n"
 		"\t-f function		tx rx ping pong\n"
 		"\t-n count		number of iterations (can be 0)\n"
-		"\t-t pkts_to_send	also forces tx mode\n"
+		"\t-t pkts_to_send		also forces tx mode\n"
 		"\t-r pkts_to_receive	also forces rx mode\n"
 		"\t-l pkts_size		in bytes excluding CRC\n"
 		"\t-d dst-ip		end with %%n to sweep n addresses\n"
@@ -860,10 +866,11 @@ usage(void)
 		"\t-D dst-mac		end with %%n to sweep n addresses\n"
 		"\t-S src-mac		end with %%n to sweep n addresses\n"
 		"\t-a cpu_id		use setaffinity\n"
-		"\t-b burst size	testing, mostly\n"
+		"\t-b burst size		testing, mostly\n"
 		"\t-c cores		cores to use\n"
 		"\t-p threads		processes/threads to use\n"
 		"\t-T report_ms		milliseconds between reports\n"
+		"\t-P				use libpcap instead of netmap\n"
 		"\t-w wait_for_link_time	in seconds\n"
 		"",
 		cmd);
@@ -884,19 +891,17 @@ static struct sf func[] = {
 	{ NULL, NULL }
 };
 
+static int main_thread(struct glob_arg *);
 int
 main(int arc, char **argv)
 {
-	int i, fd;
+	int i;
 	char pcap_errbuf[PCAP_ERRBUF_SIZE];
 
 	struct glob_arg g;
 
 	struct nmreq nmr;
-	void *mmap_addr;		/* the mmap address */
-	void *(*td_body)(void *) = receiver_body;
 	int ch;
-	int report_interval = 1000;	/* report interval */
 	char *ifname = NULL;
 	int wait_link = 2;
 	int devqueues = 1;	/* how many device queues */
@@ -904,6 +909,8 @@ main(int arc, char **argv)
 
 	bzero(&g, sizeof(g));
 
+	g.td_body = receiver_body;
+	g.report_interval = 1000;	/* report interval */
 	/* ip addresses can also be a range x.x.x.x-x.x.x.y */
 	g.src_ip.name = "10.0.0.1";
 	g.dst_ip.name = "10.1.0.1";
@@ -923,6 +930,7 @@ main(int arc, char **argv)
 			D("bad option %c %s", ch, optarg);
 			usage();
 			break;
+
 		case 'n':
 			g.npackets = atoi(optarg);
 			break;
@@ -933,40 +941,51 @@ main(int arc, char **argv)
 					break;
 			}
 			if (fn->key)
-				td_body = fn->f;
+				g.td_body = fn->f;
 			else
 				D("unrecognised function %s", optarg);
 			break;
 
-		case 'o':
+		case 'o':	/* data generation options */
 			g.options = atoi(optarg);
 			break;
+
 		case 'a':       /* force affinity */
 			affinity = atoi(optarg);
 			break;
+
 		case 'i':	/* interface */
 			ifname = optarg;
 			break;
-		case 't':	/* send */
-			td_body = sender_body;
+
+		case 't':	/* send, deprecated */
+			D("-t deprecated, please use -f tx -n %s", optarg);
+			g.td_body = sender_body;
 			g.npackets = atoi(optarg);
 			break;
+
 		case 'r':	/* receive */
-			td_body = receiver_body;
+			D("-r deprecated, please use -f rx -n %s", optarg);
+			g.td_body = receiver_body;
 			g.npackets = atoi(optarg);
 			break;
+
 		case 'l':	/* pkt_size */
 			g.pkt_size = atoi(optarg);
 			break;
+
 		case 'd':
 			g.dst_ip.name = optarg;
 			break;
+
 		case 's':
 			g.src_ip.name = optarg;
 			break;
+
 		case 'T':	/* report interval */
-			report_interval = atoi(optarg);
+			g.report_interval = atoi(optarg);
 			break;
+
 		case 'w':
 			wait_link = atoi(optarg);
 			break;
@@ -987,6 +1006,7 @@ main(int arc, char **argv)
 		case 'D': /* destination mac */
 			g.dst_mac.name = optarg;
 			break;
+
 		case 'S': /* source mac */
 			g.src_mac.name = optarg;
 			break;
@@ -999,15 +1019,15 @@ main(int arc, char **argv)
 		D("missing ifname");
 		usage();
 	}
-	{
-		int n = system_ncpus();
-		if (g.cpus < 0 || g.cpus > n) {
-			D("%d cpus is too high, have only %d cpus", g.cpus, n);
-			usage();
-		}
-		if (g.cpus == 0)
-			g.cpus = n;
+
+	i = system_ncpus();
+	if (g.cpus < 0 || g.cpus > i) {
+		D("%d cpus is too high, have only %d cpus", g.cpus, i);
+		usage();
 	}
+	if (g.cpus == 0)
+		g.cpus = i;
+
 	if (g.pkt_size < 16 || g.pkt_size > 1536) {
 		D("bad pktsize %d\n", g.pkt_size);
 		usage();
@@ -1035,8 +1055,8 @@ main(int arc, char **argv)
 		D("cannot open pcap on %s", ifname);
 		usage();
 	}
-	mmap_addr = NULL;
-	fd = -1;
+	g.mmap_addr = NULL;
+	g.main_fd = -1;
     } else {
 	bzero(&nmr, sizeof(nmr));
 	nmr.nr_version = NETMAP_API;
@@ -1049,12 +1069,12 @@ main(int arc, char **argv)
 	 * which in turn may take some time for the PHY to
 	 * reconfigure.
 	 */
-	fd = open("/dev/netmap", O_RDWR);
-	if (fd == -1) {
+	g.main_fd = open("/dev/netmap", O_RDWR);
+	if (g.main_fd == -1) {
 		D("Unable to open /dev/netmap");
 		// fail later
 	} else {
-		if ((ioctl(fd, NIOCGINFO, &nmr)) == -1) {
+		if ((ioctl(g.main_fd, NIOCGINFO, &nmr)) == -1) {
 			D("Unable to get if info without name");
 		} else {
 			D("map size is %d Kb", nmr.nr_memsize >> 10);
@@ -1062,7 +1082,7 @@ main(int arc, char **argv)
 		bzero(&nmr, sizeof(nmr));
 		nmr.nr_version = NETMAP_API;
 		strncpy(nmr.nr_name, ifname, sizeof(nmr.nr_name));
-		if ((ioctl(fd, NIOCGINFO, &nmr)) == -1) {
+		if ((ioctl(g.main_fd, NIOCGINFO, &nmr)) == -1) {
 			D("Unable to get if info for %s", ifname);
 		}
 		devqueues = nmr.nr_rx_rings;
@@ -1080,10 +1100,11 @@ main(int arc, char **argv)
 	 * operation here to simplify the thread logic.
 	 */
 	D("mmapping %d Kbytes", nmr.nr_memsize>>10);
-	mmap_addr = (struct netmap_d *) mmap(0, nmr.nr_memsize,
+	g.mmap_size = nmr.nr_memsize;
+	g.mmap_addr = (struct netmap_d *) mmap(0, nmr.nr_memsize,
 					    PROT_WRITE | PROT_READ,
-					    MAP_SHARED, fd, 0);
-	if (mmap_addr == MAP_FAILED) {
+					    MAP_SHARED, g.main_fd, 0);
+	if (g.mmap_addr == MAP_FAILED) {
 		D("Unable to mmap %d KB", nmr.nr_memsize >> 10);
 		// continue, fail later
 	}
@@ -1097,7 +1118,7 @@ main(int arc, char **argv)
 	 * give time to cards that take a long time to reset the PHY.
 	 */
 	nmr.nr_version = NETMAP_API;
-	if (ioctl(fd, NIOCREGIF, &nmr) == -1) {
+	if (ioctl(g.main_fd, NIOCREGIF, &nmr) == -1) {
 		D("Unable to register interface %s", ifname);
 		//continue, fail later
 	}
@@ -1106,19 +1127,19 @@ main(int arc, char **argv)
 	/* Print some debug information. */
 	fprintf(stdout,
 		"%s %s: %d queues, %d threads and %d cpus.\n",
-		(td_body == sender_body) ? "Sending on" : "Receiving from",
+		(g.td_body == sender_body) ? "Sending on" : "Receiving from",
 		ifname,
 		devqueues,
 		g.nthreads,
 		g.cpus);
-	if (td_body == sender_body) {
+	if (g.td_body == sender_body) {
 		fprintf(stdout, "%s -> %s (%s -> %s)\n",
 			g.src_ip.name, g.dst_ip.name,
 			g.src_mac.name, g.dst_mac.name);
 	}
 			
 	/* Exit if something went wrong. */
-	if (fd < 0) {
+	if (g.main_fd < 0) {
 		D("aborting");
 		usage();
 	}
@@ -1155,20 +1176,21 @@ main(int arc, char **argv)
 	 * using a single descriptor.
  	 */
 	for (i = 0; i < g.nthreads; i++) {
-		struct netmap_if *tnifp;
+		bzero(&targs[i], sizeof(targs[i]));
+		targs[i].fd = -1; /* default, with pcap */
+		targs[i].g = &g;
+
+	    if (g.use_pcap == 0) {
 		struct nmreq tifreq;
 		int tfd;
 
-	    if (g.use_pcap) {
-		tfd = -1;
-		tnifp = NULL;
-	    } else {
 		/* register interface. */
 		tfd = open("/dev/netmap", O_RDWR);
 		if (tfd == -1) {
 			D("Unable to open /dev/netmap");
 			continue;
 		}
+		targs[i].fd = tfd;
 
 		bzero(&tifreq, sizeof(tifreq));
 		strncpy(tifreq.nr_name, ifname, sizeof(tifreq.nr_name));
@@ -1180,7 +1202,7 @@ main(int arc, char **argv)
 		 * This is not the default because many apps may use the interface
 		 * in both directions, but a pure receiver does not.
 		 */
-		if (td_body == receiver_body) {
+		if (g.td_body == receiver_body) {
 			tifreq.nr_ringid |= NETMAP_NO_TX_POLL;
 		}
 
@@ -1188,19 +1210,14 @@ main(int arc, char **argv)
 			D("Unable to register %s", ifname);
 			continue;
 		}
-		tnifp = NETMAP_IF(mmap_addr, tifreq.nr_offset);
-	    }
-		/* start threads. */
-		bzero(&targs[i], sizeof(targs[i]));
-		targs[i].g = &g;
-		targs[i].used = 1;
-		targs[i].completed = 0;
-		targs[i].fd = tfd;
 		targs[i].nmr = tifreq;
-		targs[i].nifp = tnifp;
+		targs[i].nifp = NETMAP_IF(g.mmap_addr, tifreq.nr_offset);
+		/* start threads. */
 		targs[i].qfirst = (g.nthreads > 1) ? i : 0;
 		targs[i].qlast = (g.nthreads > 1) ? i+1 :
-			(td_body == receiver_body ? tifreq.nr_rx_rings : tifreq.nr_tx_rings);
+			(g.td_body == receiver_body ? tifreq.nr_rx_rings : tifreq.nr_tx_rings);
+	    }
+		targs[i].used = 1;
 		targs[i].me = i;
 		if (affinity >= 0) {
 			if (affinity < g.cpus)
@@ -1212,12 +1229,19 @@ main(int arc, char **argv)
 		/* default, init packets */
 		initialize_packet(&targs[i]);
 
-		if (pthread_create(&targs[i].thread, NULL, td_body,
+		if (pthread_create(&targs[i].thread, NULL, g.td_body,
 				   &targs[i]) == -1) {
 			D("Unable to create thread %d", i);
 			targs[i].used = 0;
 		}
 	}
+	return main_thread(&g);
+}
+
+static int
+main_thread(struct glob_arg *g)
+{
+	int i;
 
     {
 	uint64_t prev = 0;
@@ -1231,14 +1255,14 @@ main(int arc, char **argv)
 		uint64_t pps, usec, my_count, npkts;
 		int done = 0;
 
-		delta.tv_sec = report_interval/1000;
-		delta.tv_usec = (report_interval%1000)*1000;
+		delta.tv_sec = g->report_interval/1000;
+		delta.tv_usec = (g->report_interval%1000)*1000;
 		select(0, NULL, NULL, NULL, &delta);
 		gettimeofday(&now, NULL);
 		time_second = now.tv_sec;
 		timersub(&now, &toc, &toc);
 		my_count = 0;
-		for (i = 0; i < g.nthreads; i++) {
+		for (i = 0; i < g->nthreads; i++) {
 			my_count += targs[i].count;
 			if (targs[i].used == 0)
 				done++;
@@ -1248,17 +1272,17 @@ main(int arc, char **argv)
 			continue;
 		npkts = my_count - prev;
 		pps = (npkts*1000000 + usec/2) / usec;
-		D("%" PRIu64 " pps (%" PRIu64 " pkts in %" PRIu64 "usec)",
+		D("%" PRIu64 " pps (%" PRIu64 " pkts in %" PRIu64 " usec)",
 			pps, npkts, usec);
 		prev = my_count;
 		toc = now;
-		if (done == g.nthreads)
+		if (done == g->nthreads)
 			break;
 	}
 
 	timerclear(&tic);
 	timerclear(&toc);
-	for (i = 0; i < g.nthreads; i++) {
+	for (i = 0; i < g->nthreads; i++) {
 		/*
 		 * Join active threads, unregister interfaces and close
 		 * file descriptors.
@@ -1284,16 +1308,16 @@ main(int arc, char **argv)
 	/* print output. */
 	timersub(&toc, &tic, &toc);
 	delta_t = toc.tv_sec + 1e-6* toc.tv_usec;
-	if (td_body == sender_body)
-		tx_output(count, g.pkt_size, delta_t);
+	if (g->td_body == sender_body)
+		tx_output(count, g->pkt_size, delta_t);
 	else
 		rx_output(count, delta_t);
     }
 
-    if (g.use_pcap == 0) {
-	ioctl(fd, NIOCUNREGIF, &nmr);
-	munmap(mmap_addr, nmr.nr_memsize);
-	close(fd);
+    if (g->use_pcap == 0) {
+	ioctl(g->main_fd, NIOCUNREGIF, NULL); // XXX deprecated
+	munmap(g->mmap_addr, g->mmap_size);
+	close(g->main_fd);
     }
 
 	return (0);
