@@ -96,6 +96,7 @@ struct targ {
 	struct glob_arg *g;
 	int used;
 	int completed;
+	int cancel;
 	int fd;
 	struct nmreq nmr;
 	struct netmap_if *nifp;
@@ -162,15 +163,8 @@ sigint_h(int sig)
 
 	(void)sig;	/* UNUSED */
 	for (i = 0; i < global_nthreads; i++) {
-		/* cancel active threads. */
-		if (targs[i].used == 0)
-			continue;
-
-		D("Cancelling thread #%d\n", i);
-		pthread_cancel(targs[i].thread);
-		targs[i].used = 0;
+		targs[i].cancel = 1;
 	}
-
 	signal(SIGINT, SIG_DFL);
 }
 
@@ -638,7 +632,7 @@ D("start");
 	void *pkt = &targ->pkt;
 	pcap_t *p = targ->g->p;
 
-	for (i = 0; n == 0 || sent < n; i++) {
+	for (i = 0; !targ->cancel && (n == 0 || sent < n); i++) {
 		if (pcap_inject(p, pkt, size) != -1)
 			sent++;
 		if (i > 10000) {
@@ -647,12 +641,14 @@ D("start");
 		}
 	}
     } else {
-	while (n == 0 || sent < n) {
+	while (!targ->cancel && (n == 0 || sent < n)) {
 
 		/*
 		 * wait for available room in the send queue(s)
 		 */
 		if (poll(fds, 1, 2000) <= 0) {
+			if (targ->cancel)
+				break;
 			D("poll error/timeout on queue %d", targ->me);
 			goto quit;
 		}
@@ -763,12 +759,12 @@ receiver_body(void *data)
 	/* main loop, exit after 1s silence */
 	gettimeofday(&targ->tic, NULL);
     if (targ->g->use_pcap) {
-	for (;;) {
+	while (!targ->cancel) {
 		/* XXX should we poll ? */
 		pcap_dispatch(targ->g->p, targ->g->burst, receive_pcap, NULL);
 	}
     } else {
-	while (1) {
+	while (!targ->cancel) {
 		/* Once we started to receive packets, wait at most 1 seconds
 		   before quitting. */
 		if (poll(fds, 1, 1 * 1000) <= 0) {
@@ -1224,7 +1220,7 @@ main(int arc, char **argv)
 	}
 
     {
-	uint64_t my_count = 0, prev = 0;
+	uint64_t prev = 0;
 	uint64_t count = 0;
 	double delta_t;
 	struct timeval tic, toc;
@@ -1232,7 +1228,7 @@ main(int arc, char **argv)
 	gettimeofday(&toc, NULL);
 	for (;;) {
 		struct timeval now, delta;
-		uint64_t pps;
+		uint64_t pps, usec, my_count, npkts;
 		int done = 0;
 
 		delta.tv_sec = report_interval/1000;
@@ -1247,11 +1243,13 @@ main(int arc, char **argv)
 			if (targs[i].used == 0)
 				done++;
 		}
-		pps = toc.tv_sec* 1000000 + toc.tv_usec;
-		if (pps < 10000)
+		usec = toc.tv_sec* 1000000 + toc.tv_usec;
+		if (usec < 10000)
 			continue;
-		pps = (my_count - prev)*1000000 / pps;
-		D("%" PRIu64 " pps %" PRIu64 " pkts", pps, (uint64_t)(my_count - prev));
+		npkts = my_count - prev;
+		pps = (npkts*1000000 + usec/2) / usec;
+		D("%" PRIu64 " pps (%" PRIu64 " pkts in %" PRIu64 "usec)",
+			pps, npkts, usec);
 		prev = my_count;
 		toc = now;
 		if (done == g.nthreads)
