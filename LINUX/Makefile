@@ -31,7 +31,7 @@ obj-m += $(DRIVERS)
 # can be in $(KSRC)/source/drivers/net/ethernet/$(manufacturer)
 DRIVER_SRCS = r8169.c forcedeth.c e1000/ e1000e/ ixgbe/ igb/
 DRIVER_SUBDIRS= nvidia realtek intel
-DRIVER_SRCS += bnx2x/ mellanox/
+DRIVER_SRCS += bnx2x/ mellanox/ mlx4/
 DRIVER_SUBDIRS += broadcom .
 
 # The following commands are needed to build the modules as out-of-tree, in
