@@ -1,0 +1,138 @@
+--- orig/qemu-1.2.0/hw/e1000.c	2012-09-05 07:03:06.000000000 -0700
++++ ./hw/e1000.c	2012-11-16 21:26:18.681122271 -0800
+@@ -24,6 +24,7 @@
+  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++#define MITIGATION
+ 
+ #include "hw.h"
+ #include "pci.h"
+@@ -127,6 +128,13 @@ typedef struct E1000State_st {
+     } eecd_state;
+ 
+     QEMUTimer *autoneg_timer;
++#ifdef MITIGATION
++    uint32_t mit_cause;		// pending interrupt cause
++    QEMUTimer *mit_timer;	// handle for the timer
++    int32_t mit_int_pending;	// set if we must interrupt on timer
++    int32_t mit_timer_active;	// set if timer active
++    uint32_t mit_old_itr;
++#endif /* MITIGATION */
+ } E1000State;
+ 
+ #define	defreg(x)	x = (E1000_##x>>2)
+@@ -142,6 +150,7 @@ enum {
+     defreg(TPR),	defreg(TPT),	defreg(TXDCTL),	defreg(WUFC),
+     defreg(RA),		defreg(MTA),	defreg(CRCERRS),defreg(VFTA),
+     defreg(VET),
++    defreg(ITR),	defreg(RADV),	defreg(TADV),
+ };
+ 
+ static void
+@@ -626,6 +635,52 @@ static uint64_t tx_desc_base(E1000State
+     return (bah << 32) + bal;
+ }
+ 
++#ifdef MITIGATION
++/*
++ * if necessary, fire the interrupt and rearm the timer
++ */
++static void
++mit_rearm(void *_s)
++{
++    E1000State* s = _s;
++    /* take the min of the various timers */
++    uint16_t x = 0;
++#if 1
++    x = s->mac_reg[RADV];
++    if (s->mac_reg[TADV] && (x == 0 || s->mac_reg[TADV] < x))
++	x = s->mac_reg[TADV];
++    x *= 4;
++#endif
++    if (x == 0 && s->mac_reg[ITR] && (x == 0 || s->mac_reg[ITR] < x))
++	x = s->mac_reg[ITR];
++    if (x != s->mit_old_itr) {
++	fprintf(stderr, "x now %d (RADV %d TADV %d ITR %d)\n",
++		x, s->mac_reg[RADV], s->mac_reg[TADV], s->mac_reg[ITR]);
++	s->mit_old_itr = x;
++    }
++    if (s->mit_int_pending)
++	set_ics(s, 0, s->mit_cause);
++    s->mit_cause = 0;
++    s->mit_int_pending = 0;
++    if (x == 0) {
++	s->mit_timer_active = 0;
++    } else {
++	s->mit_timer_active = 1;
++	qemu_mod_timer(s->mit_timer,
++	    qemu_get_clock_ns(vm_clock) + x * 256);
++    }
++}
++
++static void
++mit_set_ics(E1000State *s, int cause)
++{
++    s->mit_cause |= cause;
++    s->mit_int_pending = 1;
++    if (!s->mit_timer_active)
++	mit_rearm(s);
++}
++#endif /* MITIGATION */
++
+ static void
+ start_xmit(E1000State *s)
+ {
+@@ -663,7 +718,11 @@ start_xmit(E1000State *s)
+             break;
+         }
+     }
++#ifdef MITIGATION
++    mit_set_ics(s, cause);
++#else
+     set_ics(s, 0, cause);
++#endif /* MITIGATION */
+ }
+ 
+ static int
+@@ -875,7 +934,11 @@ e1000_receive(NetClientState *nc, const
+         s->rxbuf_min_shift)
+         n |= E1000_ICS_RXDMT0;
+ 
++#ifdef MITIGATION
++    mit_set_ics(s, n);
++#else
+     set_ics(s, 0, n);
++#endif
+ 
+     return size;
+ }
+@@ -978,6 +1041,7 @@ static uint32_t (*macreg_readops[])(E100
+     getreg(RDH),	getreg(RDT),	getreg(VET),	getreg(ICS),
+     getreg(TDBAL),	getreg(TDBAH),	getreg(RDBAH),	getreg(RDBAL),
+     getreg(TDLEN),	getreg(RDLEN),
++    getreg(ITR),	getreg(RADV),	getreg(TADV),
+ 
+     [TOTH] = mac_read_clr8,	[TORH] = mac_read_clr8,	[GPRC] = mac_read_clr4,
+     [GPTC] = mac_read_clr4,	[TPR] = mac_read_clr4,	[TPT] = mac_read_clr4,
+@@ -994,6 +1058,7 @@ static void (*macreg_writeops[])(E1000St
+     putreg(PBA),	putreg(EERD),	putreg(SWSM),	putreg(WUFC),
+     putreg(TDBAL),	putreg(TDBAH),	putreg(TXDCTL),	putreg(RDBAH),
+     putreg(RDBAL),	putreg(LEDCTL), putreg(VET),
++    putreg(ITR),	putreg(RADV),	putreg(TADV),
+     [TDLEN] = set_dlen,	[RDLEN] = set_dlen,	[TCTL] = set_tctl,
+     [TDT] = set_tctl,	[MDIC] = set_mdic,	[ICS] = set_ics,
+     [TDH] = set_16bit,	[RDH] = set_16bit,	[RDT] = set_rdt,
+@@ -1253,6 +1318,12 @@ static int pci_e1000_init(PCIDevice *pci
+     add_boot_device_path(d->conf.bootindex, &pci_dev->qdev, "/ethernet-phy@0");
+ 
+     d->autoneg_timer = qemu_new_timer_ms(vm_clock, e1000_autoneg_timer, d);
++#ifdef MITIGATION
++    d->mit_cause = 0;
++    d->mit_int_pending = 0;
++    d->mit_timer_active = 0;
++    d->mit_timer = qemu_new_timer_ns(vm_clock, mit_rearm, d);
++#endif /* MITIGATION */
+ 
+     return 0;
+ }
