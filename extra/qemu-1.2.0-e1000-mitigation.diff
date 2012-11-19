@@ -1,5 +1,5 @@
---- orig/qemu-1.2.0/hw/e1000.c	2012-09-05 07:03:06.000000000 -0700
-+++ ./hw/e1000.c	2012-11-16 21:26:18.681122271 -0800
+--- Downloads/qemu-1.2.0/hw/e1000.c	2012-09-05 07:03:06.000000000 -0700
++++ ./hw/e1000.c	2012-11-18 15:41:27.865583231 -0800
 @@ -24,6 +24,7 @@
   * License along with this library; if not, see <http://www.gnu.org/licenses/>.
   */
@@ -17,7 +17,7 @@
 +    QEMUTimer *mit_timer;	// handle for the timer
 +    int32_t mit_int_pending;	// set if we must interrupt on timer
 +    int32_t mit_timer_active;	// set if timer active
-+    uint32_t mit_old_itr;
++    uint32_t mit_old_itr;	// only for debugging
 +#endif /* MITIGATION */
  } E1000State;
  
@@ -30,46 +30,50 @@
  };
  
  static void
-@@ -626,6 +635,52 @@ static uint64_t tx_desc_base(E1000State
+@@ -626,6 +635,56 @@ static uint64_t tx_desc_base(E1000State
      return (bah << 32) + bal;
  }
  
 +#ifdef MITIGATION
 +/*
-+ * if necessary, fire the interrupt and rearm the timer
++ * if necessary, fire the interrupt and rearm the timer.
++ * Called at the end of tx/rx routines, and when the timer fires.
 + */
 +static void
 +mit_rearm(void *_s)
 +{
 +    E1000State* s = _s;
-+    /* take the min of the various timers */
++    /* There are 3 registers (RADV, TADV, ITR) affecting mitigation.
++     * Take the min of the three (0 means disabled, units are 1.024us
++     * for RADV and TADV, 256ns for ITR.
++     */
 +    uint16_t x = 0;
-+#if 1
++
 +    x = s->mac_reg[RADV];
 +    if (s->mac_reg[TADV] && (x == 0 || s->mac_reg[TADV] < x))
 +	x = s->mac_reg[TADV];
-+    x *= 4;
-+#endif
-+    if (x == 0 && s->mac_reg[ITR] && (x == 0 || s->mac_reg[ITR] < x))
++    x *= 4;	/* move to 256ns units */
++    if (s->mac_reg[ITR] && (x == 0 || s->mac_reg[ITR] < x))
 +	x = s->mac_reg[ITR];
-+    if (x != s->mit_old_itr) {
++    if (x != s->mit_old_itr) {	/* XXX debugging, can go away */
 +	fprintf(stderr, "x now %d (RADV %d TADV %d ITR %d)\n",
 +		x, s->mac_reg[RADV], s->mac_reg[TADV], s->mac_reg[ITR]);
 +	s->mit_old_itr = x;
 +    }
-+    if (s->mit_int_pending)
++    if (s->mit_int_pending)	/* deliver pending interrupt */
 +	set_ics(s, 0, s->mit_cause);
 +    s->mit_cause = 0;
-+    s->mit_int_pending = 0;
-+    if (x == 0) {
-+	s->mit_timer_active = 0;
-+    } else {
++    s->mit_timer_active = 0;
++    if (x > 0 && s->mit_int_pending ) {
++	/* schedule callback only if we delivered an intr and mitigation is enabled */
 +	s->mit_timer_active = 1;
 +	qemu_mod_timer(s->mit_timer,
 +	    qemu_get_clock_ns(vm_clock) + x * 256);
 +    }
++    s->mit_int_pending = 0;
 +}
 +
++/* conditionally deliver interrupt on tx/rx */
 +static void
 +mit_set_ics(E1000State *s, int cause)
 +{
@@ -83,7 +87,7 @@
  static void
  start_xmit(E1000State *s)
  {
-@@ -663,7 +718,11 @@ start_xmit(E1000State *s)
+@@ -663,7 +722,11 @@ start_xmit(E1000State *s)
              break;
          }
      }
@@ -95,7 +99,7 @@
  }
  
  static int
-@@ -875,7 +934,11 @@ e1000_receive(NetClientState *nc, const
+@@ -875,7 +938,11 @@ e1000_receive(NetClientState *nc, const
          s->rxbuf_min_shift)
          n |= E1000_ICS_RXDMT0;
  
@@ -107,7 +111,7 @@
  
      return size;
  }
-@@ -978,6 +1041,7 @@ static uint32_t (*macreg_readops[])(E100
+@@ -978,6 +1045,7 @@ static uint32_t (*macreg_readops[])(E100
      getreg(RDH),	getreg(RDT),	getreg(VET),	getreg(ICS),
      getreg(TDBAL),	getreg(TDBAH),	getreg(RDBAH),	getreg(RDBAL),
      getreg(TDLEN),	getreg(RDLEN),
@@ -115,7 +119,7 @@
  
      [TOTH] = mac_read_clr8,	[TORH] = mac_read_clr8,	[GPRC] = mac_read_clr4,
      [GPTC] = mac_read_clr4,	[TPR] = mac_read_clr4,	[TPT] = mac_read_clr4,
-@@ -994,6 +1058,7 @@ static void (*macreg_writeops[])(E1000St
+@@ -994,6 +1062,7 @@ static void (*macreg_writeops[])(E1000St
      putreg(PBA),	putreg(EERD),	putreg(SWSM),	putreg(WUFC),
      putreg(TDBAL),	putreg(TDBAH),	putreg(TXDCTL),	putreg(RDBAH),
      putreg(RDBAL),	putreg(LEDCTL), putreg(VET),
@@ -123,7 +127,7 @@
      [TDLEN] = set_dlen,	[RDLEN] = set_dlen,	[TCTL] = set_tctl,
      [TDT] = set_tctl,	[MDIC] = set_mdic,	[ICS] = set_ics,
      [TDH] = set_16bit,	[RDH] = set_16bit,	[RDT] = set_rdt,
-@@ -1253,6 +1318,12 @@ static int pci_e1000_init(PCIDevice *pci
+@@ -1253,6 +1322,12 @@ static int pci_e1000_init(PCIDevice *pci
      add_boot_device_path(d->conf.bootindex, &pci_dev->qdev, "/ethernet-phy@0");
  
      d->autoneg_timer = qemu_new_timer_ms(vm_clock, e1000_autoneg_timer, d);
