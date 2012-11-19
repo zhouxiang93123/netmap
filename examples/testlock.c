@@ -439,6 +439,20 @@ test_gettimeofday(struct targ *t)
         }
 }
 
+/*
+ * getppid is the simplest system call (getpid is cached by glibc
+ * so it would not be a good test)
+ */
+void
+test_getpid(struct targ *t)
+{
+        int m;
+        for (m = 0; m < t->g->m_cycles; m++) {
+		getppid();
+		t->count++;
+        }
+}
+
 
 #define likely(x)	__builtin_expect(!!(x), 1)
 #define unlikely(x)	__builtin_expect(!!(x), 0)
@@ -524,6 +538,7 @@ struct entry tests[] = {
 	{ test_usleep, "usleep", 1, 1000 },
 	{ test_time, "time", 1, 1000 },
 	{ test_gettimeofday, "gettimeofday", 1, 1000000 },
+	{ test_getpid, "getpid", 1, 1000000 },
 	{ test_bcopy, "bcopy", 1, 100000000 },
 	{ test_memcpy, "memcpy", 1, 100000000 },
 	{ test_fastcopy, "fastcopy", 1, 100000000 },
