@@ -197,18 +197,22 @@ system_ncpus(void)
 #endif /* !__FreeBSD__ */
 }
 
-/*
- * locate the src mac address for our interface, put it
- * into the user-supplied buffer. return 0 if ok, -1 on error.
- */
 #ifdef __linux__
 #define sockaddr_dl    sockaddr_ll
 #define sdl_family     sll_family
 #define AF_LINK        AF_PACKET
 #define LLADDR(s)      s->sll_addr;
 #include <linux/if_tun.h>
+#define TAP_CLONEDEV	"/dev/net/tun"
+#else
+#include <net/if_tun.h>
+#define TAP_CLONEDEV	"/dev/tap"
+#endif /* !linux */
 
-#endif /* linux */
+/*
+ * locate the src mac address for our interface, put it
+ * into the user-supplied buffer. return 0 if ok, -1 on error.
+ */
 static int
 source_hwaddr(const char *ifname, char *buf)
 {
@@ -1085,11 +1089,12 @@ static struct sf func[] = {
 };
 
 static int
-tun_alloc(char *dev, int flags)
+tap_alloc(char *dev)
 {
 	struct ifreq ifr;
 	int fd, err;
-	char *clonedev = "/dev/net/tun";
+	char *clonedev = TAP_CLONEDEV;
+	int is_clone = 1;
 
 	/* Arguments taken by the function:
 	 *
@@ -1098,7 +1103,16 @@ tun_alloc(char *dev, int flags)
 	 * int flags: interface flags (eg, IFF_TUN etc.)
 	 */
 
-	/* open the clone device */
+#ifdef __FreeBSD__
+	(void)err;
+	if (dev[3]) { /* tapSomething */
+		static char buf[128];
+		snprintf(buf, sizeof(buf), "/dev/%s", dev);
+		clonedev = buf;
+		is_clone = 0;
+	}
+#endif
+	/* open the device */
 	if( (fd = open(clonedev, O_RDWR)) < 0 ) {
 		return fd;
 	}
@@ -1107,7 +1121,8 @@ tun_alloc(char *dev, int flags)
 	/* preparation of the struct ifr, of type "struct ifreq" */
 	memset(&ifr, 0, sizeof(ifr));
 
-	ifr.ifr_flags = flags;   /* IFF_TUN or IFF_TAP, plus maybe IFF_NO_PI */
+#ifdef linux
+	ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
 
 	if (*dev) {
 		/* if a device name was specified, put it in the structure; otherwise,
@@ -1129,6 +1144,7 @@ tun_alloc(char *dev, int flags)
 	* code below) */
 	strcpy(dev, ifr.ifr_name);
 	D("new name is %s", dev);
+#endif /* linux */
 
         /* this is the special file descriptor that the caller will use to talk
          * with the virtual interface */
@@ -1296,7 +1312,7 @@ main(int arc, char **argv)
 
     if (g.dev_type == DEV_TAP) {
 	D("want to use tap %s", g.ifname);
-	g.main_fd = tun_alloc(g.ifname, IFF_TAP | IFF_NO_PI);
+	g.main_fd = tap_alloc(g.ifname);
 	if (g.main_fd < 0) {
 		D("cannot open tap %s", g.ifname);
 		usage();
