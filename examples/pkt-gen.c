@@ -84,7 +84,7 @@ struct glob_arg {
 #define OPT_COPY	4
 #define OPT_MEMCPY	8
 #define OPT_TS		16	/* add a timestamp */
-	int use_pcap;
+	int dev_type;
 	pcap_t *p;
 
 	int affinity;
@@ -95,6 +95,7 @@ struct glob_arg {
 	int mmap_size;
 	char *ifname;
 };
+enum dev_type { DEV_NONE, DEV_NETMAP, DEV_PCAP, DEV_TAP };
 
 
 /*
@@ -205,6 +206,8 @@ system_ncpus(void)
 #define sdl_family     sll_family
 #define AF_LINK        AF_PACKET
 #define LLADDR(s)      s->sll_addr;
+#include <linux/if_tun.h>
+
 #endif /* linux */
 static int
 source_hwaddr(const char *ifname, char *buf)
@@ -636,19 +639,33 @@ D("start");
 
 	/* main loop.*/
 	gettimeofday(&targ->tic, NULL);
-    if (targ->g->use_pcap) {
-	int size = targ->g->pkt_size;
-	void *pkt = &targ->pkt;
-	pcap_t *p = targ->g->p;
 
-	for (i = 0; !targ->cancel && (n == 0 || sent < n); i++) {
+    if (targ->g->dev_type == DEV_PCAP) {
+	    int size = targ->g->pkt_size;
+	    void *pkt = &targ->pkt;
+	    pcap_t *p = targ->g->p;
+
+	    for (i = 0; !targ->cancel && (n == 0 || sent < n); i++) {
 		if (pcap_inject(p, pkt, size) != -1)
 			sent++;
 		if (i > 10000) {
 			targ->count = sent;
 			i = 0;
 		}
-	}
+	    }
+    } else if (targ->g->dev_type == DEV_TAP) { /* tap */
+	    int size = targ->g->pkt_size;
+	    void *pkt = &targ->pkt;
+	    D("writing to file desc %d", targ->g->main_fd);
+
+	    for (i = 0; !targ->cancel && (n == 0 || sent < n); i++) {
+		if (write(targ->g->main_fd, pkt, size) != -1)
+			sent++;
+		if (i > 10000) {
+			targ->count = sent;
+			i = 0;
+		}
+	    }
     } else {
 	while (!targ->cancel && (n == 0 || sent < n)) {
 
@@ -767,10 +784,18 @@ receiver_body(void *data)
 
 	/* main loop, exit after 1s silence */
 	gettimeofday(&targ->tic, NULL);
-    if (targ->g->use_pcap) {
+    if (targ->g->dev_type == DEV_PCAP) {
 	while (!targ->cancel) {
 		/* XXX should we poll ? */
 		pcap_dispatch(targ->g->p, targ->g->burst, receive_pcap, NULL);
+	}
+    } else if (targ->g->dev_type == DEV_TAP) {
+	D("reading from %s fd %d", targ->g->ifname, targ->g->main_fd);
+	while (!targ->cancel) {
+		char buf[2048];
+		/* XXX should we poll ? */
+		if (read(targ->g->main_fd, buf, sizeof(buf)) > 0)
+			targ->count++;
 	}
     } else {
 	while (!targ->cancel) {
@@ -906,7 +931,7 @@ start_threads(struct glob_arg *g)
 		targs[i].fd = -1; /* default, with pcap */
 		targs[i].g = g;
 
-	    if (g->use_pcap == 0) {
+	    if (g->dev_type == DEV_NETMAP) {
 		struct nmreq tifreq;
 		int tfd;
 
@@ -942,6 +967,8 @@ start_threads(struct glob_arg *g)
 		targs[i].qfirst = (g->nthreads > 1) ? i : 0;
 		targs[i].qlast = (g->nthreads > 1) ? i+1 :
 			(g->td_body == receiver_body ? tifreq.nr_rx_rings : tifreq.nr_tx_rings);
+	    } else {
+		targs[i].fd = g->main_fd;
 	    }
 		targs[i].used = 1;
 		targs[i].me = i;
@@ -1036,7 +1063,7 @@ main_thread(struct glob_arg *g)
 	else
 		rx_output(count, delta_t);
 
-	if (g->use_pcap == 0) {
+	if (g->dev_type == DEV_NETMAP) {
 		ioctl(g->main_fd, NIOCUNREGIF, NULL); // XXX deprecated
 		munmap(g->mmap_addr, g->mmap_size);
 		close(g->main_fd);
@@ -1056,6 +1083,57 @@ static struct sf func[] = {
 	{ "pong",	ponger_body },
 	{ NULL, NULL }
 };
+
+static int
+tun_alloc(char *dev, int flags)
+{
+	struct ifreq ifr;
+	int fd, err;
+	char *clonedev = "/dev/net/tun";
+
+	/* Arguments taken by the function:
+	 *
+	 * char *dev: the name of an interface (or '\0'). MUST have enough
+	 *   space to hold the interface name if '\0' is passed
+	 * int flags: interface flags (eg, IFF_TUN etc.)
+	 */
+
+	/* open the clone device */
+	if( (fd = open(clonedev, O_RDWR)) < 0 ) {
+		return fd;
+	}
+	D("%s open successful", clonedev);
+
+	/* preparation of the struct ifr, of type "struct ifreq" */
+	memset(&ifr, 0, sizeof(ifr));
+
+	ifr.ifr_flags = flags;   /* IFF_TUN or IFF_TAP, plus maybe IFF_NO_PI */
+
+	if (*dev) {
+		/* if a device name was specified, put it in the structure; otherwise,
+		* the kernel will try to allocate the "next" device of the
+		* specified type */
+		strncpy(ifr.ifr_name, dev, IFNAMSIZ);
+	}
+
+	/* try to create the device */
+	if( (err = ioctl(fd, TUNSETIFF, (void *) &ifr)) < 0 ) {
+		D("failed to to a TUNSETIFF");
+		close(fd);
+		return err;
+	}
+
+	/* if the operation was successful, write back the name of the
+	* interface to the variable "dev", so the caller can know
+	* it. Note that the caller MUST reserve space in *dev (see calling
+	* code below) */
+	strcpy(dev, ifr.ifr_name);
+	D("new name is %s", dev);
+
+        /* this is the special file descriptor that the caller will use to talk
+         * with the virtual interface */
+        return fd;
+}
 
 int
 main(int arc, char **argv)
@@ -1120,6 +1198,10 @@ main(int arc, char **argv)
 
 		case 'i':	/* interface */
 			g.ifname = optarg;
+			if (!strncmp(optarg, "tap", 3))
+				g.dev_type = DEV_TAP;
+			else
+				g.dev_type = DEV_NETMAP;
 			break;
 
 		case 't':	/* send, deprecated */
@@ -1164,7 +1246,7 @@ main(int arc, char **argv)
 			break;
 
 		case 'P':
-			g.use_pcap = 1;
+			g.dev_type = DEV_PCAP;
 			break;
 
 		case 'D': /* destination mac */
@@ -1212,7 +1294,14 @@ main(int arc, char **argv)
 	extract_mac_range(&g.src_mac);
 	extract_mac_range(&g.dst_mac);
 
-    if (g.use_pcap) {
+    if (g.dev_type == DEV_TAP) {
+	D("want to use tap %s", g.ifname);
+	g.main_fd = tun_alloc(g.ifname, IFF_TAP | IFF_NO_PI);
+	if (g.main_fd < 0) {
+		D("cannot open tap %s", g.ifname);
+		usage();
+	}
+    } else if (g.dev_type > DEV_NETMAP) {
 	char pcap_errbuf[PCAP_ERRBUF_SIZE];
 
 	D("using pcap on %s", g.ifname);
@@ -1326,7 +1415,8 @@ main(int arc, char **argv)
 	global_nthreads = g.nthreads;
 	signal(SIGINT, sigint_h);
 
-	if (g.use_pcap) {
+#if 0 // XXX this is not needed, i believe
+	if (g.dev_type > DEV_NETMAP) {
 		g.p = pcap_open_live(g.ifname, 0, 1, 100, NULL);
 		if (g.p == NULL) {
 			D("cannot open pcap on %s", g.ifname);
@@ -1334,6 +1424,7 @@ main(int arc, char **argv)
 		} else
 			D("using pcap %p on %s", g.p, g.ifname);
 	}
+#endif // XXX
 	start_threads(&g);
 	main_thread(&g);
 	return 0;
