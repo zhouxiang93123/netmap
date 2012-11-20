@@ -57,6 +57,7 @@ struct pkt {
 struct ip_range {
 	char *name;
 	struct in_addr start, end;
+	uint16_t port0, port1;
 };
 
 struct mac_range {
@@ -128,9 +129,13 @@ struct targ {
 static void
 extract_ip_range(struct ip_range *r)
 {
+	char *p;
 	D("extract IP range from %s", r->name);
 	inet_aton(r->name, &r->start);
-	inet_aton(r->name, &r->end);
+	p = index(r->name, ' ');
+	r->port0 = (p) ? strtol(p+1, NULL, 0) : 0;
+
+	r->end = r->start;
 #if 0
 	p = index(targ->g->src_ip, '-');
 	if (p) {
@@ -138,7 +143,7 @@ extract_ip_range(struct ip_range *r)
 		D("dst-ip sweep %d addresses", targ->dst_ip_range);
 	}
 #endif
-	D("%s starts at %s", r->name, inet_ntoa(r->start));
+	D("%s starts at %s %d", r->name, inet_ntoa(r->start), r->port0);
 }
 
 static void
@@ -348,8 +353,8 @@ initialize_packet(struct targ *targ)
 
 
 	udp = &pkt->udp;
-	udp->uh_sport = htons(4096);
-        udp->uh_dport = htons(8192);
+        udp->uh_sport = htons(targ->g->src_ip.port0 ? targ->g->src_ip.port0 : 4096);
+        udp->uh_dport = htons(targ->g->dst_ip.port0 ? targ->g->dst_ip.port0 : 8192);
 	udp->uh_ulen = htons(paylen);
 	/* Magic: taken from sbin/dhclient/packet.c */
 	udp->uh_sum = wrapsum(checksum(udp, sizeof(*udp),
@@ -1094,7 +1099,6 @@ tap_alloc(char *dev)
 	struct ifreq ifr;
 	int fd, err;
 	char *clonedev = TAP_CLONEDEV;
-	int is_clone = 1;
 
 	/* Arguments taken by the function:
 	 *
@@ -1109,7 +1113,6 @@ tap_alloc(char *dev)
 		static char buf[128];
 		snprintf(buf, sizeof(buf), "/dev/%s", dev);
 		clonedev = buf;
-		is_clone = 0;
 	}
 #endif
 	/* open the device */
