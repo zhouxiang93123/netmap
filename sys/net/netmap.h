@@ -130,6 +130,9 @@ struct netmap_slot {
 #define	NS_REPORT	0x0002	/* ask the hardware to report results
 				 * e.g. by generating an interrupt
 				 */
+#define	NS_FORWARD	0x0004	/* pass packet to the other endpoint
+				 * (host stack or device
+				 */
 };
 
 /*
@@ -186,6 +189,18 @@ struct netmap_slot {
  *	a system call.
  *
  *	The netmap_kring is only modified by the upper half of the kernel.
+ *
+ * FLAGS
+ *	NR_TIMESTAMP	updates the 'ts' field on each syscall. This is
+ *			a global timestamp for all packets.
+ *	NR_RX_TSTMP	if set, the last 64 byte in each buffer will
+ *			contain a timestamp for the frame supplied by
+ *			the hardware (if supported)
+ *	NR_FORWARD	if set, the NS_FORWARD flag in each slot of the
+ *			RX ring is checked, and if set the packet is
+ *			passed to the other side (host stack or device,
+ *			respectively). This permits bpf-like behaviour
+ *			or transparency for selected packets.
  */
 struct netmap_ring {
 	/*
@@ -202,6 +217,8 @@ struct netmap_ring {
 	const uint16_t	nr_buf_size;
 	uint16_t	flags;
 #define	NR_TIMESTAMP	0x0002		/* set timestamp on *sync() */
+#define	NR_FORWARD	0x0004		/* enable NS_FORWARD for ring */
+#define	NR_RX_TSTMP	0x0008		/* set rx timestamp in slots */
 
 	struct timeval	ts;		/* time of last *sync() */
 
