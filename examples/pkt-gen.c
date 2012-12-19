@@ -56,8 +56,8 @@ struct pkt {
 
 struct ip_range {
 	char *name;
-	struct in_addr start, end;
-	uint16_t port0, port1;
+	struct in_addr start, end, cur;
+	uint16_t port0, port1, cur_p;
 };
 
 struct mac_range {
@@ -124,26 +124,50 @@ struct targ {
 
 /*
  * extract the extremes from a range of ipv4 addresses.
- * currently only takes the first 4 bytes
+ * addr_lo[-addr_hi][:port_lo[-port_hi]]
  */
 static void
 extract_ip_range(struct ip_range *r)
 {
-	char *p;
-	D("extract IP range from %s", r->name);
-	inet_aton(r->name, &r->start);
-	p = index(r->name, ' ');
-	r->port0 = (p) ? strtol(p+1, NULL, 0) : 0;
+	char *p_lo, *p_hi;
+	char buf1[16]; // one ip address
 
-	r->end = r->start;
-#if 0
-	p = index(targ->g->src_ip, '-');
-	if (p) {
-		targ->dst_ip_range = atoi(p+1);
-		D("dst-ip sweep %d addresses", targ->dst_ip_range);
+	D("extract IP range from %s", r->name);
+	p_lo = index(r->name, ':');	/* do we have ports ? */
+	if (p_lo) {
+		D(" found ports at %s", p_lo);
+		*p_lo++ = '\0';
+		p_hi = index(p_lo, '-');
+		if (p_hi)
+			*p_hi++ = '\0';
+		else
+			p_hi = p_lo;
+		r->port0 = strtol(p_lo, NULL, 0);
+		r->port1 = strtol(p_hi, NULL, 0);
+		if (r->port1 < r->port0) {
+			r->cur_p = r->port0;
+			r->port0 = r->port1;
+			r->port1 = r->cur_p;
+		}
+		r->cur_p = r->port0;
+		D("ports are %d to %d", r->port0, r->port1);
 	}
-#endif
-	D("%s starts at %s %d", r->name, inet_ntoa(r->start), r->port0);
+	p_hi = index(r->name, '-');	/* do we have upper ip ? */
+	if (p_hi) {
+		*p_hi++ = '\0';
+	} else
+		p_hi = r->name;
+	inet_aton(r->name, &r->start);
+	inet_aton(p_hi, &r->end);
+	if (r->start.s_addr > r->end.s_addr) {
+		r->cur = r->start;
+		r->start = r->end;
+		r->end = r->cur;
+	}
+	r->cur = r->start;
+	strncpy(buf1, inet_ntoa(r->end), sizeof(buf1));
+	D("range is %s %d to %s %d", inet_ntoa(r->start), r->port0,
+		buf1, r->port1);
 }
 
 static void
@@ -347,14 +371,22 @@ initialize_packet(struct targ *targ)
         ip->ip_off = htons(IP_DF); /* Don't fragment */
         ip->ip_ttl = IPDEFTTL;
 	ip->ip_p = IPPROTO_UDP;
-	ip->ip_dst.s_addr = targ->g->dst_ip.start.s_addr;
-	ip->ip_src.s_addr = targ->g->src_ip.start.s_addr;
+	ip->ip_dst.s_addr = targ->g->dst_ip.cur.s_addr;
+	if (++targ->g->dst_ip.cur.s_addr > targ->g->dst_ip.end.s_addr)
+		targ->g->dst_ip.cur.s_addr = targ->g->dst_ip.start.s_addr;
+	ip->ip_src.s_addr = targ->g->src_ip.cur.s_addr;
+	if (++targ->g->src_ip.cur.s_addr > targ->g->src_ip.end.s_addr)
+		targ->g->src_ip.cur.s_addr = targ->g->src_ip.start.s_addr;
 	ip->ip_sum = wrapsum(checksum(ip, sizeof(*ip), 0));
 
 
 	udp = &pkt->udp;
-        udp->uh_sport = htons(targ->g->src_ip.port0 ? targ->g->src_ip.port0 : 4096);
-        udp->uh_dport = htons(targ->g->dst_ip.port0 ? targ->g->dst_ip.port0 : 8192);
+        udp->uh_sport = htons(targ->g->src_ip.cur_p);
+	if (++targ->g->src_ip.cur_p > targ->g->src_ip.port1)
+		targ->g->src_ip.cur_p = targ->g->src_ip.port0;
+        udp->uh_dport = htons(targ->g->dst_ip.cur_p);
+	if (++targ->g->dst_ip.cur_p > targ->g->dst_ip.port1)
+		targ->g->dst_ip.cur_p = targ->g->dst_ip.port0;
 	udp->uh_ulen = htons(paylen);
 	/* Magic: taken from sbin/dhclient/packet.c */
 	udp->uh_sum = wrapsum(checksum(udp, sizeof(*udp),
