@@ -1,3 +1,6 @@
+20121026 broadcom on 2.6.xx
+- missing cnic_if.h (used by bnx2x)
+
 --- status and other development notes ---
 20120824 devfs_get_cdevpriv()
 	curthread		struct thread	sys/proc.h

@@ -127,6 +127,7 @@ mlx4_netmap_reg(struct ifnet *ifp, int onoff)
 	// rtnl_lock(); // ???
 	if (netif_running(ifp)) {
 		D("unloading %s", ifp->if_xname);
+		//double_mutex_state_lock(mdev);
 		mutex_lock(&mdev->state_lock);
 		if (onoff == 0) {
 			int i;
@@ -172,6 +173,7 @@ retry:
 			goto retry;
 		}
 		mutex_unlock(&mdev->state_lock);
+		//double_mutex_state_unlock(mdev);
 	}
 	// rtnl_unlock();
 	return (error);

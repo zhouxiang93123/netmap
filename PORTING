@@ -10,8 +10,8 @@ in 3-4 places in the original source, and implement typically
 
 Device driver patches
 ------------------------
-  + in the initial part of the source, after the device-specific
-    headers and prototypes have been declared, add the following
++ in the initial part of the source, after the device-specific
+  headers and prototypes have been declared, add the following
     <pre>
 	+#if defined(DEV_NETMAP) || defined(CONFIG_NETMAP) || defined(CONFIG_NETMAP_MODULE)
 	+#include <dev/netmap/if_re_netmap.h>
@@ -34,7 +34,25 @@ Device driver patches
     a macro such as NETMAP_FOO_MAIN to indicate the file where the
     new functions should be compiled in.
 
-  + after the tx/rx rings have been initialized, add a patch like this:
++ near the end of the attach routine, once the ifnet/net_device structure
+  has been filled and initialized, add
+    <pre>
+	+#ifdef DEV_NETMAP
+	+	foo_netmap_attach(adapter);
+	+#endif /* DEV_NETMAP */
+    </pre>
+  The argument is either the ifnet or the private device descriptor.  
+  This is in foo_attach() on FreeBSD, and somewhere in the path of
+  XXX foo_open() in Linux
+
++ near the code called on device removal, add
+    <pre>
+	+#ifdef DEV_NETMAP
+	+	netmap_detach(ifp);
+	+#endif /* DEV_NETMAP */
+    </pre>
+
++ after the tx/rx rings have been initialized, add a patch like this:
     <pre>
 	+#ifdef DEV_NETMAP
 	+	foo_netmap_config(priv);
@@ -43,7 +61,7 @@ Device driver patches
     The argument is typically the private device descriptor, or even
     the struct ifnet/net_device.
 
-  + in the interrupt dispatch routines, something like
++ in the interrupt dispatch routines, something like
     <pre>
 	+#ifdef DEV_NETMAP
 	+       int dummy;
