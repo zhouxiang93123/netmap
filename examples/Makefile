@@ -34,7 +34,10 @@ bridge: bridge.o nm_util.o
 libnetmap.so:	pcap.c nm_util.c
 	$(CC) $(CFLAGS) -fpic -c pcap.c
 	$(CC) $(CFLAGS) -fpic -c nm_util.c
-	$(CC) -shared -o ${.TARGET} pcap.o nm_util.o
+	$(CC) -shared -o libnetmap.so pcap.o nm_util.o
 
 clean:
 	-@rm -rf $(CLEANFILES)
+
+testlock: testlock.c
+	$(CC) $(CFLAGS) -o testlock testlock.c -lpthread -lrt
