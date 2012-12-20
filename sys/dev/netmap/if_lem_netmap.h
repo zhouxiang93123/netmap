@@ -266,6 +266,7 @@ lem_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 				len = 0;
 			}
 			ring->slot[j].len = len;
+			ring->slot[j].flags = NS_FORWARD;	/* pass up if needed */
 			bus_dmamap_sync(adapter->rxtag,
 				adapter->rx_buffer_area[l].map,
 				    BUS_DMASYNC_POSTREAD);
