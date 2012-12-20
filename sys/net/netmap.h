@@ -31,7 +31,7 @@
  */
 
 /*
- * $FreeBSD: head/sys/net/netmap.h 231198 2012-02-08 11:43:29Z luigi $
+ * $FreeBSD: head/sys/net/netmap.h 234227 2012-04-13 16:03:07Z luigi $
  * $Id$
  *
  * Definitions of constants and the structures used by the netmap
