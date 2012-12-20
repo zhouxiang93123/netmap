@@ -76,6 +76,7 @@ struct glob_arg {
 	struct mac_range src_mac;
 	int pkt_size;
 	int burst;
+	int forever;
 	int npackets;	/* total packets to send */
 	int nthreads;
 	int cpus;
@@ -842,7 +843,7 @@ receiver_body(void *data)
 	while (!targ->cancel) {
 		/* Once we started to receive packets, wait at most 1 seconds
 		   before quitting. */
-		if (poll(fds, 1, 1 * 1000) <= 0) {
+		if (poll(fds, 1, 1 * 1000) <= 0 && targ->g->forever == 0) {
 			gettimeofday(&targ->toc, NULL);
 			targ->toc.tv_sec -= 1; /* Subtract timeout time. */
 			break;
@@ -1215,7 +1216,7 @@ main(int arc, char **argv)
 	g.cpus = 1;
 
 	while ( (ch = getopt(arc, argv,
-			"a:f:n:i:t:r:l:d:s:D:S:b:c:o:p:PT:w:v")) != -1) {
+			"a:f:n:i:t:r:l:d:s:D:S:b:c:o:p:PT:w:Wv")) != -1) {
 		struct sf *fn;
 
 		switch(ch) {
@@ -1286,6 +1287,11 @@ main(int arc, char **argv)
 		case 'w':
 			wait_link = atoi(optarg);
 			break;
+
+		case 'W':
+			g.forever = 1; /* do not exit rx even with no traffic */
+			break;
+
 		case 'b':	/* burst */
 			g.burst = atoi(optarg);
 			break;
