@@ -643,11 +643,12 @@ struct mbq {
 };
 
 static void
-netmap_grab_packets(struct netmap_kring *kring, struct mbq *q)
+netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
 {
 	/* Take packets from hwcur to cur-reserved and pass them up.
 	 * In case of no buffers we give up. At the end of the loop,
 	 * the queue is drained in all cases.
+	 * XXX handle reserved
 	 */
 	u_int k = kring->ring->cur, n, lim = kring->nkr_num_slots - 1;
 	struct mbuf *m, *tail = q->tail;
@@ -656,7 +657,7 @@ netmap_grab_packets(struct netmap_kring *kring, struct mbq *q)
 		struct netmap_slot *slot = &kring->ring->slot[n];
 
 		n = (n == lim) ? 0 : n + 1;
-		if ((slot->flags & NS_FORWARD) == 0)
+		if ((slot->flags & NS_FORWARD) == 0 && !force)
 			continue;
 		if (slot->len < 14 || slot->len > NETMAP_BUF_SIZE) {
 			D("bad pkt at %d len %d", n, slot->len);
@@ -708,7 +709,7 @@ netmap_sw_to_nic(struct netmap_adapter *na)
 			dst->buf_idx = tmp.buf_idx;
 			dst->len = tmp.len;
 			dst->flags = NS_BUF_CHANGED;
-			D("out len %d buf %d from %d to %d",
+			ND("out len %d buf %d from %d to %d",
 				dst->len, dst->buf_idx,
 				kring->nr_hwcur, k1->ring->cur);
 
@@ -751,7 +752,7 @@ netmap_sync_to_host(struct netmap_adapter *na)
 	 * In case of no buffers we give up. At the end of the loop,
 	 * the queue is drained in all cases.
 	 */
-	netmap_grab_packets(kring, &q);
+	netmap_grab_packets(kring, &q, 1);
 	kring->nr_hwcur = k;
 	kring->nr_hwavail = ring->avail = lim;
 	// na->nm_lock(na->ifp, NETMAP_CORE_UNLOCK, 0);
@@ -1476,7 +1477,7 @@ flush_tx:
 				na->nm_lock(ifp, NETMAP_RX_LOCK, i);
 			if (netmap_fwd ||kring->ring->flags & NR_FORWARD) {
 				ND("forwarding some buffers up %d to %d", kring->nr_hwcur, kring->ring->cur);
-				netmap_grab_packets(kring, &q);
+				netmap_grab_packets(kring, &q, 0);
 			}
 
 			if (na->nm_rxsync(ifp, i, 0 /* no lock */))
