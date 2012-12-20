@@ -231,64 +231,6 @@ main(int argc, char **argv)
 	if (netmap_open(me+1, 0, 1))
 		return (1);
 
-#if 0 // XXX done in open
-	/* if bridging two interfaces, set promisc mode */
-	if (i != NETMAP_SW_RING) {
-		do_ioctl(me, SIOCGIFFLAGS, 0);
-		if ((me[0].if_flags & IFF_UP) == 0) {
-			D("%s is down, bringing up...", me[0].ifname);
-			me[0].if_flags |= IFF_UP;
-		}
-		me[0].if_flags |= IFF_PPROMISC;
-		do_ioctl(me, SIOCSIFFLAGS, 0);
-
-		do_ioctl(me+1, SIOCGIFFLAGS, 0);
-		me[1].if_flags |= IFF_PPROMISC;
-		do_ioctl(me+1, SIOCSIFFLAGS, 0);
-
-#ifdef __FreeBSD__
-		/* also disable checksums etc. */
-		do_ioctl(me, SIOCGIFCAP, 0);
-		me[0].if_reqcap = me[0].if_curcap;
-		me[0].if_reqcap &= ~(IFCAP_HWCSUM | IFCAP_TSO | IFCAP_TOE);
-		do_ioctl(me+0, SIOCSIFCAP, 0);
-#endif
-#ifdef linux
-		/* disable:
-		 * - generic-segmentation-offload
-		 * - tcp-segmentation-offload
-		 * - rx-checksumming
-		 * - tx-checksumming
-		 * XXX check how to set back the caps.
-		 */
-		do_ioctl(me, SIOCETHTOOL, ETHTOOL_SGSO);
-		do_ioctl(me, SIOCETHTOOL, ETHTOOL_STSO);
-		do_ioctl(me, SIOCETHTOOL, ETHTOOL_SRXCSUM);
-		do_ioctl(me, SIOCETHTOOL, ETHTOOL_STXCSUM);
-#endif /* linux */
-	}
-	do_ioctl(me+1, SIOCGIFFLAGS, 0);
-	if ((me[1].if_flags & IFF_UP) == 0) {
-		D("%s is down, bringing up...", me[1].ifname);
-		me[1].if_flags |= IFF_UP;
-	}
-	do_ioctl(me+1, SIOCSIFFLAGS, 0);
-
-#ifdef __FreeBSD__
-	do_ioctl(me+1, SIOCGIFCAP, 0);
-	me[1].if_reqcap = me[1].if_curcap;
-	me[1].if_reqcap &= ~(IFCAP_HWCSUM | IFCAP_TSO | IFCAP_TOE);
-	do_ioctl(me+1, SIOCSIFCAP, 0);
-#endif
-#ifdef linux
-	do_ioctl(me+1, SIOCETHTOOL, ETHTOOL_SGSO);
-	do_ioctl(me+1, SIOCETHTOOL, ETHTOOL_STSO);
-	do_ioctl(me+1, SIOCETHTOOL, ETHTOOL_SRXCSUM);
-	do_ioctl(me+1, SIOCETHTOOL, ETHTOOL_STXCSUM);
-#endif /* linux */
-
-#endif // XXX done in open
-
 	/* setup poll(2) variables. */
 	memset(pollfd, 0, sizeof(pollfd));
 	for (i = 0; i < 2; i++) {
