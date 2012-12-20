@@ -24,7 +24,7 @@
  */
 
 /*
- * $FreeBSD: head/sys/dev/netmap/ixgbe_netmap.h 239242 2012-08-13 19:14:45Z emaste $
+ * $FreeBSD: head/sys/dev/netmap/ixgbe_netmap.h 244514 2012-12-20 22:26:03Z luigi $
  * $Id$
  *
  * netmap modifications for ixgbe
@@ -460,8 +460,6 @@ ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	int force_update = do_lock || kring->nr_kflags & NKR_PENDINTR;
 	u_int k = ring->cur, resvd = ring->reserved;
 
-#define pmap map	/* FreeBSD 9-10 compat */
-#define ptag tag	/* FreeBSD 9-10 compat */
 	if (k > lim)
 		return netmap_ring_reinit(kring);
 
@@ -590,8 +588,7 @@ ring_reset:
 		IXGBE_RX_UNLOCK(rxr);
 	return netmap_ring_reinit(kring);
 }
-#undef pmap	/* FreeBSD 9-10 compat */
-#undef ptag	/* FreeBSD 9-10 compat */
+
 
 /*
  * The attach routine, called near the end of ixgbe_attach(),
