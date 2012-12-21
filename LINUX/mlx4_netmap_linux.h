@@ -306,7 +306,8 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			ctrl->ins_vlan = 0;	// NO
 			ctrl->fence_size = 2;	// used descriptor size in 16byte blocks
 			// request notification. XXX later report only if NS_REPORT or not too often.
-			ctrl->srcrb_flags = cpu_to_be32(MLX4_WQE_CTRL_CQ_UPDATE);
+			ctrl->srcrb_flags = cpu_to_be32(MLX4_WQE_CTRL_CQ_UPDATE |
+					MLX4_WQE_CTRL_SOLICITED);
 
 			// XXX do we need to copy the mac dst address ?
 			{
@@ -321,7 +322,7 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			tx_desc->data.addr = cpu_to_be64(paddr);
 			tx_desc->data.lkey = cpu_to_be32(priv->mdev->mr.key);
 			wmb();		// XXX why here ?
-			tx_desc->data.byte_count = cpu_to_be32(len);
+			tx_desc->data.byte_count = cpu_to_be32(len); // XXX crc corrupt ?
 			wmb();
 			ctrl->owner_opcode = cpu_to_be32(
 				MLX4_OPCODE_SEND |
@@ -576,7 +577,6 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
 			struct mlx4_en_rx_desc *rx_desc = rxr->buf + (l * rxr->stride);
-			int jj, possible_frags;
 
 			if (addr == netmap_buffer_base) /* bad buf */
 				goto ring_reset;
@@ -596,6 +596,7 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			rx_desc->data[0].lkey = cpu_to_be32(priv->mdev->mr.key);
 
 #if 0
+			int jj, possible_frags;
 			/* we only use one fragment, so the rest is padding */
 			possible_frags = (rxr->stride - sizeof(struct mlx4_en_rx_desc)) / DS_SIZE;
 			for (jj = 1; jj < possible_frags; jj++) {
