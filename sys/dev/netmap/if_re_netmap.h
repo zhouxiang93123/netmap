@@ -24,7 +24,7 @@
  */
 
 /*
- * $FreeBSD: head/sys/dev/netmap/if_re_netmap.h 231881 2012-02-17 14:09:04Z luigi $
+ * $FreeBSD: head/sys/dev/netmap/if_re_netmap.h 234225 2012-04-13 15:33:12Z luigi $
  * $Id$
  *
  * netmap support for "re"
@@ -256,6 +256,7 @@ re_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			/* XXX subtract crc */
 			total_len = (total_len < 4) ? 0 : total_len - 4;
 			kring->ring->slot[j].len = total_len;
+			kring->ring->slot[j].flags = NS_FORWARD;
 			/*  sync was in re_newbuf() */
 			bus_dmamap_sync(sc->rl_ldata.rl_rx_mtag,
 			    rxd[l].rx_dmamap, BUS_DMASYNC_POSTREAD);
