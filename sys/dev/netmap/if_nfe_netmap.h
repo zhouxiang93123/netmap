@@ -332,6 +332,7 @@ nfe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 				break;
 
 			ring->slot[j].len = len;
+			ring->slot[j].flags = NS_FORWARD;
 			bus_dmamap_sync(sc->rxq.rx_data_tag,
 				sc->rxq.data[l].rx_data_map,
 				BUS_DMASYNC_POSTREAD);
