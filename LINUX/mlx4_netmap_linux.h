@@ -526,7 +526,7 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 
 			rmb();	/* make sure data is up to date */
 			ring->slot[j].len = be32_to_cpu(cqe->byte_cnt) - rxr->fcs_del;
-
+			ring->slot[j].flags = NS_FORWARD;
 			mcq->cons_index++;
 			j = (j == lim) ? 0 : j + 1;
 		}

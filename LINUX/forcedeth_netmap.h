@@ -242,6 +242,7 @@ forcedeth_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		if (statlen & NV_RX2_AVAIL) /* still owned by the NIC */
 			break;
 		kring->ring->slot[j].len = statlen & LEN_MASK_V2; // XXX crc?
+		kring->ring->slot[j].flags = NS_FORWARD;
 		j = (j == lim) ? 0 : j + 1;
 		l = (l == lim) ? 0 : l + 1;
 	}

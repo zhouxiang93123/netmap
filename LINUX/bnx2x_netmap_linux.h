@@ -507,6 +507,7 @@ goto done; // XXX debugging
 			if (1 /* slowpath */)
 				continue;
 			ring->slot[j].len = le16_to_cpu(cqe_fp->pkt_len_or_gro_seg_len);
+			ring->slot[j].flags = NS_FORWARD;
 
 			l = NEXT_RX_IDX(l);
 			j = (j == lim) ? 0 : j + 1;
