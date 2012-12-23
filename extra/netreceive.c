@@ -41,12 +41,11 @@
 #include <string.h>
 #include <unistd.h>         /* close */
 
-#include <fcntl.h>
-#include <time.h>	/* clock_getres() */
-
 #define MAXSOCK 20
 
 #include <pthread.h>
+#include <fcntl.h>
+#include <time.h>	/* clock_getres() */
 
 static int round_to(int n, int l)
 {
@@ -102,6 +101,7 @@ rx_body(void *data)
 {
 	struct td_desc *t = data;
 	struct pollfd fds;
+	int y;
 
 	fds.fd = t->fd;
 	fds.events = POLLIN;
@@ -109,16 +109,77 @@ rx_body(void *data)
 	for (;;) {
 		if (poll(&fds, 1, -1) < 0) 
 			perror("poll on thread");
-		if (fds.revents & POLLIN) {
-			for (;;) {
-				int y = recv(t->fd, t->buf, t->buflen, MSG_DONTWAIT);
-				if (y < 0)
-					break;
-				t->count++;
-			}
+		if (!(fds.revents & POLLIN))
+			continue;
+		for (;;) {
+			y = recv(t->fd, t->buf, t->buflen, MSG_DONTWAIT);
+			if (y < 0)
+				break;
+			t->count++;
 		}
 	}
 	return NULL;
+}
+
+int
+make_threads(struct td_desc **tp, int *s, int nsock, int nthreads)
+{
+	int i, si, nt = nsock * nthreads;
+	int lb = round_to(nt * sizeof (struct td_desc *), 64);
+	int td_len = round_to(sizeof(struct td_desc), 64); // cache align
+	char *m = calloc(1, lb + td_len * nt);
+
+	printf("td len %d -> %d\n", (int)sizeof(struct td_desc) , td_len);
+	/* pointers plus the structs */
+	if (m == NULL) {
+		perror("no room for pointers!");
+		exit(1);
+	}
+	tp = (struct td_desc **)m;
+	m += lb;	/* skip the pointers */
+	for (si = i = 0; i < nt; i++, m += td_len) {
+		tp[i] = (struct td_desc *)m;
+		tp[i]->fd = s[si];
+		if (++si == nsock)
+			si = 0;
+		if (pthread_create(&tp[i]->td_id, NULL, rx_body, tp[i])) {
+			perror("unable to create thread");
+			exit(1);
+		}
+	}
+}
+
+int
+main_thread(struct td_desc **tp, int nsock, int nthreads)
+{
+	uint64_t c0, c1;
+	struct timespec now, then, delta;
+	/* now the parent collects and prints results */
+	c0 = c1 = 0;
+	clock_gettime(CLOCK_REALTIME, &then);
+	fprintf(stderr, "start at %ld.%09ld\n", then.tv_sec, then.tv_nsec);
+	while (1) {
+		int i, nt = nsock * nthreads;
+		int64_t dn;
+		uint64_t pps;
+
+		if (poll(NULL, 0, 500) < 0) 
+			perror("poll");
+		c0 = 0;
+		for (i = 0; i < nt; i++) {
+			c0 += tp[i]->count;
+		}
+		dn = c0 - c1;
+		clock_gettime(CLOCK_REALTIME, &now);
+		delta = now;
+		timespec_sub(&delta, &then);
+		then = now;
+		pps = dn;
+		pps = (pps * 1000000000) / (delta.tv_sec*1000000000 + delta.tv_nsec + 1);
+		fprintf(stderr, "%d pkts in %ld.%09ld ns %ld pps\n",
+			(int)dn, delta.tv_sec, delta.tv_nsec, (long)pps);
+		c1 = c0;
+	}
 }
 
 int
@@ -127,16 +188,12 @@ main(int argc, char *argv[])
 	struct addrinfo hints, *res, *res0;
 	char *dummy, *packet;
 	int port;
-	int error, v;
+	int error, v, nthreads = 1;
+	struct td_desc **tp;
 	const char *cause = NULL;
 	int s[MAXSOCK];
 	int nsock;
-	int nthreads = 1;
 
-	struct td_desc **tp;
-
-	int td_len = round_to(sizeof(struct td_desc), 64); // cache align
-	printf("td len %d -> %d\n", (int)sizeof(struct td_desc) , td_len);
 	if (argc < 2)
 		usage();
 
@@ -199,61 +256,9 @@ main(int argc, char *argv[])
 	printf("netreceive %d sockets x %d threads listening on UDP port %d\n",
 		nsock, nthreads, (u_short)port);
 
-	{
-		int nt = nsock * nthreads;
-		int lb = round_to(nt * sizeof (struct td_desc *), 64);
-		char *m = calloc(1, lb + td_len * nt);
-		int i, si;
-		/* pointers plus the structs */
-		if (m == NULL) {
-			perror("no room for pointers!");
-			exit(1);
-		}
-		tp = (struct td_desc **)m;
-		m += lb;	/* skip the pointers */
-		for (si = i = 0; i < nt; i++, m += td_len) {
-			tp[i] = (struct td_desc *)m;
-			tp[i]->fd = s[si];
-			if (++si == nsock)
-				si = 0;
-			if (pthread_create(&tp[i]->td_id, NULL, rx_body, tp[i])) {
-				perror("unable to create thread");
-				exit(1);
-			}
-		}
-	}
+	make_threads(tp, s, nsock, nthreads);
+	main_thread(tp, nsock, nthreads);
 
-    {
-	uint64_t c0, c1;
-	struct timespec now, then, delta;
-	/* now the parent collects and prints results */
-	c0 = c1 = 0;
-	clock_gettime(CLOCK_REALTIME, &then);
-	fprintf(stderr, "start at %ld.%09ld\n", then.tv_sec, then.tv_nsec);
-	while (1) {
-		int i, nt = nsock * nthreads;
-		int64_t dn;
-		uint64_t pps;
-
-		if (poll(NULL, 0, 500) < 0) 
-			perror("poll");
-		c0 = 0;
-		for (i = 0; i < nt; i++) {
-			c0 += tp[i]->count;
-		}
-		dn = c0 - c1;
-		clock_gettime(CLOCK_REALTIME, &now);
-		delta = now;
-		timespec_sub(&delta, &then);
-		then = now;
-		pps = dn;
-		pps = (pps * 1000000000) / (delta.tv_sec*1000000000 + delta.tv_nsec + 1);
-		fprintf(stderr, "%d pkts in %ld.%09ld ns %ld pps\n",
-			(int)dn, delta.tv_sec, delta.tv_nsec, (long)pps);
-		c1 = c0;
-	}
-    }
-	
 	/*NOTREACHED*/
 	freeaddrinfo(res0);
 }
