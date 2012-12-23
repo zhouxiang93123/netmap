@@ -20,7 +20,7 @@ LDFLAGS += -lrt	# on linux
 all: $(PROGS)
 
 testpcap: pcap.c libnetmap.so nm_util.o
-	$(CC) $(CFLAGS) -DTEST -o testpcap pcap.c nm_util.o $(LDFLAGS)
+	$(CC) $(CFLAGS) -DTEST -o testpcap pcap.c nm_util.o $(LDFLAGS) -lpcap
 
 kern_test: testmod/kern_test.c
 
