@@ -165,10 +165,6 @@ netmap_open(struct my_ring *me, int ringid, int promisc)
 		if (promisc) {
 			me[0].if_flags |= IFF_PPROMISC;
 			nm_do_ioctl(me, SIOCSIFFLAGS, 0);
-
-			nm_do_ioctl(me+1, SIOCGIFFLAGS, 0);
-			me[1].if_flags |= IFF_PPROMISC;
-			nm_do_ioctl(me+1, SIOCSIFFLAGS, 0);
 		}
 
 #ifdef __FreeBSD__
