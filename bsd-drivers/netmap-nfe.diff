@@ -1,0 +1,85 @@
+Index: /home/luigi/FreeBSD/head/sys/dev/nfe/if_nfe.c
+===================================================================
+--- /home/luigi/FreeBSD/head/sys/dev/nfe/if_nfe.c	(revision 244673)
++++ /home/luigi/FreeBSD/head/sys/dev/nfe/if_nfe.c	(working copy)
+@@ -266,6 +266,9 @@
+ 	{0, 0, NULL}
+ };
+ 
++#ifdef DEV_NETMAP
++#include <dev/netmap/if_nfe_netmap.h>
++#endif /* DEV_NETMAP */
+ 
+ /* Probe for supported hardware ID's */
+ static int
+@@ -642,7 +645,11 @@
+ 		ether_ifdetach(ifp);
+ 		goto fail;
+ 	}
++#ifdef DEV_NETMAP
++	nfe_netmap_attach(sc);
++#endif /* DEV_NETMAP */
+ 
++
+ fail:
+ 	if (error)
+ 		nfe_detach(dev);
+@@ -675,6 +682,9 @@
+ 		callout_drain(&sc->nfe_stat_ch);
+ 		ether_ifdetach(ifp);
+ 	}
++#ifdef DEV_NETMAP
++	netmap_detach(ifp);
++#endif /* DEV_NETMAP */
+ 
+ 	if (ifp) {
+ 		/* restore ethernet address */
+@@ -1296,6 +1306,10 @@
+ 		descsize = sizeof (struct nfe_desc32);
+ 	}
+ 	bzero(desc, descsize * NFE_RX_RING_COUNT);
++#ifdef DEV_NETMAP
++	if (nfe_netmap_init_buffers(sc)) /* both tx and rx init */
++		return 0;
++#endif /* DEV_NETMAP */
+ 	for (i = 0; i < NFE_RX_RING_COUNT; i++) {
+ 		if (nfe_newbuf(sc, i) != 0)
+ 			return (ENOBUFS);
+@@ -2097,6 +2111,18 @@
+ 	bus_dmamap_sync(sc->rxq.rx_desc_tag, sc->rxq.rx_desc_map,
+ 	    BUS_DMASYNC_POSTREAD);
+ 
++#ifdef DEV_NETMAP
++	if (ifp->if_capenable & IFCAP_NETMAP) {
++		struct netmap_adapter *na = NA(ifp);
++
++		if ((na->rx_rings[0].nr_kflags & NKR_PENDINTR) == 0)
++			D("rx intr cur %d", sc->rxq.cur);
++		na->rx_rings[0].nr_kflags |= NKR_PENDINTR;
++		selwakeuppri(&na->rx_rings[0].si, PI_NET);
++		return (0);
++	}
++#endif /* DEV_NETMAP */
++
+ 	for (prog = 0;;NFE_INC(sc->rxq.cur, NFE_RX_RING_COUNT), vtag = 0) {
+ 		if (count <= 0)
+ 			break;
+@@ -2324,7 +2350,18 @@
+ 
+ 	bus_dmamap_sync(sc->txq.tx_desc_tag, sc->txq.tx_desc_map,
+ 	    BUS_DMASYNC_POSTREAD);
++#ifdef DEV_NETMAP
++        if (ifp->if_capenable & IFCAP_NETMAP) {
++		struct netmap_adapter *na = NA(ifp);
++//		if ((na->tx_rings[0].nr_kflags & NKR_PENDINTR) == 0)
++//			D("tx intr prod %d cons %d", sc->txq.next, sc->txq.cur);
++//		na->tx_rings[0].nr_kflags |= NKR_PENDINTR;
+ 
++		selwakeuppri(&na->tx_rings[0].si, PI_NET);
++		return;
++	}
++#endif /* DEV_NETMAP */
++
+ 	prog = 0;
+ 	for (cons = sc->txq.next; cons != sc->txq.cur;
+ 	    NFE_INC(cons, NFE_TX_RING_COUNT)) {
