@@ -365,7 +365,7 @@ sfxge_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	j = netmap_idx_n2k(kring, l);
 
 	if (netmap_no_pendintr || force_update) {
-		uint16_t flags = kring->nkr_slot_flags;
+		uint16_t slot_flags = kring->nkr_slot_flags;
 
 		// see sfxge_rx_qcomplete()
 	
@@ -373,7 +373,7 @@ sfxge_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			struct sfxge_rx_sw_desc *rx_desc = &rxq->queue[l];
 			ring->slot[j].len =
 				rx_desc->size - sc->rx_prefix_size;
-			ring->slot[j].flags = flags;
+			ring->slot[j].flags = slot_flags;
 //			bus_dmamap_sync(rxq->ptag,
 //			    rxq->rx_buffers[l].pmap, BUS_DMASYNC_POSTREAD);
 			j = (j == lim) ? 0 : j + 1;

@@ -340,7 +340,7 @@ cxgbe_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 		if ((staterr & IXGBE_RXD_STAT_DD) == 0)
 			break;
 		ring->slot[j].len = le16toh(curr->wb.upper.length);
-		ring->slot[j].flags = NS_FORWARD;
+		ring->slot[j].flags = kring->nkr_slot_flags;
 		bus_dmamap_sync(rxr->ptag,
 			rxr->rx_buffers[j].pmap, BUS_DMASYNC_POSTREAD);
 		j = (j == lim) ? 0 : j + 1;
