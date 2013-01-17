@@ -316,6 +316,7 @@ nfe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	j = netmap_idx_n2k(kring, l);
 	if (netmap_no_pendintr || force_update) {
 		uint16_t flags, len;
+		uint16_t slot_flags = kring->nkr_slot_flags;
 
 		for (n = 0; ; n++) {
 			if (sc->nfe_flags & NFE_40BIT_ADDR) {
@@ -332,7 +333,7 @@ nfe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 				break;
 
 			ring->slot[j].len = len;
-			ring->slot[j].flags = NS_FORWARD;
+			ring->slot[j].flags = slot_flags;
 			bus_dmamap_sync(sc->rxq.rx_data_tag,
 				sc->rxq.data[l].rx_data_map,
 				BUS_DMASYNC_POSTREAD);

@@ -251,7 +251,7 @@ bge_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 			cur_rx = &sc->bge_ldata.bge_rx_return_ring[l];
 			len = cur_rx->bge_len - ETHER_CRC_LEN;
 			kring->ring->slot[j].len = len;
-			kring->ring->slot[j].flags = NS_FORWARD;
+			kring->ring->slot[j].flags = kring->nkr_slot_flags;
 			/*  sync was in bge_newbuf() */
 			bus_dmamap_sync(sc->bge_cdata.bge_rx_mtag,
 				sc->bge_cdata.bge_rx_std_dmamap[l],

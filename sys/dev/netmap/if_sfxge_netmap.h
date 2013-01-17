@@ -365,13 +365,15 @@ sfxge_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	j = netmap_idx_n2k(kring, l);
 
 	if (netmap_no_pendintr || force_update) {
+		uint16_t flags = kring->nkr_slot_flags;
+
 		// see sfxge_rx_qcomplete()
 	
 		for (n = 0; l != rxq->pending ; n++) {
 			struct sfxge_rx_sw_desc *rx_desc = &rxq->queue[l];
 			ring->slot[j].len =
 				rx_desc->size - sc->rx_prefix_size;
-			ring->slot[j].flags = NS_FORWARD;
+			ring->slot[j].flags = flags;
 //			bus_dmamap_sync(rxq->ptag,
 //			    rxq->rx_buffers[l].pmap, BUS_DMASYNC_POSTREAD);
 			j = (j == lim) ? 0 : j + 1;

@@ -482,6 +482,7 @@ ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 * rxr->next_to_check is set to 0 on a ring reinit
 	 */
 	if (netmap_no_pendintr || force_update) {
+		uint16_t flags = kring->nkr_slot_flags;
 		int crclen = ix_crcstrip ? 0 : 4;
 
 		l = rxr->next_to_check;
@@ -494,7 +495,7 @@ ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			if ((staterr & IXGBE_RXD_STAT_DD) == 0)
 				break;
 			ring->slot[j].len = le16toh(curr->wb.upper.length) - crclen;
-			ring->slot[j].flags = NS_FORWARD;
+			ring->slot[j].flags = flags;
 			bus_dmamap_sync(rxr->ptag,
 			    rxr->rx_buffers[l].pmap, BUS_DMASYNC_POSTREAD);
 			j = (j == lim) ? 0 : j + 1;

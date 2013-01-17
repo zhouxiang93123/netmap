@@ -125,13 +125,17 @@
 struct netmap_slot {
 	uint32_t buf_idx; /* buffer index */
 	uint16_t len;	/* packet length, to be copied to/from the hw ring */
-	uint16_t flags;	/* buf changed, etc. */
+	uint8_t	 flags;	/* buf changed, etc. */
 #define	NS_BUF_CHANGED	0x0001	/* must resync the map, buffer changed */
 #define	NS_REPORT	0x0002	/* ask the hardware to report results
 				 * e.g. by generating an interrupt
 				 */
 #define	NS_FORWARD	0x0004	/* pass packet to the other endpoint
 				 * (host stack or device
+				 */
+	uint8_t	  port;		/* if non-zero, used as destination
+				 * port in VALE instead of doing the
+				 * MAC lookup.
 				 */
 };
 

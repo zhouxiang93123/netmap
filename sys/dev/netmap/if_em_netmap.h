@@ -292,6 +292,7 @@ em_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	l = rxr->next_to_check;
 	j = netmap_idx_n2k(kring, l);
 	if (netmap_no_pendintr || force_update) {
+		uint16_t flags = kring->nkr_slot_flags;
 		for (n = 0; ; n++) {
 			struct e1000_rx_desc *curr = &rxr->rx_base[l];
 			uint32_t staterr = le32toh(curr->status);
@@ -299,7 +300,7 @@ em_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			if ((staterr & E1000_RXD_STAT_DD) == 0)
 				break;
 			ring->slot[j].len = le16toh(curr->length);
-			ring->slot[j].flags = NS_FORWARD;
+			ring->slot[j].flags = flags;
 			bus_dmamap_sync(rxr->rxtag, rxr->rx_buffers[l].map,
 				BUS_DMASYNC_POSTREAD);
 			j = (j == lim) ? 0 : j + 1;
