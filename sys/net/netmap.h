@@ -113,30 +113,42 @@
  * In the kernel, buffers do not necessarily need to be contiguous,
  * and the virtual and physical addresses are derived through
  * a lookup table.
- * To associate a different buffer to a slot, applications must
- * write the new index in buf_idx, and set NS_BUF_CHANGED flag to
- * make sure that the kernel updates the hardware ring as needed.
  *
- * Normally the driver is not requested to report the result of
- * transmissions (this can dramatically speed up operation).
- * However the user may request to report completion by setting
- * NS_REPORT.
+ * struct netmap_slot:
+ *
+ * buf_idx	is the index of the buffer associated to the slot.
+ * len		is the length of the payload
+ * NS_BUF_CHANGED	must be set whenever userspace wants
+ *		to change buf_idx (it might be necessary to
+ *		reprogram the NIC slot)
+ * NS_REPORT	must be set if we want the NIC to generate an interrupt
+ *		when this slot is used. Leaving it to 0 improves
+ *		performance.
+ * NS_FORWARD	if set on a receive ring, and the device is in
+ *		transparent mode, buffers released with the flag set
+ *		will be forwarded to the 'other' side (host stack
+ *		or NIC, respectively) on the next select() or ioctl()
+ * NS_NO_LEARN	on a VALE switch, do not 'learn' the source port for
+ *		this packet.
+ * NS_PORT_MASK	the high 8 bits of the flag, if not zero, indicate the
+ *		destination port for the VALE switch, overriding
+ *		the lookup table.
  */
+
 struct netmap_slot {
 	uint32_t buf_idx; /* buffer index */
 	uint16_t len;	/* packet length, to be copied to/from the hw ring */
-	uint8_t	 flags;	/* buf changed, etc. */
+	uint16_t flags;	/* buf changed, etc. */
 #define	NS_BUF_CHANGED	0x0001	/* must resync the map, buffer changed */
 #define	NS_REPORT	0x0002	/* ask the hardware to report results
 				 * e.g. by generating an interrupt
 				 */
 #define	NS_FORWARD	0x0004	/* pass packet to the other endpoint
-				 * (host stack or device
+				 * (host stack or device)
 				 */
-	uint8_t	  port;		/* if non-zero, used as destination
-				 * port in VALE instead of doing the
-				 * MAC lookup.
-				 */
+#define	NS_NO_LEARN	0x0008
+#define	NS_PORT_SHIFT	8
+#define	NS_PORT_MASK	(0xff << NS_PORT_SHIFT)
 };
 
 /*
