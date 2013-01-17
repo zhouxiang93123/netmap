@@ -483,6 +483,7 @@ ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 */
 	if (netmap_no_pendintr || force_update) {
 		int crclen = ix_crcstrip ? 0 : 4;
+
 		l = rxr->next_to_check;
 		j = netmap_idx_n2k(kring, l);
 
