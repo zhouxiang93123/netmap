@@ -125,8 +125,8 @@ int netmap_copy = 0;	/* debugging, copy content */
 SYSCTL_INT(_dev_netmap, OID_AUTO, drop, CTLFLAG_RW, &netmap_drop, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, flags, CTLFLAG_RW, &netmap_flags, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, copy, CTLFLAG_RW, &netmap_copy, 0 , "");
-int netmap_fwd = 1;	/* force forward up */
-SYSCTL_INT(_dev_netmap, OID_AUTO, fwd, CTLFLAG_RW, &netmap_fwd, 0 , "force forward");
+int netmap_fwd = 0;	/* force transparent mode */
+SYSCTL_INT(_dev_netmap, OID_AUTO, fwd, CTLFLAG_RW, &netmap_fwd, 0 , "");
 
 #ifdef NM_BRIDGE /* support for netmap bridge */
 
@@ -789,7 +789,7 @@ netmap_sync_from_host(struct netmap_adapter *na, struct thread *td, void *pwait)
 	/* skip past packets that userspace has released */
 	j = kring->nr_hwcur;
 	if (resvd > 0) {
-		if (resvd + ring->avail >= lim + 1) { // XXX lim+1 ?
+		if (resvd + ring->avail >= lim + 1) {
 			D("XXX invalid reserve/avail %d %d", resvd, ring->avail);
 			ring->reserved = resvd = 0; // XXX panic...
 		}
@@ -1335,7 +1335,7 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	}
 
 #if 1 // transparent
-	/* if we are in transparent mode, check the host rx ring */
+	/* if we are in transparent mode, check also the host rx ring */
 	kring = &na->rx_rings[lim_rx];
 	if ( (priv->np_qlast == NETMAP_HW_RING) // XXX check_all
 			&& want_rx

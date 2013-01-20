@@ -122,7 +122,7 @@ struct netmap_adapter;
  *
  * For received packets, slot->flags is set to nkr_slot_flags
  * so we can provide a proper initial value (e.g. set NS_FORWARD
- * when operating in 'transparent' mode.
+ * when operating in 'transparent' mode).
  */
 struct netmap_kring {
 	struct netmap_ring *ring;
