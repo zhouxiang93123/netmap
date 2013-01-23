@@ -509,6 +509,21 @@ test_bcopy(struct targ *t)
 		len = sizeof(struct glob_arg);
 	D("bcopying %d bytes", len);
         for (m = 0; m < t->g->m_cycles; m++) {
+		bcopy(t->g, (void *)&huge[m & HU], len);
+		t->count+=1;
+        }
+}
+
+void
+test_builtin_memcpy(struct targ *t)
+{
+        int64_t m;
+	int len = t->g->arg;
+
+	if (len > (int)sizeof(struct glob_arg))
+		len = sizeof(struct glob_arg);
+	D("bcopying %d bytes", len);
+        for (m = 0; m < t->g->m_cycles; m++) {
 		__builtin_memcpy(t->g, (void *)&huge[m & HU], len);
 		t->count+=1;
         }
@@ -543,6 +558,7 @@ struct entry tests[] = {
 	{ test_gettimeofday, "gettimeofday", 1, 1000000 },
 	{ test_getpid, "getpid", 1, 1000000 },
 	{ test_bcopy, "bcopy", 1000, 100000000 },
+	{ test_builtin_memcpy, "__builtin_memcpy", 1000, 100000000 },
 	{ test_memcpy, "memcpy", 1000, 100000000 },
 	{ test_fastcopy, "fastcopy", 1000, 100000000 },
 	{ test_add, "add", ONE_MILLION, 100000000 },
