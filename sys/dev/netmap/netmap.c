@@ -663,14 +663,11 @@ netmap_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
  * into mbufs and we are done. The host --> NIC side is slightly
  * harder because there might not be room in the tx ring so it
  * might take a while before releasing the buffer.
- *
- * netmap_send_up() takes a list of buffers and passes them to the
- * host stack as coming from a given interface
- *
- * netmap_grab_packets() puts a copy of the buffers marked NS_FORWARD
- * into a list of mbufs
  */
 
+/*
+ * pass a chain of buffers to the host stack as coming from 'dst'
+ */
 static void
 netmap_send_up(struct ifnet *dst, struct mbuf *head)
 {
@@ -689,8 +686,13 @@ netmap_send_up(struct ifnet *dst, struct mbuf *head)
 struct mbq {
 	struct mbuf *head;
 	struct mbuf *tail;
+	int count;
 };
 
+/*
+ * put a copy of the buffers marked NS_FORWARD into an mbuf chain.
+ * Run from hwcur to cur - reserved
+ */
 static void
 netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
 {
@@ -699,9 +701,12 @@ netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
 	 * the queue is drained in all cases.
 	 * XXX handle reserved
 	 */
-	u_int k = kring->ring->cur, n, lim = kring->nkr_num_slots - 1;
+	int k = kring->ring->cur - kring->ring->reserved;
+	u_int n, lim = kring->nkr_num_slots - 1;
 	struct mbuf *m, *tail = q->tail;
 
+	if (k < 0)
+		k = k + kring->nkr_num_slots;
 	for (n = kring->nr_hwcur; n != k;) {
 		struct netmap_slot *slot = &kring->ring->slot[n];
 
@@ -722,6 +727,7 @@ netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
 		else
 			q->head = m;
 		tail = m;
+		q->count++;
 		m->m_nextpkt = NULL;
 	}
 	q->tail = tail;
@@ -733,6 +739,7 @@ netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
  * to be sent down. We scan the tx rings, which have just been
  * flushed so nr_hwcur == cur. Pushing packets down means
  * increment cur and decrement avail.
+ * XXX to be verified
  */
 static void
 netmap_sw_to_nic(struct netmap_adapter *na)
@@ -1339,7 +1346,7 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	struct netmap_kring *kring;
 	u_int core_lock, i, check_all, want_tx, want_rx, revents = 0;
 	u_int lim_tx, lim_rx, host_forwarded = 0;
-	struct mbq q = { NULL, NULL };
+	struct mbq q = { NULL, NULL, 0 };
 	enum {NO_CL, NEED_CL, LOCKED_CL }; /* see below */
 	void *pwait = dev;	/* linux compatibility */
 
@@ -1387,7 +1394,6 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 		return (revents);
 	}
 
-#if 1 // transparent
 	/* if we are in transparent mode, check also the host rx ring */
 	kring = &na->rx_rings[lim_rx];
 	if ( (priv->np_qlast == NETMAP_HW_RING) // XXX check_all
@@ -1398,7 +1404,6 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 		if (kring->ring->avail > 0)
 			revents |= want_rx;
 	}
-#endif // transparent
 
 	/*
 	 * check_all is set if the card has more than one queue and
@@ -1529,8 +1534,9 @@ flush_tx:
 			if (na->separate_locks)
 				na->nm_lock(ifp, NETMAP_RX_LOCK, i);
 			if (netmap_fwd ||kring->ring->flags & NR_FORWARD) {
-				ND("forwarding some buffers up %d to %d", kring->nr_hwcur, kring->ring->cur);
-				netmap_grab_packets(kring, &q, 0);
+				ND(10, "forwarding some buffers up %d to %d",
+				    kring->nr_hwcur, kring->ring->cur);
+				netmap_grab_packets(kring, &q, netmap_fwd);
 			}
 
 			if (na->nm_rxsync(ifp, i, 0 /* no lock */))
@@ -1555,7 +1561,7 @@ flush_tx:
 			selrecord(td, &na->rx_si);
 	}
 
-#if 1 /* forward host to the netmap ring */
+	/* forward host to the netmap ring */
 	kring = &na->rx_rings[lim_rx];
 	if (kring->nr_hwavail > 0)
 		ND("host rx %d has %d packets", lim_rx, kring->nr_hwavail);
@@ -1567,11 +1573,10 @@ flush_tx:
 			core_lock = LOCKED_CL;
 		}
 		netmap_sw_to_nic(na);
-		host_forwarded = 1;
+		host_forwarded = 1; /* prevent another pass */
 		want_rx = 0;
 		goto flush_tx;
 	}
-#endif
 
 	if (core_lock == LOCKED_CL)
 		na->nm_lock(ifp, NETMAP_CORE_UNLOCK, 0);
