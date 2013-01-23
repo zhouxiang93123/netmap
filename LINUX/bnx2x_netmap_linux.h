@@ -72,12 +72,11 @@ For each Class Of Service (COS) we have NUM_TX_BD slots in total.
 int bnx2x_netmap_config(struct SOFTC_T *adapter);
 
 #ifdef NETMAP_BNX2X_MAIN
-#warning --------------- compiling main code ----------------
 static inline void
 nm_pkt_dump(int i, char *buf, int len)
 {
     uint8_t *s = buf+6, *d = buf;
-    ND(10, "%d len %4d %02x:%02x:%02x:%02x:%02x:%02x -> %02x:%02x:%02x:%02x:%02x:%02x",
+    RD(10, "%d len %4d %02x:%02x:%02x:%02x:%02x:%02x -> %02x:%02x:%02x:%02x:%02x:%02x",
 		i,
 		len,
 		s[0], s[1], s[2], s[3], s[4], s[5],
@@ -252,7 +251,7 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 */
 	j = kring->nr_hwcur;
 	if (j > lim) {
-		D("q %d nwcur overflow %d", j);
+		D("q %d nwcur overflow slot %d", ring_nr, j);
 		error = EINVAL;
 		goto err;
 	}
@@ -548,7 +547,7 @@ goto done; // XXX debugging
 			 * address in the NIC ring, but other drivers
 			 * may not have this requirement.
 			 */
-#if 0 // XXX
+#if 0 // XXX receive code still incomplete
 			struct netmap_slot *slot = &ring->slot[j];
 			union ixgbe_adv_rx_desc *curr = IXGBE_RX_DESC_ADV(rxr, l);
 			uint64_t paddr;
@@ -648,6 +647,7 @@ bnx2x_netmap_config(struct SOFTC_T *bp)
 		for (j = 0; j < na->num_rx_desc; j++) {
 			uint64_t paddr;
 			void *addr = PNMB(slot + j, &paddr);
+			// XXX to be completed
 		}
 	}
 	/* now use regular interrupts */
