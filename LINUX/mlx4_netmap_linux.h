@@ -70,7 +70,6 @@ int mlx4_netmap_tx_config(struct SOFTC_T *priv, int ring_nr);
 int mlx4_tx_desc_dump(struct mlx4_en_tx_desc *tx_desc);
 
 #ifdef NETMAP_MLX4_MAIN
-#warning --------------- compiling main code ----------------
 static inline void
 nm_pkt_dump(int i, char *buf, int len)
 {
@@ -413,8 +412,6 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			ring_nr, txr->cons, txr->prod, kring->nr_hwcur, ring->cur, kring->nr_hwavail, n);
 	}
 	if (kring->nr_hwavail == 0) {
-		static int full_ctr;
-		ND(5, "txq %d full, arm cq (%d)", ring_nr, full_ctr++);
 		mlx4_en_arm_cq(priv, cq);
 	}
     }
@@ -713,9 +710,9 @@ mlx4_netmap_rx_config(struct SOFTC_T *priv, int ring_nr)
 	/* then fill the slots with our entries */
 	for (i = 0; i < kring->nkr_num_slots; i++) {
 		uint64_t paddr;
-		void *addr = PNMB(slot + i, &paddr);
 		struct mlx4_en_rx_desc *rx_desc = rxr->buf + (i * rxr->stride);
 
+		PNMB(slot + i, &paddr);
 		// see mlx4_en_prepare_rx_desc() and mlx4_en_alloc_frag()
 		rx_desc->data[0].addr = cpu_to_be64(paddr);
 		rx_desc->data[0].byte_count = cpu_to_be32(NETMAP_BUF_SIZE);
