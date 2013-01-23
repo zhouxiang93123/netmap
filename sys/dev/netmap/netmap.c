@@ -120,13 +120,13 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, no_pendintr,
 
 int netmap_drop = 0;	/* debugging */
 int netmap_flags = 0;	/* debug flags */
+int netmap_fwd = 0;	/* force transparent mode */
 int netmap_copy = 0;	/* debugging, copy content */
 
 SYSCTL_INT(_dev_netmap, OID_AUTO, drop, CTLFLAG_RW, &netmap_drop, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, flags, CTLFLAG_RW, &netmap_flags, 0 , "");
-SYSCTL_INT(_dev_netmap, OID_AUTO, copy, CTLFLAG_RW, &netmap_copy, 0 , "");
-int netmap_fwd = 0;	/* force transparent mode */
 SYSCTL_INT(_dev_netmap, OID_AUTO, fwd, CTLFLAG_RW, &netmap_fwd, 0 , "");
+SYSCTL_INT(_dev_netmap, OID_AUTO, copy, CTLFLAG_RW, &netmap_copy, 0 , "");
 
 #ifdef NM_BRIDGE /* support for netmap bridge */
 
@@ -662,7 +662,7 @@ netmap_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
  * The transfer NIC --> host is relatively easy, just encapsulate
  * into mbufs and we are done. The host --> NIC side is slightly
  * harder because there might not be room in the tx ring so it
- * might take a while before releasing it.
+ * might take a while before releasing the buffer.
  *
  * netmap_send_up() takes a list of buffers and passes them to the
  * host stack as coming from a given interface
@@ -779,8 +779,7 @@ netmap_sw_to_nic(struct netmap_adapter *na)
  * netmap_sync_to_host() passes packets up. We are called from a
  * system call in user process context, and the only contention
  * can be among multiple user threads erroneously calling
- * this routine concurrently. In principle we should not even
- * need to lock.
+ * this routine concurrently.
  */
 static void
 netmap_sync_to_host(struct netmap_adapter *na)
@@ -1729,7 +1728,8 @@ netmap_start(struct ifnet *ifp, struct mbuf *m)
 		goto done;	/* no space */
 	}
 	if (len > NETMAP_BUF_SIZE) {
-		D("drop packet size %d > %d", len, NETMAP_BUF_SIZE);
+		D("%s from_host, drop packet size %d > %d", ifp->if_xname,
+			len, NETMAP_BUF_SIZE);
 		goto done;	/* too long for us */
 	}
 
@@ -1740,7 +1740,7 @@ netmap_start(struct ifnet *ifp, struct mbuf *m)
 	slot = &kring->ring->slot[i];
 	m_copydata(m, 0, len, NMB(slot));
 	slot->len = len;
-	slot->flags |= NS_FORWARD;
+	slot->flags = kring->nkr_slot_flags;
 	kring->nr_hwavail++;
 	if (netmap_verbose  & NM_VERB_HOST)
 		D("wake up host ring %s %d", na->ifp->if_xname, na->num_rx_rings);
