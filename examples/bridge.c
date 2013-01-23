@@ -66,7 +66,7 @@ process_rings(struct netmap_ring *rxring, struct netmap_ring *txring,
 		if (rs->len < 14 || rs->len > 2048)
 			D("wrong len %d rx[%d] -> tx[%d]", rs->len, j, k);
 		else if (verbose > 1)
-			D("send len %d rx[%d] -> tx[%d]", rs->len, j, k);
+			D("%s send len %d rx[%d] -> tx[%d]", msg, rs->len, j, k);
 		ts->len = rs->len;
 
 		/* report the buffer change. */
@@ -80,7 +80,7 @@ process_rings(struct netmap_ring *rxring, struct netmap_ring *txring,
 	rxring->cur = j;
 	txring->cur = k;
 	if (verbose && m > 0)
-		D("sent %d packets to %p", m, txring);
+		D("%s sent %d packets to %p", msg, m, txring);
 
 	return (m);
 }
