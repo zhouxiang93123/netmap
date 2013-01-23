@@ -160,7 +160,7 @@ struct glob_arg {
 	struct  {
 		uint32_t	ctr[1024];
 	} v __attribute__ ((aligned(256) ));
-	int m_cycles;	/* million cycles */
+	int64_t m_cycles;	/* total cycles */
 	int nthreads;
 	int cpus;
 	int privs;	// 1 if has IO privileges
@@ -272,7 +272,7 @@ td_body(void *data)
 #endif
 	{
 		/* main loop.*/
-		D("testing %d cycles", t->g->m_cycles);
+		D("testing %ld cycles", t->g->m_cycles);
 		gettimeofday(&t->tic, NULL);
 		t->g->fn(t);
 		gettimeofday(&t->toc, NULL);
@@ -284,7 +284,7 @@ td_body(void *data)
 void
 test_sel(struct targ *t)
 {
-	int m;
+	int64_t m;
 	for (m = 0; m < t->g->m_cycles; m++) {
 		fd_set r;
 		struct timeval to = { 0, t->g->arg};
@@ -299,7 +299,7 @@ test_sel(struct targ *t)
 void
 test_poll(struct targ *t)
 {
-	int m, ms = t->g->arg/1000;
+	int64_t m, ms = t->g->arg/1000;
 	for (m = 0; m < t->g->m_cycles; m++) {
 		struct pollfd x;
 		x.fd = 0;
@@ -312,7 +312,7 @@ test_poll(struct targ *t)
 void
 test_usleep(struct targ *t)
 {
-	int m;
+	int64_t m;
 	for (m = 0; m < t->g->m_cycles; m++) {
 		usleep(t->g->arg);
 		t->count++;
@@ -322,7 +322,7 @@ test_usleep(struct targ *t)
 void
 test_cli(struct targ *t)
 {
-        int m, i;
+        int64_t m, i;
 	if (!t->g->privs) {	
 		D("%s", "privileged instructions not available");
 		return;
@@ -340,7 +340,7 @@ test_cli(struct targ *t)
 void
 test_nop(struct targ *t)
 {
-        int m, i;
+        int64_t m, i;
         for (m = 0; m < t->g->m_cycles; m++) {
 		for (i = 0; i < ONE_MILLION; i++) {
 			__asm __volatile("nop;");
@@ -354,7 +354,7 @@ test_nop(struct targ *t)
 void
 test_rdtsc1(struct targ *t)
 {
-        int m, i;
+        int64_t m, i;
 	uint64_t v;
 	(void)v;
         for (m = 0; m < t->g->m_cycles; m++) {
@@ -368,7 +368,7 @@ test_rdtsc1(struct targ *t)
 void
 test_rdtsc(struct targ *t)
 {
-        int m, i;
+        int64_t m, i;
 	volatile uint64_t v;
 	(void)v;
         for (m = 0; m < t->g->m_cycles; m++) {
@@ -382,7 +382,7 @@ test_rdtsc(struct targ *t)
 void
 test_add(struct targ *t)
 {
-        int m, i;
+        int64_t m, i;
         for (m = 0; m < t->g->m_cycles; m++) {
 		for (i = 0; i < ONE_MILLION; i++) {
                 	t->glob_ctr[0] ++;
@@ -394,7 +394,7 @@ test_add(struct targ *t)
 void
 test_atomic_add(struct targ *t)
 {
-        int m, i;
+        int64_t m, i;
         for (m = 0; m < t->g->m_cycles; m++) {
 		for (i = 0; i < ONE_MILLION; i++) {
                 	atomic_add_int(t->glob_ctr, 1);
@@ -406,7 +406,7 @@ test_atomic_add(struct targ *t)
 void
 test_atomic_cmpset(struct targ *t)
 {
-        int m, i;
+        int64_t m, i;
         for (m = 0; m < t->g->m_cycles; m++) {
 		for (i = 0; i < ONE_MILLION; i++) {
 		        atomic_cmpset_32(t->glob_ctr, m, i);
@@ -418,7 +418,7 @@ test_atomic_cmpset(struct targ *t)
 void
 test_time(struct targ *t)
 {
-        int m;
+        int64_t m;
         for (m = 0; m < t->g->m_cycles; m++) {
 #ifndef __APPLE__
 		struct timespec ts;
@@ -431,7 +431,7 @@ test_time(struct targ *t)
 void
 test_gettimeofday(struct targ *t)
 {
-        int m;
+        int64_t m;
 	struct timeval ts;
         for (m = 0; m < t->g->m_cycles; m++) {
 		gettimeofday(&ts, NULL);
@@ -446,7 +446,7 @@ test_gettimeofday(struct targ *t)
 void
 test_getpid(struct targ *t)
 {
-        int m;
+        int64_t m;
         for (m = 0; m < t->g->m_cycles; m++) {
 		getppid();
 		t->count++;
@@ -487,8 +487,9 @@ static struct glob_arg huge[HU+1];
 void
 test_fastcopy(struct targ *t)
 {
-        int m, len;
-	len = t->g->arg;
+        int64_t m;
+	int len = t->g->arg;
+
 	if (len > (int)sizeof(struct glob_arg))
 		len = sizeof(struct glob_arg);
 	D("fast copying %d bytes", len);
@@ -501,8 +502,9 @@ test_fastcopy(struct targ *t)
 void
 test_bcopy(struct targ *t)
 {
-        int m, len;
-	len = t->g->arg;
+        int64_t m;
+	int len = t->g->arg;
+
 	if (len > (int)sizeof(struct glob_arg))
 		len = sizeof(struct glob_arg);
 	D("bcopying %d bytes", len);
@@ -515,8 +517,9 @@ test_bcopy(struct targ *t)
 void
 test_memcpy(struct targ *t)
 {
-        int m, len;
-	len = t->g->arg;
+        int64_t m;
+	int len = t->g->arg;
+
 	if (len > (int)sizeof(struct glob_arg))
 		len = sizeof(struct glob_arg);
 	D("memcopying %d bytes", len);
@@ -539,9 +542,9 @@ struct entry tests[] = {
 	{ test_time, "time", 1, 1000 },
 	{ test_gettimeofday, "gettimeofday", 1, 1000000 },
 	{ test_getpid, "getpid", 1, 1000000 },
-	{ test_bcopy, "bcopy", 1, 100000000 },
-	{ test_memcpy, "memcpy", 1, 100000000 },
-	{ test_fastcopy, "fastcopy", 1, 100000000 },
+	{ test_bcopy, "bcopy", 1000, 100000000 },
+	{ test_memcpy, "memcpy", 1000, 100000000 },
+	{ test_fastcopy, "fastcopy", 1000, 100000000 },
 	{ test_add, "add", ONE_MILLION, 100000000 },
 	{ test_nop, "nop", ONE_MILLION, 100000000 },
 	{ test_atomic_add, "atomic-add", ONE_MILLION, 100000000 },
@@ -579,6 +582,30 @@ usage(void)
 	exit(0);
 }
 
+static int64_t
+getnum(const char *s)
+{
+	int64_t n;
+	char *e;
+
+	n = strtol(s, &e, 0);
+	switch (e ? *e : '\0')  {
+	case 'k':
+	case 'K':
+		return n*1000;
+	case 'm':
+	case 'M':
+		return n*1000*1000;
+	case 'g':
+	case 'G':
+		return n*1000*1000*1000;
+	case 't':
+	case 'T':
+		return n*1000*1000*1000*1000;
+	default:
+		return n;
+	}
+}
 
 struct glob_arg g;
 int
@@ -611,7 +638,7 @@ main(int argc, char **argv)
 			affinity = atoi(optarg);
 			break;
 		case 'n':	/* cycles */
-			g.m_cycles = atoi(optarg);
+			g.m_cycles = getnum(optarg);
 			break;
 		case 'w':	/* report interval */
 			report_interval = atoi(optarg);
@@ -626,7 +653,7 @@ main(int argc, char **argv)
 			g.test_name = optarg;
 			break;
 		case 'l':
-			g.arg = atoi(optarg);
+			g.arg = getnum(optarg);
 			break;
 
 		case 'v':
@@ -649,7 +676,7 @@ main(int argc, char **argv)
 				if (g.scale == ONE_MILLION)
 					g.scale_name = "M";
 				else if (g.scale == 1000)
-					g.scale_name = "M";
+					g.scale_name = "K";
 				else {
 					g.scale = 1;
 					g.scale_name = "";
