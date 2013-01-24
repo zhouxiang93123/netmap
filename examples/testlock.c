@@ -524,7 +524,7 @@ test_builtin_memcpy(struct targ *t)
 		len = sizeof(struct glob_arg);
 	D("bcopying %d bytes", len);
         for (m = 0; m < t->g->m_cycles; m++) {
-		__builtin_memcpy(t->g, (void *)&huge[m & HU], len);
+		__builtin_memcpy((void *)&huge[m & HU], t->g, len);
 		t->count+=1;
         }
 }
