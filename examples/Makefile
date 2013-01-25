@@ -14,7 +14,7 @@ CFLAGS += -DNO_PCAP
 
 LDFLAGS += -lpthread
 #LDFLAGS += -lpcap
-LDFLAGS += -lrt	# on linux
+#LDFLAGS += -lrt	# on linux
 #SRCS = pkt-gen.c
 
 all: $(PROGS)
@@ -40,4 +40,4 @@ clean:
 	-@rm -rf $(CLEANFILES)
 
 testlock: testlock.c
-	$(CC) $(CFLAGS) -o testlock testlock.c -lpthread -lrt
+	$(CC) $(CFLAGS) -o testlock testlock.c -lpthread $(LDFLAGS)

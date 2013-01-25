@@ -234,10 +234,19 @@ system_ncpus(void)
 #define LLADDR(s)      s->sll_addr;
 #include <linux/if_tun.h>
 #define TAP_CLONEDEV	"/dev/net/tun"
-#else
+#endif /* __linux__ */
+
+#ifdef __FreeBSD__
 #include <net/if_tun.h>
 #define TAP_CLONEDEV	"/dev/tap"
-#endif /* !linux */
+#endif /* __FreeBSD */
+
+#ifdef __APPLE__
+// #warning TAP not supported on apple ?
+#include <net/if_utun.h>
+#define TAP_CLONEDEV	"/dev/tap"
+#endif /* __APPLE__ */
+
 
 /*
  * locate the src mac address for our interface, put it
@@ -1133,6 +1142,8 @@ tap_alloc(char *dev)
 	int fd, err;
 	char *clonedev = TAP_CLONEDEV;
 
+	(void)err;
+	(void)dev;
 	/* Arguments taken by the function:
 	 *
 	 * char *dev: the name of an interface (or '\0'). MUST have enough
@@ -1141,7 +1152,6 @@ tap_alloc(char *dev)
 	 */
 
 #ifdef __FreeBSD__
-	(void)err;
 	if (dev[3]) { /* tapSomething */
 		static char buf[128];
 		snprintf(buf, sizeof(buf), "/dev/%s", dev);
