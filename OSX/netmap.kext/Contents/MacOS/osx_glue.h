@@ -21,7 +21,13 @@ struct selinfo {		// private in the kernel
 };
 #include <sys/socket.h>
 #include <sys/mbuf.h>
+
+/* XXX some types i don't find in OSX */
+typedef	void *		vm_paddr_t;
 struct mbuf;	// XXX
+struct ifnet;
+
+
 // #include <sys/kpi_mbuf.h>
 #include <net/kpi_interface.h>
 #include <net/if.h>
@@ -29,6 +35,7 @@ struct mbuf;	// XXX
 //#include <net/vnet.h>
 #include <net/netmap.h>
 #include <dev/netmap/netmap_kern.h>
-#include <machine/bus.h>        /* bus_dmamap_* */
+// #include <machine/bus.h>        /* bus_dmamap_* */
+
 
 #endif /* OSX_GLUE_H */
