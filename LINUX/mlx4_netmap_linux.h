@@ -308,8 +308,7 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			ctrl->srcrb_flags = cpu_to_be32(MLX4_WQE_CTRL_CQ_UPDATE |
 					MLX4_WQE_CTRL_SOLICITED);
 
-			// XXX do we need to copy the mac dst address ?
-			{
+			if (1) { // XXX do we need this ?
 				uint64_t mac = mlx4_en_mac_to_u64(addr);
 				uint32_t mac_h = (u32) ((mac & 0xffff00000000ULL) >> 16);
 				uint32_t mac_l = (u32) (mac & 0xffffffff);
@@ -750,7 +749,7 @@ mlx4_netmap_attach(struct SOFTC_T *priv)
 	bzero(&na, sizeof(na));
 
 	na.ifp = dev;
-	na.separate_locks = 0; // XXX experimental
+	na.separate_locks = 1;
 	rxq = priv->rx_ring_num;
 	txq = priv->tx_ring_num;
 	/* this card has 1k tx queues, so better limit the number */

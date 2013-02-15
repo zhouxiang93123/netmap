@@ -138,13 +138,26 @@ struct thread;
 
 
 /*
- * XXX Unclear whether we should use spin_lock_irq or spin_lock_bh.
- * I think the former is better as we may use the lock in the interrupt.
+ * We use spin_lock_irqsave() because we use the lock in the
+ * (hard) interrupt context.
  */
-//#define mtx			mutex      /* remap */
-#define mtx_lock		spin_lock_irq
-#define mtx_unlock		spin_unlock_irq
-#define mtx_init(a, b, c, d)	spin_lock_init(a)
+typedef struct {
+        spinlock_t      sl;
+        ulong           flags;
+} safe_spinlock_t;
+
+static inline void mtx_lock(safe_spinlock_t *m)
+{
+        spin_lock_irqsave(&(m->sl), m->flags);
+}
+
+static inline void mtx_unlock(safe_spinlock_t *m)
+{
+	ulong flags = ACCESS_ONCE(m->flags);
+        spin_unlock_irqrestore(&(m->sl), flags);
+}
+
+#define mtx_init(a, b, c, d)	spin_lock_init(&((a)->sl))
 #define mtx_destroy(a)		// XXX spin_lock_destroy(a)
 
 /* use volatile to fix a probable compiler error on 2.6.25 */
