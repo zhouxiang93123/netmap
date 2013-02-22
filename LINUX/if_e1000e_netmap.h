@@ -33,7 +33,8 @@
  *
  * The driver supports 1 TX and 1 RX ring. Single lock.
  * tx buffer address only written on change.
- * Advanced descriptors ? Rx Crc stripping ?
+ * Apparently the driver uses extended descriptors on rx.
+ * Rx Crc stripping ?
  */
 
 
@@ -213,12 +214,12 @@ e1000_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	j = netmap_idx_n2k(kring, l);
 	if (netmap_no_pendintr || force_update) {
 		for (n = 0; ; n++) {
-			struct e1000_rx_desc *curr = E1000_RX_DESC(*rxr, l);
-			uint32_t staterr = le32toh(curr->status);
+			union e1000_rx_desc_extended *curr = E1000_RX_DESC_EXT(*rxr, l);
+			uint32_t staterr = le32toh(curr->wb.upper.status_error);
 
 			if ((staterr & E1000_RXD_STAT_DD) == 0)
 				break;
-			ring->slot[j].len = le16toh(curr->length) - strip_crc;
+			ring->slot[j].len = le16toh(curr->wb.upper.length) - strip_crc;
 			ring->slot[j].flags = NS_FORWARD;
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
@@ -243,7 +244,7 @@ e1000_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		l = netmap_idx_k2n(kring, j); /* NIC ring index */
 		for (n = 0; j != k; n++) {
 			struct netmap_slot *slot = &ring->slot[j];
-			struct e1000_rx_desc *curr = E1000_RX_DESC(*rxr, j);
+			union e1000_rx_desc_extended *curr = E1000_RX_DESC_EXT(*rxr, j);
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
 
@@ -252,12 +253,12 @@ e1000_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 					mtx_unlock(&kring->q_lock);
 				return netmap_ring_reinit(kring);
 			}
+			curr->read.buffer_addr = htole64(paddr); /* reload ext.desc. addr. */
 			if (slot->flags & NS_BUF_CHANGED) {
 				// netmap_reload_map(pdev, DMA_TO_DEVICE, old_paddr, addr)
-				curr->buffer_addr = htole64(paddr);
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
-			curr->status = 0;
+			curr->wb.upper.status_error = 0;
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
 		}
@@ -315,7 +316,7 @@ static int e1000e_netmap_init_buffers(struct SOFTC_T *adapter)
 			D("rx buf %d was set", i);
 		bi->skb = NULL; // XXX leak if set
 		// netmap_load_map(...)
-		E1000_RX_DESC(*rxr, i)->buffer_addr = htole64(paddr);
+		E1000_RX_DESC_EXT(*rxr, i)->read.buffer_addr = htole64(paddr);
 	}
 	rxr->next_to_use = 0;
 	/* preserve buffers already made available to clients */
