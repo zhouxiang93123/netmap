@@ -221,6 +221,7 @@ forcedeth_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	u_int j, k, l, n, lim = kring->nkr_num_slots - 1;
 	struct ring_desc_ex *rxr = np->rx_ring.ex;
 	u_int resvd, refill;	// refill position
+	uint16_t slot_flags = kring->nkr_slot_flags;
 
 	k = ring->cur;
 	resvd = ring->cur;
@@ -242,7 +243,7 @@ forcedeth_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		if (statlen & NV_RX2_AVAIL) /* still owned by the NIC */
 			break;
 		kring->ring->slot[j].len = statlen & LEN_MASK_V2; // XXX crc?
-		kring->ring->slot[j].flags = NS_FORWARD;
+		kring->ring->slot[j].flags = slot_flags;
 		j = (j == lim) ? 0 : j + 1;
 		l = (l == lim) ? 0 : l + 1;
 	}

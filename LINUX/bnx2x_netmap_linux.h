@@ -499,6 +499,8 @@ ND("start ring %d k %d lim %d hw_comp_cons %d", ring_nr, k, lim, hw_comp_cons);
 goto done; // XXX debugging
 
 	if (netmap_no_pendintr || force_update) {
+		uint16_t slot_flags = kring->nkr_slot_flags;
+
 		for (n = 0; sw_comp_cons != hw_comp_cons; sw_comp_cons = RCQ_BD(NEXT_RCQ_IDX(sw_comp_cons)) ) {
 			union eth_rx_cqe *cqe = &rxr->rx_comp_ring[l];
 			struct eth_fast_path_rx_cqe *cqe_fp = &cqe->fast_path_cqe;
@@ -506,7 +508,7 @@ goto done; // XXX debugging
 			if (1 /* slowpath */)
 				continue;
 			ring->slot[j].len = le16_to_cpu(cqe_fp->pkt_len_or_gro_seg_len);
-			ring->slot[j].flags = NS_FORWARD;
+			ring->slot[j].flags = slot_flags;
 
 			l = NEXT_RX_IDX(l);
 			j = (j == lim) ? 0 : j + 1;

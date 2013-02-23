@@ -213,6 +213,8 @@ e1000_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	l = rxr->next_to_clean;
 	j = netmap_idx_n2k(kring, l);
 	if (netmap_no_pendintr || force_update) {
+		uint16_t slot_flags = kring->nkr_slot_flags;
+
 		for (n = 0; ; n++) {
 			union e1000_rx_desc_extended *curr = E1000_RX_DESC_EXT(*rxr, l);
 			uint32_t staterr = le32toh(curr->wb.upper.status_error);
@@ -220,7 +222,7 @@ e1000_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			if ((staterr & E1000_RXD_STAT_DD) == 0)
 				break;
 			ring->slot[j].len = le16toh(curr->wb.upper.length) - strip_crc;
-			ring->slot[j].flags = NS_FORWARD;
+			ring->slot[j].flags = slot_flags;
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
 		}

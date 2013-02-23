@@ -361,6 +361,8 @@ ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	j = netmap_idx_n2k(kring, l);
 
 	if (netmap_no_pendintr || force_update) {
+		uint16_t slot_flags = kring->nkr_slot_flags;
+
 		for (n = 0; ; n++) {
 			union ixgbe_adv_rx_desc *curr = IXGBE_RX_DESC_ADV(rxr, l);
 			uint32_t staterr = le32toh(curr->wb.upper.status_error);
@@ -368,7 +370,7 @@ ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			if ((staterr & IXGBE_RXD_STAT_DD) == 0)
 				break;
 			ring->slot[j].len = le16toh(curr->wb.upper.length);
-			ring->slot[j].flags = NS_FORWARD;
+			ring->slot[j].flags = slot_flags;
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
 		}

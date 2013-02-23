@@ -510,6 +510,7 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		uint32_t size_mask = rxr->size_mask;
 		int size = cq->size;
 		struct mlx4_cqe *buf = cq->buf;
+		uint16_t slot_flags = kring->nkr_slot_flags;
 
 		j = (kring->nr_hwcur + kring->nr_hwavail) % kring->nkr_num_slots;
 
@@ -523,7 +524,7 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 
 			rmb();	/* make sure data is up to date */
 			ring->slot[j].len = be32_to_cpu(cqe->byte_cnt) - rxr->fcs_del;
-			ring->slot[j].flags = NS_FORWARD;
+			ring->slot[j].flags = slot_flags;
 			mcq->cons_index++;
 			j = (j == lim) ? 0 : j + 1;
 		}
