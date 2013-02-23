@@ -73,7 +73,8 @@ int mlx4_tx_desc_dump(struct mlx4_en_tx_desc *tx_desc);
 static inline void
 nm_pkt_dump(int i, char *buf, int len)
 {
-    uint8_t *s = buf+6, *d = buf;
+    uint8_t *s __attribute__((unused)) = buf+6, *d __attribute__((unused)) = buf;
+
     RD(10, "%d len %4d %02x:%02x:%02x:%02x:%02x:%02x -> %02x:%02x:%02x:%02x:%02x:%02x",
 		i,
 		len,
@@ -262,7 +263,7 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	// XXX debugging, assuming lim is 2^x-1
 	n = 0; // XXX debugging
 	if (j != k) {	/* we have new packets to send */
-		ND(5,"START: txr %d cons %u prod %u hwcur %u cur %u avail %d send %d",
+		ND(5,"START: txr %u cons %u prod %u hwcur %u cur %u avail %d send %d",
 			ring_nr, txr->cons, txr->prod, kring->nr_hwcur, ring->cur, kring->nr_hwavail,
 			(k - j) & lim);
 
@@ -308,6 +309,7 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			ctrl->srcrb_flags = cpu_to_be32(MLX4_WQE_CTRL_CQ_UPDATE |
 					MLX4_WQE_CTRL_SOLICITED);
 
+			// XXX do we need to copy the mac dst address ?
 			if (1) { // XXX do we need this ?
 				uint64_t mac = mlx4_en_mac_to_u64(addr);
 				uint32_t mac_h = (u32) ((mac & 0xffff00000000ULL) >> 16);
@@ -713,6 +715,7 @@ mlx4_netmap_rx_config(struct SOFTC_T *priv, int ring_nr)
 		struct mlx4_en_rx_desc *rx_desc = rxr->buf + (i * rxr->stride);
 
 		PNMB(slot + i, &paddr);
+
 		// see mlx4_en_prepare_rx_desc() and mlx4_en_alloc_frag()
 		rx_desc->data[0].addr = cpu_to_be64(paddr);
 		rx_desc->data[0].byte_count = cpu_to_be32(NETMAP_BUF_SIZE);
@@ -727,6 +730,30 @@ mlx4_netmap_rx_config(struct SOFTC_T *priv, int ring_nr)
 	}
 	RD(5, "ring %d done", ring_nr);
 	return 1;
+}
+
+static int
+mlx4_netmap_config(struct net_device *dev,
+	u_int *txr, u_int *txd, u_int *rxr, u_int *rxd)
+{
+	struct SOFTC_T *priv = netdev_priv(dev);
+	// struct netmap_adapter *na = NA(dev);
+
+	*txr = priv->tx_ring_num;
+	*txd = priv->tx_ring[0].size;
+
+
+	*rxr = priv->rx_ring_num;
+	if (*txr > *rxr) {
+		D("using only %d out of %d tx queues", *rxr, *txr);
+		*txr = *rxr;
+	}
+	*rxd = priv->rx_ring[0].size;
+	D("txr %d txd %d bufsize %d -- rxr %d rxd %d act %d bufsize %d",
+		*txr, *txd, priv->tx_ring[0].buf_size,
+		*rxr, *rxd, priv->rx_ring[0].actual_size,
+			priv->rx_ring[0].buf_size);
+	return 0;
 }
 
 
@@ -769,6 +796,7 @@ mlx4_netmap_attach(struct SOFTC_T *priv)
 	na.nm_txsync = mlx4_netmap_txsync;
 	na.nm_rxsync = mlx4_netmap_rxsync;
 	na.nm_register = mlx4_netmap_reg;
+	na.nm_config = mlx4_netmap_config;
 	netmap_attach(&na, nq);
 	D("%d queues, tx: %d rx %d slots", na.num_rx_rings,
 			na.num_tx_desc, na.num_rx_desc);
