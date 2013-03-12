@@ -18,7 +18,7 @@ RELEASE_SRCS := ./sys/net ./sys/dev ./sys/modules ./examples
 RELEASE_SRCS += ./README ./LINUX ./OSX
 RELEASE_EXCL := --exclude .svn --exclude sys/dev/\*/i\*.c --exclude examples/testmod
 RELEASE_EXCL += --exclude connlib\* --exclude netmap_vale.c
-RELEASE_EXCL += --exclude \*bnx2x\* --exclude \*mellanox\*
+RELEASE_EXCL += --exclude \*bnx2x\* --exclude \*mellanox\* --exclude \*mlx4\*
 
 all:
 	@echo "What do you want to do ?"
