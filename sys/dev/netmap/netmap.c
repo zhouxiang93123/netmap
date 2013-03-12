@@ -81,6 +81,7 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 241723 2012-10-19 09:41:45Z gle
 #include <sys/mman.h>	/* PROT_EXEC */
 #include <sys/poll.h>
 #include <sys/proc.h>
+#include <sys/rwlock.h>
 #include <vm/vm.h>	/* vtophys */
 #include <vm/pmap.h>	/* vtophys */
 #include <sys/socket.h> /* sockaddrs */
