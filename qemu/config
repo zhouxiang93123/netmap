@@ -35,7 +35,7 @@ do_copyfiles_user() {
 
 	# XXX change this to head/tools/tools/netmap
 	local d=/usr/ports-luigi/netmap-release/examples
-	find_progs -L $d -P $d pkt-gen bridge testpcap testlock libnetmap.so # pingd 
+	find_progs -L $d -P $d pkt-gen bridge testpcap testmmap testlock libnetmap.so # pingd 
 	cp -p ${u_progs} ${dst}/bin
 	cp -p ${u_libs} ${dst}/usr/lib
 	cp -p $d/testmod/test.ko ${dst}	 # XXX
@@ -56,8 +56,7 @@ do_copyfiles_user() {
 #	cp -p /tmp/open_key/* ${dst}/root
 
 	if [ ${TARGET_ARCH} = amd64 ]; then
-		cp -p /usr/lib/libssh.so.5 ${dst}/usr/lib # need the old one
-		cp -p /lib/libmd.so.5 ${dst}/usr/lib # need the old one
+		cp -p /usr/lib/libssh.so.5 /lib/libmd.so.5 ${dst}/usr/lib # need the old one
 		#find_progs -L $d /tmp/bridge
 		#cp -p ${u_progs} ${dst}/bin
 		#cp -p ${u_libs} ${dst}/usr/lib

@@ -12,12 +12,17 @@ hints	"PICOBSD.hints"
 
 # values accessible through getenv()
 #env		"PICOBSD.env"
-maxusers 10000	# large tables
+#maxusers 10000	# large tables
 
 cpu		HAMMER	# I686_CPU
 ident		PICOBSD
 
-#makeoptions	CCOPTS=-O3
+options	NO_SWAPPING
+
+#makeoptions	"CCOPTS=-O3 -Wall -Werror"
+makeoptions    COPTFLAGS="-O2 " # -Wall" 	# -Werror
+makeoptions    CWARNFLAGS="-Wunused -Wuninitialized -Wredundant-decls"
+#makeoptions    WARNS=5
 #options	SMP
 device	acpi	# more frequencies ?
 # device	apic	# kern_et ?
@@ -52,12 +57,12 @@ options		KDB
 options		DDB
 
 #--- for fast networking, remove ipfw
-#options		IPFIREWALL
-#options		IPFIREWALL_DEFAULT_TO_ACCEPT
+options		IPFIREWALL
+options		IPFIREWALL_DEFAULT_TO_ACCEPT
 #options		IPDIVERT		# divert (for natd)
 
 # Support for bridging and bandwidth limiting
-#options		DUMMYNET
+options		DUMMYNET
 #options	IPFIREWALL_NAT
 #options	LIBALIAS
 #device		if_bridge
@@ -109,12 +114,11 @@ device	miibus
 #device		mlxen
 #device		mthca
 
-device	epair
 device		ixgbe
-device		bxe		# broadcom 10G
-device		oce		# emulex
-device		sfxge		# solarflare
-device		cxgbe		# chelsio
+#device		bxe		# broadcom 10G
+#device		oce		# emulex
+#device		sfxge		# solarflare
+#device		cxgbe		# chelsio
 device		firmware	# needed for chelsio ?
 device		em
 device		igb
@@ -150,6 +154,8 @@ device          umass           # Disks/Mass storage - Requires scbus and da
 device          ums             # Mouse
 #device		hwpmc		# not good as compiled in.
 
+device virtio	#XXX for virtio
+device virtio_pci
 device vtnet	#XXX for virtio
 
 device	kbdmux
@@ -161,5 +167,4 @@ options         KBD_INSTALL_CDEV
 # Be aware of the administrative consequences of enabling this!
 device		bpf		# Berkeley packet filter
 device		netmap
-device		vtnet
 options	FLOWTABLE
