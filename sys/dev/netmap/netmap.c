@@ -143,11 +143,21 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, copy, CTLFLAG_RW, &netmap_copy, 0 , "");
  * faster. The batch size is NM_BDG_BATCH
  */
 #define	NM_NAME			"vale"	/* prefix for the interface */
-#define NM_BDG_MAXPORTS		16	/* up to 64 ? */
+#define NM_BDG_MAXPORTS		16	/* up to 32 for bitmap, 254 ok otherwise */
+#define NM_BDG_MAXRINGS		1	/* XXX unclear how many. */
 #define NM_BRIDGE_RINGSIZE	1024	/* in the device */
 #define NM_BDG_HASH		1024	/* forwarding table entries */
 #define NM_BDG_BATCH		1024	/* entries in the forwarding buffer */
 #define	NM_BRIDGES		4	/* number of bridges */
+
+/* In the version that only supports unicast or broadcast, the lookup
+ * function can return 0..NM_BDG_MAXPORTS-1 for regular ports,
+ * NM_BDG_MAXPORTS for broadcast, NM_BDG_MAXPORTS+1 for unknown.
+ * XXX in practice "unknown" might be handled same as broadcast.
+ */
+#define	NM_BDG_BROADCAST	NM_BDG_MAXPORTS
+#define	NM_BDG_NOPORT		(NM_BDG_MAXPORTS+1)
+
 int netmap_bridge = NM_BDG_BATCH; /* bridge batch size */
 SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
 
@@ -2388,6 +2398,201 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 			}
 		}
 	}
+	return 0;
+}
+
+/* Returns the destination port index */
+static u_int
+nm_bdg_learning(uint8_t *buf, uint8_t *dst_ring, struct ifnet *ifp)
+{
+	struct nm_hash_ent *ht = NA(ifp)->na_bdg->ht;
+	uint32_t sh, dh;
+	u_int dst, mysrc = NA(ifp)->bdg_port;
+	uint64_t smac, dmac;
+
+	dmac = le64toh(*(uint64_t *)(buf)) & 0xffffffffffff;
+	smac = le64toh(*(uint64_t *)(buf + 4));
+	smac >>= 16;
+
+	/*
+	 * The hash is somewhat expensive, there might be some
+	 * worthwhile optimizations here.
+	 */
+	if ((buf[6] & 1) == 0) { /* valid src */
+		uint8_t *s = buf+6;
+		sh = nm_bridge_rthash(buf+6); // XXX hash of source
+		/* update source port forwarding entry */
+		ht[sh].mac = smac;	/* XXX expire ? */
+		ht[sh].ports = mysrc;
+		if (netmap_verbose)
+		    D("src %02x:%02x:%02x:%02x:%02x:%02x on port %d",
+			s[0], s[1], s[2], s[3], s[4], s[5], mysrc);
+	}
+	dst = NM_BDG_BROADCAST;
+	if ((buf[0] & 1) == 0) { /* unicast */
+		uint8_t *d = buf;
+		dh = nm_bridge_rthash(buf); // XXX hash of dst
+		if (ht[dh].mac == dmac) {	/* found dst */
+			dst = ht[dh].ports;
+			if (netmap_verbose)
+			    D("dst %02x:%02x:%02x:%02x:%02x:%02x to port %x",
+				d[0], d[1], d[2], d[3], d[4], d[5], (uint32_t)(dst >> 16));
+		}
+	}
+	*dst_ring = 0;
+	return dst;
+}
+
+/*
+ * Another version of the flush routine that supports only
+ * unicast and broadcast (and much larger number of ports),
+ * and lets us replace the learn and dispatch functions.
+ */
+// XXX non static to silence the compiler
+int
+nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr);
+int
+nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
+{
+	struct nm_bdg_q *dst_ents, *brddst;
+	uint16_t dsts[NM_BDG_BATCH], num_dsts = 0;
+	struct nm_bridge *b = NA(ifp)->na_bdg;
+	u_int i, me = NA(ifp)->bdg_port;
+
+	dst_ents = (struct nm_bdg_q *)(ft + NM_BDG_BATCH);
+
+	/* first pass: find a destination */
+	for (i = 0; likely(i < n); i++) {
+		uint8_t *buf = ft[i].buf;
+		uint8_t dst_ring = 0;
+		uint16_t dst_port, d_i;
+		struct nm_bdg_q *d;
+
+		/* This function will be modular.  We expect module-specific
+		 * data can be extracted using ifp
+		 * XXX We don't support sending packets to myself
+		 */
+		dst_port = nm_bdg_learning(buf, &dst_ring, ifp);
+		if (dst_port == NM_BDG_NOPORT)
+			continue;
+		else if (dst_port == NM_BDG_BROADCAST)
+			dst_ring = 0; /* broadcasts always go to ring 0 */
+		else if (dst_port == me || !b->bdg_ports[dst_port])
+			continue;
+
+		/* get a position in the scratch pad */
+		d_i = dst_port * NM_BDG_MAXRINGS + dst_ring;
+		d = dst_ents + d_i;
+		if (d->bq_head == NM_BDG_BATCH) { /* new destination */
+			d->bq_head = d->bq_tail = i;
+			/* remember this position to be scanned later */
+			if (dst_port != NM_BDG_BROADCAST)
+				dsts[num_dsts++] = d_i;
+		}
+		ft[d->bq_tail].ft_next = i;
+		d->bq_tail = i;
+	}
+
+	/* if there is a broadcast, set ring 0 of all ports to be scanned
+	 * XXX This should be made better, allocating continuous
+	 * number of ports as much as possible, but still ugly...
+	 */
+	brddst = dst_ents + NM_BDG_BROADCAST * NM_BDG_MAXRINGS;
+	if (brddst->bq_head != NM_BDG_BATCH) {
+		for (i = 0; i < NM_BDG_MAXPORTS; i++) {
+			uint16_t d_i = i * NM_BDG_MAXRINGS;
+			if (i == me || !b->bdg_ports[i])
+				continue;
+			else if (dst_ents[d_i].bq_head == NM_BDG_BATCH)
+				dsts[num_dsts++] = d_i;
+		}
+	}
+
+	/* second pass: scan destinations (XXX will be modular somehow) */
+	for (i = 0; i < num_dsts; i++) {
+		struct ifnet *dst_ifp;
+		struct netmap_adapter *na;
+		struct netmap_kring *kring;
+		struct netmap_ring *ring;
+		u_int dst_nr, is_hw, lim, j, sent = 0, d_i, next, brd_next;
+		int howmany;
+		struct nm_bdg_q *d;
+
+		d_i = dsts[i];
+		d = dst_ents + d_i;
+		na = b->bdg_ports[d_i/NM_BDG_MAXRINGS];
+		dst_ifp = na->ifp;
+		/* if someone has detached the interface, we must skip it */
+		if (unlikely(!(dst_ifp->if_capenable & IFCAP_NETMAP)))
+			continue;
+		na = NA(dst_ifp);
+		is_hw = nma_is_hw(na);
+		dst_nr = d_i & (NM_BDG_MAXRINGS-1);
+		if (is_hw) {
+			if (dst_nr >= na->num_tx_rings)
+				dst_nr = dst_nr % na->num_tx_rings;
+			kring = &na->tx_rings[dst_nr];
+			ring = kring->ring;
+			lim = kring->nkr_num_slots - 1;
+			na->nm_lock(dst_ifp, NETMAP_TX_LOCK, dst_nr);
+			na->nm_txsync(dst_ifp, dst_nr, 0);
+			/* see nm_bdg_flush() */
+			j = kring->nr_hwcur;
+			howmany = kring->nr_hwavail;
+		} else {
+			if (dst_nr >= na->num_rx_rings)
+				dst_nr = dst_nr % na->num_rx_rings;
+			kring = &na->rx_rings[dst_nr];
+			ring = kring->ring;
+			lim = kring->nkr_num_slots - 1;
+			na->nm_lock(dst_ifp, NETMAP_RX_LOCK, dst_nr);
+			j = kring->nr_hwcur + kring->nr_hwavail;
+			if (j > lim)
+				j -= kring->nkr_num_slots;
+			howmany = lim - kring->nr_hwavail;
+		}
+		/* there is at least one either unicast or broadcast packet */
+		brd_next = brddst->bq_head;
+		next = d->bq_head;
+		while (howmany-- > 0) {
+			struct netmap_slot *slot;
+			struct nm_bdg_fwd *ft_p;
+
+			if (next < brd_next) {
+				ft_p = ft + next;
+				next = ft_p->ft_next;
+			} else { /* insert broadcast */
+				ft_p = ft + brd_next;
+				brd_next = ft_p->ft_next;
+			}
+			slot = &ring->slot[j];
+			ND("send %d %d bytes at %s:%d", i, ft_p->len, dst_ifp->if_xname, j);
+			pkt_copy(ft_p->buf, NMB(slot), ft_p->ft_len);
+			slot->len = ft_p->ft_len;
+			j = (j == lim) ? 0: j + 1; /* XXX to be macro-ed */
+			sent++;
+			if (next == d->bq_tail && brd_next == brddst->bq_tail)
+				break;
+		}
+		if (netmap_verbose && (howmany < 0))
+			D("rx ring full on %s", dst_ifp->if_xname);
+		if (is_hw) {
+			if (sent) {
+				ring->avail -= sent;
+				ring->cur = j;
+				na->nm_txsync(dst_ifp, dst_nr, 0);
+			}
+			na->nm_lock(dst_ifp, NETMAP_TX_UNLOCK, dst_nr);
+		} else {
+			if (sent) {
+				kring->nr_hwavail += sent;
+				selwakeuppri(&kring->si, PI_NET);
+			}
+			na->nm_lock(dst_ifp, NETMAP_RX_UNLOCK, dst_nr);
+		}
+		d->bq_head = d->bq_tail = NM_BDG_BATCH; /* cleanup */
+	}
+	brddst->bq_head = brddst->bq_tail = NM_BDG_BATCH; /* cleanup */
 	return 0;
 }
 
