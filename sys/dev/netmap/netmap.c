@@ -189,7 +189,7 @@ struct nm_hash_ent {
  * the search.
  */
 struct nm_bridge {
-	struct ifnet *bdg_ports[NM_BDG_MAXPORTS];
+	struct netmap_adapter *bdg_ports[NM_BDG_MAXPORTS];
 	int n_ports;
 	uint64_t act_ports;
 	int freelist;	/* first buffer index */
@@ -472,6 +472,7 @@ nm_if_rele(struct ifnet *ifp)
 #else /* NM_BRIDGE */
 	int i, full;
 	struct nm_bridge *b;
+	struct netmap_adapter *na;
 
 	if (strncmp(ifp->if_xname, NM_NAME, sizeof(NM_NAME) - 1)) {
 		if_rele(ifp);
@@ -479,21 +480,25 @@ nm_if_rele(struct ifnet *ifp)
 	}
 	if (!DROP_BDG_REF(ifp))
 		return;
-	b = NA(ifp)->na_bdg;
+	na = NA(ifp);
+	b = na->na_bdg;
 	BDG_LOCK(nm_bridges);
 	BDG_LOCK(b);
 	ND("want to disconnect %s from the bridge", ifp->if_xname);
 	full = 0;
+	/* remove the entry from the bridge, also check
+	 * if there are any leftover interfaces
+	 * XXX we should optimize this code, e.g. going directly
+	 * to na->bdg_port, and having a counter of ports that
+	 * are connected. But it is not in a critical path.
+	 */
 	for (i = 0; i < NM_BDG_MAXPORTS; i++) {
-		if (b->bdg_ports[i] == ifp) {
-			struct netmap_adapter *na = NA(ifp);
-
+		if (b->bdg_ports[i] == na) {
 			b->bdg_ports[i] = NULL;
 			bzero(na, sizeof(*na));
 			free(na, M_DEVBUF);
 			bzero(ifp, sizeof(*ifp));
 			free(ifp, M_DEVBUF);
-			break;
 		}
 		else if (b->bdg_ports[i] != NULL)
 			full = 1;
@@ -895,6 +900,7 @@ get_ifp(const char *name, struct ifnet **ifp)
 
 	do {
 		struct nm_bridge *b;
+		struct netmap_adapter *na;
 		int i, l, cand = -1;
 
 		if (strncmp(name, NM_NAME, sizeof(NM_NAME) - 1))
@@ -908,12 +914,13 @@ get_ifp(const char *name, struct ifnet **ifp)
 		BDG_LOCK(b);
 		/* lookup in the local list of ports */
 		for (i = 0; i < NM_BDG_MAXPORTS; i++) {
-			iter = b->bdg_ports[i];
-			if (iter == NULL) {
+			na = b->bdg_ports[i];
+			if (na == NULL) {
 				if (cand == -1)
 					cand = i; /* potential insert point */
 				continue;
 			}
+			iter = na->ifp;
 			if (!strcmp(iter->if_xname, name)) {
 				ADD_BDG_REF(iter);
 				ND("found existing interface");
@@ -931,16 +938,23 @@ no_port:
 			return EINVAL;
 		}
 		ND("create new bridge port %s", name);
-		/* space for forwarding list after the ifnet */
+		/*
+		 * create a struct ifnet for the new port, and
+		 * add space for the forwarding table after it.
+		 */
 		l = sizeof(*iter) +
 			 sizeof(struct nm_bdg_fwd)*NM_BDG_BATCH ;
 		iter = malloc(l, M_DEVBUF, M_NOWAIT | M_ZERO);
 		if (!iter)
 			goto no_port;
 		strcpy(iter->if_xname, name);
+		/* bdg_netmap_attach creates a struct netmap_adapter */
 		bdg_netmap_attach(iter);
-		b->bdg_ports[cand] = iter;
-		NA(iter)->na_bdg = b;
+		na = NA(iter);
+		/* bind the interface to the bridge, but do not activate */
+		b->bdg_ports[cand] = na;
+		na->na_bdg = b;
+		na->bdg_port = cand;
 		ADD_BDG_REF(iter);
 		BDG_UNLOCK(b);
 		ND("attaching virtual bridge %p", b);
@@ -2162,16 +2176,18 @@ static int
 bdg_netmap_reg(struct ifnet *ifp, int onoff)
 {
 	int i, err = 0;
-	struct nm_bridge *b = NA(ifp)->na_bdg;
+	struct netmap_adapter *na = NA(ifp);
+	struct nm_bridge *b = na->na_bdg;
 
 	BDG_LOCK(b);
 	if (onoff) {
 		/* the interface must be already in the list.
-		 * only need to mark the port as active
+		 * only need to mark the port as active by setting
+		 * the bit in b->act_ports
 		 */
 		ND("should attach %s to the bridge", ifp->if_xname);
 		for (i=0; i < NM_BDG_MAXPORTS; i++)
-			if (b->bdg_ports[i] == ifp)
+			if (b->bdg_ports[i] == na)
 				break;
 		if (i == NM_BDG_MAXPORTS) {
 			D("no more ports available");
@@ -2180,9 +2196,7 @@ bdg_netmap_reg(struct ifnet *ifp, int onoff)
 		}
 		ND("setting %s in netmap mode", ifp->if_xname);
 		ifp->if_capenable |= IFCAP_NETMAP;
-		NA(ifp)->bdg_port = i;
 		b->act_ports |= (1<<i);
-		b->bdg_ports[i] = ifp;
 	} else {
 		/* should be in the list, too -- remove from the mask */
 		ND("removing %s from netmap mode", ifp->if_xname);
@@ -2260,20 +2274,20 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp)
 	/* second pass, scan interfaces and forward */
 	all_dst = (b->act_ports & ~mysrc);
 	for (ifn = 0; all_dst; ifn++) {
-		struct ifnet *dst_ifp = b->bdg_ports[ifn];
-		struct netmap_adapter *na;
+		struct ifnet *dst_ifp;
+		struct netmap_adapter *na = b->bdg_ports[ifn];
 		struct netmap_kring *kring;
 		struct netmap_ring *ring;
 		int j, lim, sent, locked;
 
-		if (!dst_ifp)
+		if (!na)
 			continue;
+		dst_ifp = na->ifp;
 		ND("scan port %d %s", ifn, dst_ifp->if_xname);
 		dst = 1 << ifn;
 		if ((dst & all_dst) == 0)	/* skip if not set */
 			continue;
 		all_dst &= ~dst;	/* clear current node */
-		na = NA(dst_ifp);
 
 		ring = NULL;
 		kring = NULL;
