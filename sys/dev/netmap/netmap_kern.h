@@ -103,6 +103,7 @@
 	} while (0)
 
 struct netmap_adapter;
+struct nm_bridge;
 
 /*
  * private, kernel view of a ring. Keeps track of the status of
@@ -208,10 +209,21 @@ struct netmap_adapter {
 	int (*nm_config)(struct ifnet *, u_int *txr, u_int *txd,
 					u_int *rxr, u_int *rxd);
 
+	/*
+	 * Bridge support:
+	 *
+	 * bdg_port is the port number used in the bridge;
+	 * na_bdg_refcount is a refcount used for bridge ports,
+	 *	when it goes to 0 we can detach+free this port
+	 *	(a bridge port is always attached if it exists;
+	 *	it is not always registered)
+	 * na_bdg points to the bridge this NA is attached to.
+	 */
 	int bdg_port;
+	int na_bdg_refcount;
+	struct nm_bridge *na_bdg;
 #ifdef linux
 	struct net_device_ops nm_ndo;
-	int if_refcount;	// XXX additions for bridge
 #endif /* linux */
 };
 

@@ -152,17 +152,21 @@ int netmap_bridge = NM_BDG_BATCH; /* bridge batch size */
 SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
 
 #ifdef linux
-#define	ADD_BDG_REF(ifp)	(NA(ifp)->if_refcount++)
-#define	DROP_BDG_REF(ifp)	(NA(ifp)->if_refcount-- <= 1)
+#define refcount_acquire(_a)	atomic_add(1, _a)
+#define refcount_release(_a)	atomic_dec_and_test(_a)
 #else /* !linux */
-#define	ADD_BDG_REF(ifp)	(ifp)->if_refcount++
-#define	DROP_BDG_REF(ifp)	refcount_release(&(ifp)->if_refcount)
 #ifdef __FreeBSD__
 #include <sys/endian.h>
 #include <sys/refcount.h>
 #endif /* __FreeBSD__ */
 #define prefetch(x)	__builtin_prefetch(x)
 #endif /* !linux */
+
+/*
+ * These are used to handle reference counters for bridge ports.
+ */
+#define	ADD_BDG_REF(ifp)	refcount_acquire(&NA(ifp)->na_bdg_refcount)
+#define	DROP_BDG_REF(ifp)	refcount_release(&NA(ifp)->na_bdg_refcount)
 
 static void bdg_netmap_attach(struct ifnet *ifp);
 static int bdg_netmap_reg(struct ifnet *ifp, int onoff);
@@ -475,7 +479,7 @@ nm_if_rele(struct ifnet *ifp)
 	}
 	if (!DROP_BDG_REF(ifp))
 		return;
-	b = ifp->if_bridge;
+	b = NA(ifp)->na_bdg;
 	BDG_LOCK(nm_bridges);
 	BDG_LOCK(b);
 	ND("want to disconnect %s from the bridge", ifp->if_xname);
@@ -936,7 +940,7 @@ no_port:
 		strcpy(iter->if_xname, name);
 		bdg_netmap_attach(iter);
 		b->bdg_ports[cand] = iter;
-		iter->if_bridge = b;
+		NA(iter)->na_bdg = b;
 		ADD_BDG_REF(iter);
 		BDG_UNLOCK(b);
 		ND("attaching virtual bridge %p", b);
@@ -2158,7 +2162,7 @@ static int
 bdg_netmap_reg(struct ifnet *ifp, int onoff)
 {
 	int i, err = 0;
-	struct nm_bridge *b = ifp->if_bridge;
+	struct nm_bridge *b = NA(ifp)->na_bdg;
 
 	BDG_LOCK(b);
 	if (onoff) {
@@ -2201,7 +2205,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp)
 	uint64_t mysrc = 1 << NA(ifp)->bdg_port;
 	uint64_t smac, dmac;
 	struct netmap_slot *slot;
-	struct nm_bridge *b = ifp->if_bridge;
+	struct nm_bridge *b = NA(ifp)->na_bdg;
 
 	ND("prepare to send %d packets, act_ports 0x%x", n, b->act_ports);
 	/* only consider valid destinations */
