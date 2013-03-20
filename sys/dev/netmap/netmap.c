@@ -402,6 +402,13 @@ netmap_dtor_locked(void *data)
 		if (netmap_verbose)
 			D("deleting last instance for %s", ifp->if_xname);
 		/*
+		 * (TO CHECK) This function is only called
+		 * when the last reference to this file descriptor goes
+		 * away. This means we cannot have any pending poll()
+		 * or interrupt routine operating on the structure.
+		 */
+#if 0	/* USELESS */
+		/*
 		 * there is a race here with *_netmap_task() and
 		 * netmap_poll(), which don't run under NETMAP_REG_LOCK.
 		 * na->refcount == 0 && na->ifp->if_capenable & IFCAP_NETMAP
@@ -416,6 +423,7 @@ netmap_dtor_locked(void *data)
 		na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
 		tsleep(na, 0, "NIOCUNREG", 4);
 		na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
+#endif /* USELESS */
 		na->nm_register(ifp, 0); /* off, clear IFCAP_NETMAP */
 		/* Wake up any sleeping threads. netmap_poll will
 		 * then return POLLERR
@@ -1165,6 +1173,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		}
 		na = NA(ifp); /* retrieve netmap adapter */
 
+#if 0 /* USELESS -- race protection */
 		for (i = 10; i > 0; i--) {
 			na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
 			if (!NETMAP_DELETING(na))
@@ -1179,6 +1188,9 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			NMA_UNLOCK();
 			break;
 		}
+#else /* !USELESS */
+		na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
+#endif /* !USELESS */
 
 		/* ring configuration may have changed, fetch from the card */
 		netmap_update_config(na);
