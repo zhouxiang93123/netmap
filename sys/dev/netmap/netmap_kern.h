@@ -104,6 +104,7 @@
 
 struct netmap_adapter;
 struct nm_bridge;
+struct netmap_priv_d;
 
 /*
  * private, kernel view of a ring. Keeps track of the status of
@@ -222,6 +223,13 @@ struct netmap_adapter {
 	int bdg_port;
 	int na_bdg_refcount;
 	struct nm_bridge *na_bdg;
+	/* When we attach a physical interface to the bridge, we
+	 * allow the controlling process to terminate, so we need
+	 * a place to store the netmap_priv_d data structure.
+	 * This is only done when physical interfaces are attached to a bridge.
+	 */
+	struct netmap_priv_d *na_kpriv;
+	struct nm_bdg_fwd *na_ft;
 #ifdef linux
 	struct net_device_ops nm_ndo;
 #endif /* linux */
@@ -486,6 +494,8 @@ PNMB(struct netmap_slot *slot, uint64_t *pp)
 /* default functions to handle rx/tx interrupts */
 int netmap_rx_irq(struct ifnet *, int, int *);
 #define netmap_tx_irq(_n, _q) netmap_rx_irq(_n, _q, NULL)
+
+void netmap_nic_to_bdg(struct ifnet *, u_int);
 
 extern int netmap_copy;
 #endif /* _NET_NETMAP_KERN_H_ */

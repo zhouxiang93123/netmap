@@ -180,6 +180,8 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
 
 static void bdg_netmap_attach(struct ifnet *ifp);
 static int bdg_netmap_reg(struct ifnet *ifp, int onoff);
+// static int kern_netmap_regif(struct ifnet *ifp, uint16_t ringid);
+
 /* per-tx-queue entry */
 struct nm_bdg_fwd {	/* forwarding entry for a bridge */
 	void *buf;
@@ -503,7 +505,9 @@ nm_if_rele(struct ifnet *ifp)
 
 	if (strncmp(ifp->if_xname, NM_NAME, sizeof(NM_NAME) - 1)) {
 		if_rele(ifp);
-		return;
+		/* if the nic is not connected to a bridge, we are done */
+		if (!NA(ifp)->na_bdg)
+			return;
 	}
 	if (!DROP_BDG_REF(ifp))
 		return;
@@ -522,10 +526,17 @@ nm_if_rele(struct ifnet *ifp)
 	for (i = 0; i < NM_BDG_MAXPORTS; i++) {
 		if (b->bdg_ports[i] == na) {
 			b->bdg_ports[i] = NULL;
-			bzero(na, sizeof(*na));
-			free(na, M_DEVBUF);
-			bzero(ifp, sizeof(*ifp));
-			free(ifp, M_DEVBUF);
+			if (nma_is_hw(na)) {
+				/* free forwarding table, disconnect from bridge */
+				free(na->na_ft, M_DEVBUF);
+				na->na_ft = NULL;
+				na->na_bdg = NULL;
+			} else {
+				bzero(na, sizeof(*na));
+				free(na, M_DEVBUF);
+				bzero(ifp, sizeof(*ifp));
+				free(ifp, M_DEVBUF);
+			}
 		}
 		else if (b->bdg_ports[i] != NULL)
 			full = 1;
@@ -920,8 +931,10 @@ netmap_sync_from_host(struct netmap_adapter *na, struct thread *td, void *pwait)
  * If successful, hold a reference.
  */
 static int
-get_ifp(const char *name, struct ifnet **ifp)
+get_ifp(const struct nmreq *nmr, struct ifnet **ifp)
 {
+	const char *name = nmr->nr_name;
+	int namelen = strlen(name);
 #ifdef NM_BRIDGE
 	struct ifnet *iter = NULL;
 
@@ -937,6 +950,7 @@ get_ifp(const char *name, struct ifnet **ifp)
 			D("no bridges available for '%s'", name);
 			return (ENXIO);
 		}
+		/* Now we are sure that name starts with the bridge's name */
 		/* XXX locking */
 		BDG_LOCK(b);
 		/* lookup in the local list of ports */
@@ -948,9 +962,18 @@ get_ifp(const char *name, struct ifnet **ifp)
 				continue;
 			}
 			iter = na->ifp;
+			/* XXX make sure the name only contains one : */
 			if (!strcmp(iter->if_xname, name)) {
+				/* must be a software VALE port */
 				ADD_BDG_REF(iter);
 				ND("found existing interface");
+				BDG_UNLOCK(b);
+				break;
+			} else if (namelen > b->namelen &&
+			     !strcmp(iter->if_xname, name + b->namelen + 1)) {
+				/* must be a NIC port */
+				/* XXX do we need a refcount ? */
+				ND("found existing NIC");
 				BDG_UNLOCK(b);
 				break;
 			}
@@ -1183,7 +1206,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		nmr->nr_rx_slots = nmr->nr_tx_slots = 0;
 		if (nmr->nr_name[0] == '\0')	/* just get memory info */
 			break;
-		error = get_ifp(nmr->nr_name, &ifp); /* get a refcount */
+		error = get_ifp(nmr, &ifp); /* get a refcount */
 		if (error)
 			break;
 		na = NA(ifp); /* retrieve netmap_adapter */
@@ -1215,7 +1238,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			break;
 		}
 		/* find the interface and a reference */
-		error = get_ifp(nmr->nr_name, &ifp); /* keep reference */
+		error = get_ifp(nmr, &ifp); /* keep reference */
 		if (error) {
 			NMA_UNLOCK();
 			break;
@@ -1368,7 +1391,7 @@ error:
 	    {
 		struct socket so;
 		bzero(&so, sizeof(so));
-		error = get_ifp(nmr->nr_name, &ifp); /* keep reference */
+		error = get_ifp(nmr, &ifp); /* keep reference */
 		if (error)
 			break;
 		so.so_vnet = ifp->if_vnet;
