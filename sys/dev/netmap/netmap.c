@@ -474,7 +474,11 @@ nm_if_rele(struct ifnet *ifp)
 	full = 0;
 	for (i = 0; i < NM_BDG_MAXPORTS; i++) {
 		if (b->bdg_ports[i] == ifp) {
+			struct netmap_adapter *na = NA(ifp);
+
 			b->bdg_ports[i] = NULL;
+			bzero(na, sizeof(*na));
+			free(na, M_DEVBUF);
 			bzero(ifp, sizeof(*ifp));
 			free(ifp, M_DEVBUF);
 			break;
@@ -484,7 +488,7 @@ nm_if_rele(struct ifnet *ifp)
 	}
 	BDG_UNLOCK(b);
 	if (full == 0) {
-		ND("freeing bridge %d", b - nm_bridges);
+		ND("marking bridge %d as free", b - nm_bridges);
 		b->namelen = 0;
 	}
 	BDG_UNLOCK(nm_bridges);
