@@ -173,9 +173,20 @@ static int bdg_netmap_reg(struct ifnet *ifp, int onoff);
 /* per-tx-queue entry */
 struct nm_bdg_fwd {	/* forwarding entry for a bridge */
 	void *buf;
-	uint64_t dst;	/* dst mask */
-	uint32_t src;	/* src index ? */
-	uint16_t len;	/* src len */
+	uint32_t ft_dst;	/* dst mask, at least NM_BDG_MAXPORTS bits */
+	uint16_t ft_len;	/* src len */
+	uint16_t ft_next;	/* next packet to same destination */
+};
+
+/* We need to build a list of buffers going to each destination.
+ * Each buffer is in one entry of struct nm_bdg_fwd, we use ft_next
+ * to build the list, and struct nm_bdg_q below for the queue.
+ * The structure should compact because potentially we have a lot
+ * of destinations.
+ */
+struct nm_bdg_q {
+	uint16_t bq_head;
+	uint16_t bq_tail;
 };
 
 struct nm_hash_ent {
@@ -946,10 +957,14 @@ no_port:
 		ND("create new bridge port %s", name);
 		/*
 		 * create a struct ifnet for the new port, and
-		 * add space for the forwarding table after it.
+		 * add space for the forwarding table after it,
+		 * and also for the pointers to the packet queues.
+		 * We need one entry per destination, plus one for the
+		 * broadcast packets. XXX still unused.
 		 */
-		l = sizeof(*iter) +
-			 sizeof(struct nm_bdg_fwd)*NM_BDG_BATCH ;
+		l = sizeof(*iter);
+		l += sizeof(struct nm_bdg_fwd)*NM_BDG_BATCH ;
+		l += sizeof(struct nm_bdg_q)* (NM_BDG_MAXPORTS + 1);
 		iter = malloc(l, M_DEVBUF, M_NOWAIT | M_ZERO);
 		if (!iter)
 			goto no_port;
@@ -2246,7 +2261,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 		    uint8_t *s = buf+6, *d = buf;
 		    D("%d len %4d %02x:%02x:%02x:%02x:%02x:%02x -> %02x:%02x:%02x:%02x:%02x:%02x",
 			i,
-			ft[i].len,
+			ft[i].ft_len,
 			s[0], s[1], s[2], s[3], s[4], s[5],
 			d[0], d[1], d[2], d[3], d[4], d[5]);
 		}
@@ -2280,7 +2295,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 		dst &= all_dst; /* only consider valid ports */
 		if (unlikely(netmap_verbose))
 			D("pkt goes to ports 0x%x", (uint32_t)dst);
-		ft[i].dst = dst;
+		ft[i].ft_dst = dst;
 	}
 
 	/* second pass, scan interfaces and forward */
@@ -2309,7 +2324,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 		/* inside, scan slots */
 		for (i = 0; likely(i < n); i++) {
 
-			if ((ft[i].dst & dst) == 0)
+			if ((ft[i].ft_dst & dst) == 0)
 				continue;	/* not here */
 			if (!locked) {
 				is_hw = nma_is_hw(na);
@@ -2349,9 +2364,9 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 				break;
 			}
 			slot = &ring->slot[j];
-			ND("send %d %d bytes at %s:%d", i, ft[i].len, dst_ifp->if_xname, j);
-			pkt_copy(ft[i].buf, NMB(slot), ft[i].len);
-			slot->len = ft[i].len;
+			ND("send %d %d bytes at %s:%d", i, ft[i].ft_len, dst_ifp->if_xname, j);
+			pkt_copy(ft[i].buf, NMB(slot), ft[i].ft_len);
+			slot->len = ft[i].ft_len;
 			j = (j == lim) ? 0 : j + 1;
 			sent++;
 		}
@@ -2405,7 +2420,7 @@ bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	ft_i = 0;	/* start from 0 */
 	for (j = kring->nr_hwcur; likely(j != k); j = unlikely(j == lim) ? 0 : j+1) {
 		struct netmap_slot *slot = &ring->slot[j];
-		int len = ft[ft_i].len = slot->len;
+		int len = ft[ft_i].ft_len = slot->len;
 		char *buf = ft[ft_i].buf = NMB(slot);
 
 		prefetch(buf);
