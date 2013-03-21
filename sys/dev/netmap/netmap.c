@@ -210,26 +210,39 @@ struct nm_hash_ent {
  * Interfaces for a bridge are all in ports[].
  * The array has fixed size, an empty entry does not terminate
  * the search.
+ *
+ * The bridge is non blocking on the transmit ports.
+ *
+ * bdg_lock protects accesses to the bdg_ports array.
+ * This is a rw lock (or equivalent).
  */
 struct nm_bridge {
-	struct netmap_adapter *bdg_ports[NM_BDG_MAXPORTS];
-	int n_ports;
-	uint64_t act_ports;
-	int freelist;	/* first buffer index */
-	NM_SELINFO_T si;	/* poll/select wait queue */
-	NM_LOCK_T bdg_lock;	/* protect the selinfo ? */
+	int namelen;	/* 0 means free */
+	uint64_t act_ports;	/* bitmap of active ports */
 
+	/* XXX what is the proper alignment/layout ? */
+	NM_RWLOCK_T bdg_lock;	/* protects bdg_ports */
+	struct netmap_adapter *bdg_ports[NM_BDG_MAXPORTS];
+
+	char basename[IFNAMSIZ];
 	/* the forwarding table, MAC+ports */
 	struct nm_hash_ent ht[NM_BDG_HASH];
 
-	int namelen;	/* 0 means free */
-	char basename[IFNAMSIZ];
 };
 
 struct nm_bridge nm_bridges[NM_BRIDGES];
 
-#define BDG_LOCK(b)	mtx_lock(&(b)->bdg_lock)
-#define BDG_UNLOCK(b)	mtx_unlock(&(b)->bdg_lock)
+/* other OS will have these macros defined in their own glue code. */
+
+#ifdef __FreeBSD__
+#define BDG_WLOCK(b)		rw_wlock(&(b)->bdg_lock)
+#define BDG_WUNLOCK(b)		rw_wunlock(&(b)->bdg_lock)
+#define BDG_RLOCK(b)		rw_rlock(&(b)->bdg_lock)
+#define BDG_RUNLOCK(b)		rw_runlock(&(b)->bdg_lock)
+#define BDG_SET_VAR(lval, p)	(lval = p)
+#define BDG_GET_VAR(lval)	(lval)
+#define BDG_FREE(p)		free(p, M_DEVBUF)
+#endif /* __FreeBSD__ */
 
 static __inline int
 nma_is_hw(struct netmap_adapter *na)
@@ -287,7 +300,7 @@ nm_find_bridge(const char *name)
 	ND("--- prefix is '%.*s' ---", namelen, name);
 
 	/* use the first entry for locking */
-	BDG_LOCK(nm_bridges); // XXX do better
+	BDG_WLOCK(nm_bridges); // XXX do better
 	for (e = -1, i = 1; i < NM_BRIDGES; i++) {
 		b = nm_bridges + i;
 		if (b->namelen == 0)
@@ -306,7 +319,7 @@ nm_find_bridge(const char *name)
 			b->namelen = namelen;
 		}
 	}
-	BDG_UNLOCK(nm_bridges);
+	BDG_WUNLOCK(nm_bridges);
 	return b;
 }
 
@@ -547,7 +560,7 @@ nm_if_rele(struct ifnet *ifp)
 #ifndef NM_BRIDGE
 	if_rele(ifp);
 #else /* NM_BRIDGE */
-	int i, full;
+	int i, full = 0, is_hw;
 	struct nm_bridge *b;
 	struct netmap_adapter *na;
 
@@ -561,8 +574,9 @@ nm_if_rele(struct ifnet *ifp)
 		return;
 	na = NA(ifp);
 	b = na->na_bdg;
-	BDG_LOCK(nm_bridges);
-	BDG_LOCK(b);
+	is_hw = nma_is_hw(na);
+
+	BDG_WLOCK(b);
 	ND("want to disconnect %s from the bridge", ifp->if_xname);
 	full = 0;
 	/* remove the entry from the bridge, also check
@@ -572,29 +586,29 @@ nm_if_rele(struct ifnet *ifp)
 	 * are connected. But it is not in a critical path.
 	 */
 	for (i = 0; i < NM_BDG_MAXPORTS; i++) {
-		if (b->bdg_ports[i] == na) {
-			b->bdg_ports[i] = NULL;
-			if (nma_is_hw(na)) {
-				/* free forwarding table, disconnect from bridge */
-				na->na_bdg = NULL;
-			} else {
-				bzero(na, sizeof(*na));
-				free(na, M_DEVBUF);
-				bzero(ifp, sizeof(*ifp));
-				free(ifp, M_DEVBUF);
-			}
-		}
-		else if (b->bdg_ports[i] != NULL)
+		struct netmap_adapter *tmp = BDG_GET_VAR(b->bdg_ports[i]);
+
+		if (tmp == na) {
+			/* disconnect from bridge */
+			BDG_SET_VAR(b->bdg_ports[i], NULL);
+			na->na_bdg = NULL;
+		} else if (tmp != NULL) {
 			full = 1;
+		}
 	}
-	BDG_UNLOCK(b);
+	BDG_WUNLOCK(b);
 	if (full == 0) {
 		ND("marking bridge %d as free", b - nm_bridges);
 		b->namelen = 0;
 	}
-	BDG_UNLOCK(nm_bridges);
 	if (i == NM_BDG_MAXPORTS)
 		D("ouch, cannot find ifp to remove");
+	else if (!is_hw) {
+		bzero(na, sizeof(*na));
+		free(na, M_DEVBUF);
+		bzero(ifp, sizeof(*ifp));
+		free(ifp, M_DEVBUF);
+	}
 #endif /* NM_BRIDGE */
 }
 
@@ -998,10 +1012,10 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp)
 		}
 		/* Now we are sure that name starts with the bridge's name */
 		/* XXX locking */
-		BDG_LOCK(b);
+		BDG_WLOCK(b);
 		/* lookup in the local list of ports */
 		for (i = 0; i < NM_BDG_MAXPORTS; i++) {
-			na = b->bdg_ports[i];
+			na = BDG_GET_VAR(b->bdg_ports[i]);
 			if (na == NULL) {
 				if (cand == -1)
 					cand = i; /* potential insert point */
@@ -1013,14 +1027,14 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp)
 				/* must be a software VALE port */
 				ADD_BDG_REF(iter);
 				ND("found existing interface");
-				BDG_UNLOCK(b);
+				BDG_WUNLOCK(b);
 				break;
 			} else if (namelen > b->namelen &&
 			     !strcmp(iter->if_xname, name + b->namelen + 1)) {
 				/* must be a NIC port */
 				/* XXX do we need a refcount ? */
 				ND("found existing NIC");
-				BDG_UNLOCK(b);
+				BDG_WUNLOCK(b);
 				break;
 			}
 		}
@@ -1029,7 +1043,7 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp)
 		if (cand == -1) {
 			D("bridge full, cannot create new port");
 no_port:
-			BDG_UNLOCK(b);
+			BDG_WUNLOCK(b);
 			*ifp = NULL;
 			return EINVAL;
 		}
@@ -1086,10 +1100,10 @@ no_port:
 		na = NA(iter);
 		na->bdg_port = cand;
 		/* bind the port to the bridge (virtual ports are not active) */
-		b->bdg_ports[cand] = na; // XXX or linux equivalent
+		BDG_SET_VAR(b->bdg_ports[cand], na);
 		na->na_bdg = b;
 		ADD_BDG_REF(iter);
-		BDG_UNLOCK(b);
+		BDG_WUNLOCK(b);
 		ND("attaching virtual bridge %p", b);
 	} while (0);
 	*ifp = iter;
@@ -2493,7 +2507,7 @@ bdg_netmap_reg(struct ifnet *ifp, int onoff)
 	struct netmap_adapter *na = NA(ifp);
 	struct nm_bridge *b = na->na_bdg;
 
-	BDG_LOCK(b);
+	BDG_WLOCK(b);
 	if (onoff) {
 		/* the interface must be already in the list.
 		 * only need to mark the port as active by setting
@@ -2501,7 +2515,7 @@ bdg_netmap_reg(struct ifnet *ifp, int onoff)
 		 */
 		ND("should attach %s to the bridge", ifp->if_xname);
 		for (i=0; i < NM_BDG_MAXPORTS; i++)
-			if (b->bdg_ports[i] == na)
+			if (BDG_GET_VAR(b->bdg_ports[i]) == na)
 				break;
 		if (i == NM_BDG_MAXPORTS) {
 			D("no more ports available");
@@ -2519,7 +2533,7 @@ bdg_netmap_reg(struct ifnet *ifp, int onoff)
 		b->act_ports &= ~(1<<i);
 	}
 done:
-	BDG_UNLOCK(b);
+	BDG_WUNLOCK(b);
 	return err;
 }
 
@@ -2541,6 +2555,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 	struct netmap_slot *slot;
 	struct nm_bridge *b = NA(ifp)->na_bdg;
 
+	BDG_RLOCK(b);
 	ND("prepare to send %d packets, act_ports 0x%x", n, b->act_ports);
 	/* only consider valid destinations */
 	all_dst = (b->act_ports & ~mysrc);
@@ -2595,7 +2610,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 	all_dst = (b->act_ports & ~mysrc);
 	for (ifn = 0; all_dst; ifn++) {
 		struct ifnet *dst_ifp;
-		struct netmap_adapter *na = b->bdg_ports[ifn];
+		struct netmap_adapter *na = BDG_GET_VAR(b->bdg_ports[ifn]);
 		struct netmap_kring *kring;
 		struct netmap_ring *ring;
 		int j, lim, sent, locked, is_hw, howmany;
@@ -2681,6 +2696,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 			}
 		}
 	}
+	BDG_RUNLOCK(b);
 	return 0;
 }
 
@@ -2744,6 +2760,8 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 
 	dst_ents = (struct nm_bdg_q *)(ft + NM_BDG_BATCH);
 
+	BDG_RLOCK(b);
+
 	/* first pass: find a destination */
 	for (i = 0; likely(i < n); i++) {
 		uint8_t *buf = ft[i].buf;
@@ -2760,7 +2778,7 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 			continue;
 		else if (dst_port == NM_BDG_BROADCAST)
 			dst_ring = 0; /* broadcasts always go to ring 0 */
-		else if (dst_port == me || !b->bdg_ports[dst_port])
+		else if (dst_port == me || !BDG_GET_VAR(b->bdg_ports[dst_port]))
 			continue;
 
 		/* get a position in the scratch pad */
@@ -2784,7 +2802,7 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 	if (brddst->bq_head != NM_BDG_BATCH) {
 		for (i = 0; i < NM_BDG_MAXPORTS; i++) {
 			uint16_t d_i = i * NM_BDG_MAXRINGS;
-			if (i == me || !b->bdg_ports[i])
+			if (i == me || !BDG_GET_VAR(b->bdg_ports[i]))
 				continue;
 			else if (dst_ents[d_i].bq_head == NM_BDG_BATCH)
 				dsts[num_dsts++] = d_i;
@@ -2803,9 +2821,13 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 
 		d_i = dsts[i];
 		d = dst_ents + d_i;
-		na = b->bdg_ports[d_i/NM_BDG_MAXRINGS];
+		na = BDG_GET_VAR(b->bdg_ports[d_i/NM_BDG_MAXRINGS]);
 		dst_ifp = na->ifp;
-		/* if someone has detached the interface, we must skip it */
+		/*
+		 * The interface may be in !netmap mode in two cases:
+		 * - when na is attached but not activated yet;
+		 * - when na is being deactivated but is still attached.
+		 */
 		if (unlikely(!(dst_ifp->if_capenable & IFCAP_NETMAP)))
 			continue;
 		na = NA(dst_ifp);
@@ -2876,6 +2898,7 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 		d->bq_head = d->bq_tail = NM_BDG_BATCH; /* cleanup */
 	}
 	brddst->bq_head = brddst->bq_tail = NM_BDG_BATCH; /* cleanup */
+	BDG_RUNLOCK(b);
 	return 0;
 }
 
@@ -3047,7 +3070,7 @@ netmap_init(void)
 	{
 	int i;
 	for (i = 0; i < NM_BRIDGES; i++)
-		mtx_init(&nm_bridges[i].bdg_lock, "bdg lock", "bdg_lock", MTX_DEF);
+		rw_init(&nm_bridges[i].bdg_lock, "bdg lock");
 	}
 #endif
 	return (error);

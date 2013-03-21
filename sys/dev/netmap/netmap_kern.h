@@ -41,12 +41,14 @@
 #define unlikely(x)	__builtin_expect(!!(x), 0)
 
 #define	NM_LOCK_T	struct mtx
+#define	NM_RWLOCK_T	struct rwlock
 #define	NM_SELINFO_T	struct selinfo
 #define	MBUF_LEN(m)	((m)->m_pkthdr.len)
 #define	NM_SEND_UP(ifp, m)	((ifp)->if_input)(ifp, m)
 #elif defined (linux)
 
 #define	NM_LOCK_T	safe_spinlock_t	// see bsd_glue.h
+#define	NM_RWLOCK_T	safe_spinlock_t	// see bsd_glue.h
 #define	NM_SELINFO_T	wait_queue_head_t
 #define	MBUF_LEN(m)	((m)->len)
 #define	NM_SEND_UP(ifp, m)	netif_rx(m)
