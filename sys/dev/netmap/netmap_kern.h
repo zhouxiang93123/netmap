@@ -138,6 +138,7 @@ struct netmap_kring {
 	uint16_t	nkr_slot_flags;	/* initial value for flags */
 	int	nkr_hwofs;	/* offset between NIC and netmap ring */
 	struct netmap_adapter *na;
+	struct nm_bdg_fwd *nkr_ft;
 	NM_SELINFO_T si;	/* poll/select wait queue */
 	NM_LOCK_T q_lock;	/* used if no device lock available */
 } __attribute__((__aligned__(64)));
@@ -229,7 +230,6 @@ struct netmap_adapter {
 	 * This is only done when physical interfaces are attached to a bridge.
 	 */
 	struct netmap_priv_d *na_kpriv;
-	struct nm_bdg_fwd *na_ft;
 #ifdef linux
 	struct net_device_ops nm_ndo;
 #endif /* linux */

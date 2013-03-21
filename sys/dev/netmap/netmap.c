@@ -309,6 +309,51 @@ nm_find_bridge(const char *name)
 	BDG_UNLOCK(nm_bridges);
 	return b;
 }
+
+
+/*
+ * Free the forwarding tables for rings attached to switch ports.
+ */
+static void
+nm_free_bdgfwd(struct netmap_adapter *na)
+{
+	int nrings, i;
+	struct netmap_kring *kring;
+
+	nrings = nma_is_hw(na) ? na->num_rx_rings : na->num_tx_rings;
+	kring = nma_is_hw(na) ? na->rx_rings : na->tx_rings;
+	for (i = 0; i < nrings; i++) {
+		if (kring[i].nkr_ft) {
+			free(kring[i].nkr_ft, M_DEVBUF);
+			kring[i].nkr_ft = NULL; /* protect from freeing twice */
+		}
+	}
+}
+
+/*
+ * Allocate the forwarding tables for the rings attached to the bridge ports.
+ */
+static int
+nm_alloc_bdgfwd(struct netmap_adapter *na)
+{
+	int nrings, l, i;
+	struct netmap_kring *kring;
+
+	l = sizeof(struct nm_bdg_fwd) * NM_BDG_BATCH;
+	l += sizeof(struct nm_bdg_q) * NM_BDG_MAXPORTS * NM_BDG_MAXRINGS;
+
+	nrings = nma_is_hw(na) ? na->num_rx_rings : na->num_tx_rings;
+	kring = nma_is_hw(na) ? na->rx_rings : na->tx_rings;
+	for (i = 0; i < nrings; i++) {
+		kring[i].nkr_ft = malloc(l, M_DEVBUF, M_NOWAIT | M_ZERO);
+		if (!kring[i].nkr_ft) {
+			nm_free_bdgfwd(na);
+			return ENOMEM;
+		}
+	}
+	return 0;
+}
+
 #endif /* NM_BRIDGE */
 
 
@@ -467,6 +512,9 @@ netmap_dtor_locked(void *data)
 			selwakeuppri(&na->rx_rings[i].si, PI_NET);
 		selwakeuppri(&na->tx_si, PI_NET);
 		selwakeuppri(&na->rx_si, PI_NET);
+#ifdef NM_BRIDGE
+		nm_free_bdgfwd(na);
+#endif /* NM_BRIDGE */
 		/* release all buffers */
 		for (i = 0; i < na->num_tx_rings + 1; i++) {
 			struct netmap_ring *ring = na->tx_rings[i].ring;
@@ -528,8 +576,6 @@ nm_if_rele(struct ifnet *ifp)
 			b->bdg_ports[i] = NULL;
 			if (nma_is_hw(na)) {
 				/* free forwarding table, disconnect from bridge */
-				free(na->na_ft, M_DEVBUF);
-				na->na_ft = NULL;
 				na->na_bdg = NULL;
 			} else {
 				bzero(na, sizeof(*na));
@@ -1204,11 +1250,14 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 			    MTX_NETWORK_LOCK, MTX_DEF);
 		}
 		error = na->nm_register(ifp, 1); /* mode on */
+		if (!error)
+			error = nm_alloc_bdgfwd(na);
 		if (error) {
 			netmap_dtor_locked(priv);
 			netmap_if_free(nifp); /* XXX needed ? */
 			nifp = NULL;
 		}
+
 	}
 out:
 	*err = error;
@@ -2069,7 +2118,7 @@ netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	int j, cur, howmany;
-	struct nm_bdg_fwd *ft = na->na_ft;
+	struct nm_bdg_fwd *ft = kring->nkr_ft;
 	int ft_i;       /* position in the forwarding table */
 
 	/* fetch packets that have arrived */
@@ -2840,7 +2889,7 @@ bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	int i, j, k, lim = kring->nkr_num_slots - 1;
-	struct nm_bdg_fwd *ft = (struct nm_bdg_fwd *)(ifp + 1);
+	struct nm_bdg_fwd *ft = kring->nkr_ft;
 	int ft_i;	/* position in the forwarding table */
 
 	k = ring->cur;
