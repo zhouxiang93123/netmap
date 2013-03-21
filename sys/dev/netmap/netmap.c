@@ -178,9 +178,9 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
 #define	ADD_BDG_REF(ifp)	refcount_acquire(&NA(ifp)->na_bdg_refcount)
 #define	DROP_BDG_REF(ifp)	refcount_release(&NA(ifp)->na_bdg_refcount)
 
-static void bdg_netmap_attach(struct ifnet *ifp);
+static void bdg_netmap_attach(struct netmap_adapter *);
 static int bdg_netmap_reg(struct ifnet *ifp, int onoff);
-// static int kern_netmap_regif(struct ifnet *ifp, uint16_t ringid);
+static int kern_netmap_regif(struct ifnet *ifp, uint16_t ringid);
 
 /* per-tx-queue entry */
 struct nm_bdg_fwd {	/* forwarding entry for a bridge */
@@ -931,7 +931,7 @@ netmap_sync_from_host(struct netmap_adapter *na, struct thread *td, void *pwait)
  * If successful, hold a reference.
  */
 static int
-get_ifp(const struct nmreq *nmr, struct ifnet **ifp)
+get_ifp(struct nmreq *nmr, struct ifnet **ifp)
 {
 	const char *name = nmr->nr_name;
 	int namelen = strlen(name);
@@ -989,26 +989,59 @@ no_port:
 		}
 		ND("create new bridge port %s", name);
 		/*
-		 * create a struct ifnet for the new port, and
-		 * add space for the forwarding table after it,
+		 * create a struct ifnet for the new port.
+		 * The forwarding table is attached to the kring(s).
+		 *
 		 * and also for the pointers to the packet queues.
 		 * We need one entry per destination, plus one for the
 		 * broadcast packets. XXX still unused.
 		 */
-		l = sizeof(*iter);
-		l += sizeof(struct nm_bdg_fwd)*NM_BDG_BATCH ;
-		l += sizeof(struct nm_bdg_q)* (NM_BDG_MAXPORTS + 1);
-		iter = malloc(l, M_DEVBUF, M_NOWAIT | M_ZERO);
-		if (!iter)
-			goto no_port;
-		strcpy(iter->if_xname, name);
-		/* bdg_netmap_attach creates a struct netmap_adapter */
-		bdg_netmap_attach(iter);
+		l = sizeof(struct nm_bdg_fwd)*NM_BDG_BATCH ;
+		// XXX only for nm_bdg_flush2
+		// l += sizeof(struct nm_bdg_q)* (NM_BDG_MAXPORTS + 1);
+		/*
+		 * try see if there is a matching NIC with this name
+		 * (after the bridge's name)
+		 */
+		iter = ifunit_ref(name + b->namelen + 1);
+		if (!iter) { /* this is a virtual port */
+			/* Create a temporary NA with arguments, then
+			 * bdg_netmap_attach() will allocate the real one
+			 * and attach it to the ifp
+			 */
+			struct netmap_adapter tmp_na;
+
+			bzero(&tmp_na, sizeof(tmp_na));
+			/* bound checking */
+			if (nmr->nr_tx_rings < 1)
+				nmr->nr_tx_rings = 1;
+			if (nmr->nr_tx_rings > NM_BDG_MAXRINGS)
+				nmr->nr_tx_rings = NM_BDG_MAXRINGS;
+			tmp_na.num_tx_rings = nmr->nr_tx_rings;
+			if (nmr->nr_rx_rings < 1)
+				nmr->nr_rx_rings = 1;
+			if (nmr->nr_rx_rings > NM_BDG_MAXRINGS)
+				nmr->nr_rx_rings = NM_BDG_MAXRINGS;
+			tmp_na.num_rx_rings = nmr->nr_rx_rings;
+
+			iter = malloc(sizeof(*iter), M_DEVBUF, M_NOWAIT | M_ZERO);
+			if (!iter)
+				goto no_port;
+			strcpy(iter->if_xname, name);
+			tmp_na.ifp = iter;
+			/* bdg_netmap_attach creates a struct netmap_adapter */
+			bdg_netmap_attach(&tmp_na);
+		} else { /* this is a NIC connected to the bridge */
+			if (kern_netmap_regif(iter, nmr->nr_ringid))
+				goto no_port;
+			/* the NIC is activated now */
+			b->act_ports |= (1<<cand);
+		}
 		na = NA(iter);
-		/* bind the interface to the bridge, but do not activate */
-		b->bdg_ports[cand] = na;
-		na->na_bdg = b;
 		na->bdg_port = cand;
+		/* bind the port to the bridge (virtual ports are not active) */
+		b->bdg_ports[cand] = na; // XXX or linux equivalent
+		na->na_bdg = b;
 		ADD_BDG_REF(iter);
 		BDG_UNLOCK(b);
 		ND("attaching virtual bridge %p", b);
@@ -1131,6 +1164,91 @@ netmap_set_ringid(struct netmap_priv_d *priv, u_int ringid)
     }
 	return 0;
 }
+
+
+/*
+ * possibly move the interface to netmap-mode.
+ * If success it returns a pointer to netmap_if, otherwise NULL.
+ * This must be called with NMA_LOCK held.
+ */
+static struct netmap_if *
+netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
+	uint16_t ringid, int *err)
+{
+	struct netmap_adapter *na = NA(ifp);
+	struct netmap_if *nifp = NULL;
+	int i, error;
+
+	na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
+
+	/* ring configuration may have changed, fetch from the card */
+	netmap_update_config(na);
+	priv->np_ifp = ifp;     /* store the reference */
+	error = netmap_set_ringid(priv, ringid);
+	if (error)
+		goto out;
+	nifp = netmap_if_new(ifp->if_xname, na);
+	if (nifp == NULL) { /* allocation failed */
+		error = ENOMEM;
+	} else if (ifp->if_capenable & IFCAP_NETMAP) {
+		/* was already set */
+	} else {
+		/* Otherwise set the card in netmap mode
+		 * and make it use the shared buffers.
+		 */
+		for (i = 0 ; i < na->num_tx_rings + 1; i++)
+			mtx_init(&na->tx_rings[i].q_lock, "nm_txq_lock",
+			    MTX_NETWORK_LOCK, MTX_DEF);
+		for (i = 0 ; i < na->num_rx_rings + 1; i++) {
+			mtx_init(&na->rx_rings[i].q_lock, "nm_rxq_lock",
+			    MTX_NETWORK_LOCK, MTX_DEF);
+		}
+		error = na->nm_register(ifp, 1); /* mode on */
+		if (error) {
+			netmap_dtor_locked(priv);
+			netmap_if_free(nifp); /* XXX needed ? */
+			nifp = NULL;
+		}
+	}
+out:
+	*err = error;
+	na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
+	return nifp;
+}
+
+
+/* We must be already sure this ifp supports netmap */
+static int
+kern_netmap_regif(struct ifnet *ifp, uint16_t ringid)
+{
+	struct netmap_adapter *na = NA(ifp);
+	struct netmap_if *nifp;
+	struct netmap_priv_d *kpriv;
+	int error;
+
+	kpriv = malloc(sizeof(*kpriv), M_DEVBUF, M_NOWAIT|M_ZERO);
+	if (kpriv == NULL)
+		return ENOMEM;
+	error = netmap_get_memory(kpriv);
+	if (error)
+		goto error;
+	NMA_LOCK();
+	nifp = netmap_do_regif(kpriv, ifp, ringid, &error);
+	if (!nifp) {
+		NMA_UNLOCK();
+error:
+		bzero(kpriv, sizeof(*kpriv));
+		free(kpriv, M_DEVBUF);
+		return error;
+	}
+	wmb(); // XXX do we need it ?
+	kpriv->np_nifp = nifp;
+	na->na_kpriv = kpriv;
+	NMA_UNLOCK();
+	D("registered %s to netmap-mode", ifp->if_xname);
+	return error;
+}
+
 
 /*
  * ioctl(2) support for the "netmap" device.
@@ -2830,21 +2948,23 @@ bdg_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 }
 
 static void
-bdg_netmap_attach(struct ifnet *ifp)
+bdg_netmap_attach(struct netmap_adapter *arg)
 {
 	struct netmap_adapter na;
 
 	ND("attaching virtual bridge");
 	bzero(&na, sizeof(na));
 
-	na.ifp = ifp;
+	na.ifp = arg->ifp;
 	na.separate_locks = 1;
+	na.num_tx_rings = arg->num_tx_rings;
+	na.num_rx_rings = arg->num_rx_rings;
 	na.num_tx_desc = NM_BRIDGE_RINGSIZE;
 	na.num_rx_desc = NM_BRIDGE_RINGSIZE;
 	na.nm_txsync = bdg_netmap_txsync;
 	na.nm_rxsync = bdg_netmap_rxsync;
 	na.nm_register = bdg_netmap_reg;
-	netmap_attach(&na, 1);
+	netmap_attach(&na, na.num_tx_rings);
 }
 
 #endif /* NM_BRIDGE */
