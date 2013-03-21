@@ -278,10 +278,25 @@ struct netmap_if {
  * NIOCREGIF takes an interface name within a struct ifreq,
  *	and activates netmap mode on the interface (if possible).
  *
+ *	For vale port, starting with NETMAP_API = 4, nr_tx_rings and nr_rx_rings
+ *	are used to specify how many software rings are created (0 defaults to 1,
+ *	and larger values up to XXX are allowed).
+ *
+ *	NIOCREGIF is also used to attach a NIC to a VALE switch.
+ *	In this case the name is vale*:ifname, and "spare1"
+ *	is set to 'NETMAP_BDG_ATTACH' or 'NETMAP_BDG_DETACH'.
+ *	nr_ringid specifies which rings should be attached, 0 means all,
+ *	NETMAP_HW_RING + n means only the n-th ring.
+ *	The process can terminate after the interface has been attached.
+ *
  * NIOCUNREGIF unregisters the interface associated to the fd.
+ *	this is deprecated and will go away.
  *
  * NIOCTXSYNC, NIOCRXSYNC synchronize tx or rx queues,
  *	whose identity is set in NIOCREGIF through nr_ringid
+ *
+ * API version:
+ *	in version 3, when 
  */
 
 /*
@@ -303,6 +318,8 @@ struct nmreq {
 #define NETMAP_NO_TX_POLL	0x1000	/* no automatic txsync on poll */
 #define NETMAP_RING_MASK 0xfff		/* the ring number */
 	uint16_t	spare1;
+#define NETMAP_BDG_ATTACH	0x1
+#define NETMAP_BDG_DETACH	0x2
 	uint32_t	spare2[4];
 };
 

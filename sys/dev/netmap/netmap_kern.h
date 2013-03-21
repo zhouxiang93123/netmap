@@ -495,7 +495,6 @@ PNMB(struct netmap_slot *slot, uint64_t *pp)
 int netmap_rx_irq(struct ifnet *, int, int *);
 #define netmap_tx_irq(_n, _q) netmap_rx_irq(_n, _q, NULL)
 
-void netmap_nic_to_bdg(struct ifnet *, u_int);
 
 extern int netmap_copy;
 #endif /* _NET_NETMAP_KERN_H_ */

@@ -557,16 +557,16 @@ netmap_dtor(void *data)
 {
 	struct netmap_priv_d *priv = data;
 	struct ifnet *ifp = priv->np_ifp;
-	struct netmap_adapter *na;
 
 	NMA_LOCK();
 	if (ifp) {
-		na = NA(ifp);
+		struct netmap_adapter *na = NA(ifp);
+
 		na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
 		netmap_dtor_locked(data);
 		na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
 
-		nm_if_rele(ifp);
+		nm_if_rele(ifp); /* might also destroy *na */
 	}
 	if (priv->ref_done) {
 		netmap_memory_deref();
@@ -1224,6 +1224,29 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			error = EINVAL;
 			break;
 		}
+		/* possibly attach/detach NIC and VALE switch */
+		i = nmr->spare1;
+		if (i == NETMAP_BDG_ATTACH || i == NETMAP_BDG_DETACH) {
+			error = get_ifp(nmr, &ifp);
+			if (error)
+				break;
+			if (!nma_is_hw(NA(ifp))) {
+				D("must specify a NIC, not %s", nmr->nr_name);
+				error = EINVAL;
+				break;
+			}
+		        if (i == NETMAP_BDG_DETACH) {
+				na = NA(ifp);
+				netmap_dtor(na->na_kpriv);
+				na->na_kpriv = NULL;
+			}
+			break;
+		} else if (i != 0) {
+			D("spare1 must be 0 not %d", i);
+			error = EINVAL;
+			break;
+		}
+			
 		/* ensure allocators are ready */
 		error = netmap_get_memory(priv);
 		ND("get_memory returned %d", error);
@@ -1913,6 +1936,63 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, int n,
 	return kring->ring->slot;
 }
 
+static int
+nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr);
+/*
+ * Pass packets from nic to the bridge. Must be called with
+ * proper locks on the source interface.
+ * Note that the user process has no access to this NIC so
+ * nobody should be touching the 'ring'. So we ignore it.
+ */
+static void
+netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
+{
+	struct netmap_adapter *na = NA(ifp);
+	struct netmap_kring *kring = &na->rx_rings[ring_nr];
+	struct netmap_ring *ring = kring->ring;
+	int j, cur, howmany;
+	struct nm_bdg_fwd *ft = na->na_ft;
+	int ft_i;       /* position in the forwarding table */
+
+	/* fetch packets that have arrived */
+	na->nm_rxsync(ifp, ring_nr, 0);
+	/* XXX we don't count reserved, but it should be 0 */
+	cur = kring->nr_hwcur;
+	howmany = kring->nr_hwavail;
+	if (howmany == 0) {
+		D("how strange, interrupt with no packets on %s",
+			ifp->if_xname);
+		return;
+	}
+	ft_i = 0;
+	/* this loop is similar to bdg_netmap_txsync() */
+	for (j = 0; likely(j < howmany); j++) {
+		struct netmap_slot *slot = &ring->slot[cur];
+		int len = ft[ft_i].ft_len = slot->len;
+		char *buf = ft[ft_i].buf = NMB(slot);
+
+		prefetch(buf);
+		if (unlikely(len < 14)) {
+			/* we don't advance ft_i */
+			cur = (cur+1 == ring->num_slots ? 0: cur+1);
+			continue;
+		}
+		if (unlikely(++ft_i == netmap_bridge))
+			ft_i = nm_bdg_flush(ft, ft_i, ifp, ring_nr);
+		cur = (cur+1 == ring->num_slots ? 0: cur+1);
+	}
+	if (ft_i)
+		ft_i = nm_bdg_flush(ft, ft_i, ifp, ring_nr);
+	/* we consume everything, but we cannot update kring directly
+	 * because the nic may have destroyed the info in the NIC ring.
+	 * So we need to call rxsync again to restore it.
+	 */
+	ring->cur = cur;
+	ring->avail = 0;
+	na->nm_rxsync(ifp, ring_nr, 0);
+	return;
+}
+
 
 /*
  * Default functions to handle rx/tx interrupts
@@ -1933,6 +2013,7 @@ netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
 	struct netmap_adapter *na;
 	struct netmap_kring *r;
 	NM_SELINFO_T *main_wq;
+	int nic_to_bridge = 0;
 
 	if (!(ifp->if_capenable & IFCAP_NETMAP))
 		return 0;
@@ -1949,6 +2030,7 @@ netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
 		r = na->rx_rings + q;
 		r->nr_kflags |= NKR_PENDINTR;
 		main_wq = (na->num_rx_rings > 1) ? &na->rx_si : NULL;
+		nic_to_bridge = na->na_bdg != NULL;
 	} else { /* tx path */
 		if (q >= na->num_tx_rings)
 			return 0;	// regular queue
@@ -1958,18 +2040,29 @@ netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
 	}
 	if (na->separate_locks) {
 		mtx_lock(&r->q_lock);
-		selwakeuppri(&r->si, PI_NET);
+		/* If a NIC is attached to a bridge, flush packets
+		 * (and no need to wakeup anyone). Otherwise, wakeup
+		 * possible processes waiting for packets.
+		 */
+		if (nic_to_bridge)
+			netmap_nic_to_bdg(ifp, q);
+		else
+			selwakeuppri(&r->si, PI_NET);
 		mtx_unlock(&r->q_lock);
-		if (main_wq) {
+		if (main_wq && !nic_to_bridge) {
 			mtx_lock(&na->core_lock);
 			selwakeuppri(main_wq, PI_NET);
 			mtx_unlock(&na->core_lock);
 		}
 	} else {
 		mtx_lock(&na->core_lock);
-		selwakeuppri(&r->si, PI_NET);
-		if (main_wq)
-			selwakeuppri(main_wq, PI_NET);
+		if (nic_to_bridge)
+			netmap_nic_to_bdg(ifp, q);
+		else {
+			selwakeuppri(&r->si, PI_NET);
+			if (main_wq)
+				selwakeuppri(main_wq, PI_NET);
+		}
 		mtx_unlock(&na->core_lock);
 	}
 	*work_done = 1; /* do not fire napi again */
