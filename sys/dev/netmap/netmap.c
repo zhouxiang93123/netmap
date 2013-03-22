@@ -349,20 +349,30 @@ nm_free_bdgfwd(struct netmap_adapter *na)
 static int
 nm_alloc_bdgfwd(struct netmap_adapter *na)
 {
-	int nrings, l, i;
+	int nrings, l, i, num_dstq;
 	struct netmap_kring *kring;
 
+	/* all port:rings + broadcast */
+	num_dstq = NM_BDG_MAXPORTS * NM_BDG_MAXRINGS + 1;
 	l = sizeof(struct nm_bdg_fwd) * NM_BDG_BATCH;
 	l += sizeof(struct nm_bdg_q) * NM_BDG_MAXPORTS * NM_BDG_MAXRINGS;
 
 	nrings = nma_is_hw(na) ? na->num_rx_rings : na->num_tx_rings;
 	kring = nma_is_hw(na) ? na->rx_rings : na->tx_rings;
 	for (i = 0; i < nrings; i++) {
-		kring[i].nkr_ft = malloc(l, M_DEVBUF, M_NOWAIT | M_ZERO);
-		if (!kring[i].nkr_ft) {
+		struct nm_bdg_fwd *ft;
+		struct nm_bdg_q *dstq;
+		int j;
+
+		ft = malloc(l, M_DEVBUF, M_NOWAIT | M_ZERO);
+		if (!ft) {
 			nm_free_bdgfwd(na);
 			return ENOMEM;
 		}
+		dstq = (struct nm_bdg_q *)(ft + NM_BDG_BATCH);
+		for (j = 0; j < num_dstq; j++)
+			dstq[j].bq_head = dstq[j].bq_tail = NM_BDG_BATCH;
+		kring[i].nkr_ft = ft;
 	}
 	return 0;
 }
@@ -1278,8 +1288,10 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 			    MTX_NETWORK_LOCK, MTX_DEF);
 		}
 		error = na->nm_register(ifp, 1); /* mode on */
+#ifdef NM_BRIDGE
 		if (!error)
 			error = nm_alloc_bdgfwd(na);
+#endif /* NM_BRIDGE */
 		if (error) {
 			netmap_dtor_locked(priv);
 			netmap_if_free(nifp); /* XXX needed ? */
@@ -2081,8 +2093,11 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, int n,
 	return kring->ring->slot;
 }
 
-static int
+// XXX non static to silence the compiler
+int
 nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr);
+int
+nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr);
 /*
  * Pass packets from nic to the bridge. Must be called with
  * proper locks on the source interface.
@@ -2123,11 +2138,11 @@ netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
 			continue;
 		}
 		if (unlikely(++ft_i == netmap_bridge))
-			ft_i = nm_bdg_flush(ft, ft_i, ifp, ring_nr);
+			ft_i = nm_bdg_flush2(ft, ft_i, ifp, ring_nr);
 		cur = (cur+1 == ring->num_slots ? 0: cur+1);
 	}
 	if (ft_i)
-		ft_i = nm_bdg_flush(ft, ft_i, ifp, ring_nr);
+		ft_i = nm_bdg_flush2(ft, ft_i, ifp, ring_nr);
 	/* we consume everything, but we cannot update kring directly
 	 * because the nic may have destroyed the info in the NIC ring.
 	 * So we need to call rxsync again to restore it.
@@ -2515,7 +2530,7 @@ done:
  * At the moment, the output ring is the same as the input ring,
  * but the logic will change.
  */
-static int
+int
 nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 {
 	int i, ifn;
@@ -2719,9 +2734,6 @@ nm_bdg_learning(uint8_t *buf, uint8_t *dst_ring, struct ifnet *ifp)
  * unicast and broadcast (and much larger number of ports),
  * and lets us replace the learn and dispatch functions.
  */
-// XXX non static to silence the compiler
-int
-nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr);
 int
 nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 {
@@ -2910,10 +2922,10 @@ bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		if (unlikely(len < 14))
 			continue;
 		if (unlikely(++ft_i == netmap_bridge))
-			ft_i = nm_bdg_flush(ft, ft_i, ifp, ring_nr);
+			ft_i = nm_bdg_flush2(ft, ft_i, ifp, ring_nr);
 	}
 	if (ft_i)
-		ft_i = nm_bdg_flush(ft, ft_i, ifp, ring_nr);
+		ft_i = nm_bdg_flush2(ft, ft_i, ifp, ring_nr);
 	/* count how many packets we sent */
 	i = k - j;
 	if (i < 0)
