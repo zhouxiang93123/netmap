@@ -2104,7 +2104,7 @@ netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
 	/* XXX we don't count reserved, but it should be 0 */
 	cur = kring->nr_hwcur;
 	howmany = kring->nr_hwavail;
-	if (howmany == 0) {
+	if (howmany == 0 && netmap_verbose) {
 		D("how strange, interrupt with no packets on %s",
 			ifp->if_xname);
 		return;
@@ -2609,6 +2609,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 				is_hw = nma_is_hw(na);
 				if (is_hw) { /* going to a physical port */
 					kring = &na->tx_rings[dst_ring_nr];
+					ring = kring->ring;
 					lim = kring->nkr_num_slots - 1;
 					na->nm_lock(dst_ifp, NETMAP_TX_LOCK, dst_ring_nr);
 					/*
