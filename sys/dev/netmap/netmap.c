@@ -601,7 +601,7 @@ nm_if_rele(struct ifnet *ifp)
 		ND("marking bridge %d as free", b - nm_bridges);
 		b->namelen = 0;
 	}
-	if (i == NM_BDG_MAXPORTS)
+	if (na->na_bdg) /* still attached to the bridge */
 		D("ouch, cannot find ifp to remove");
 	else if (!is_hw) {
 		bzero(na, sizeof(*na));
@@ -1236,7 +1236,24 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 	struct netmap_if *nifp = NULL;
 	int i, error;
 
+#if 0 /* USELESS -- race protection */
+	for (i = 10; i > 0; i--) {
+		na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
+		if (!NETMAP_DELETING(na))
+			break;
+		na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
+		tsleep(na, 0, "NIOCREGIF", hz/10);
+	}
+	if (i == 0) {
+		D("too many NIOCREGIF attempts, give up");
+		error = EINVAL;
+		nm_if_rele(ifp);	/* return the refcount */
+		NMA_UNLOCK();
+		break;
+	}
+#else /* !USELESS */
 	na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
+#endif /* !USELESS */
 
 	/* ring configuration may have changed, fetch from the card */
 	netmap_update_config(na);
@@ -1444,65 +1461,14 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			NMA_UNLOCK();
 			break;
 		}
-		na = NA(ifp); /* retrieve netmap adapter */
-
-#if 0 /* USELESS -- race protection */
-		for (i = 10; i > 0; i--) {
-			na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
-			if (!NETMAP_DELETING(na))
-				break;
-			na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
-			tsleep(na, 0, "NIOCREGIF", hz/10);
-		}
-		if (i == 0) {
-			D("too many NIOCREGIF attempts, give up");
-			error = EINVAL;
-			nm_if_rele(ifp);	/* return the refcount */
-			NMA_UNLOCK();
-			break;
-		}
-#else /* !USELESS */
-		na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
-#endif /* !USELESS */
-
-		/* ring configuration may have changed, fetch from the card */
-		netmap_update_config(na);
-		priv->np_ifp = ifp;	/* store the reference */
-		error = netmap_set_ringid(priv, nmr->nr_ringid);
-		if (error)
-			goto error;
-		nifp = netmap_if_new(nmr->nr_name, na);
-		if (nifp == NULL) { /* allocation failed */
-			error = ENOMEM;
-		} else if (ifp->if_capenable & IFCAP_NETMAP) {
-			/* was already set */
-		} else {
-			/* Otherwise set the card in netmap mode
-			 * and make it use the shared buffers.
-			 */
-			for (i = 0 ; i < na->num_tx_rings + 1; i++)
-				mtx_init(&na->tx_rings[i].q_lock, "nm_txq_lock", MTX_NETWORK_LOCK, MTX_DEF);
-			for (i = 0 ; i < na->num_rx_rings + 1; i++) {
-				mtx_init(&na->rx_rings[i].q_lock, "nm_rxq_lock", MTX_NETWORK_LOCK, MTX_DEF);
-			}
-			error = na->nm_register(ifp, 1); /* mode on */
-			if (error) {
-				netmap_dtor_locked(priv);
-				netmap_if_free(nifp);
-			}
-		}
-
-		if (error) {	/* reg. failed, release priv and ref */
-error:
-			na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
-			nm_if_rele(ifp);	/* return the refcount */
+		nifp = netmap_do_regif(priv, ifp, nmr->nr_ringid, &error);
+		if (!nifp) {    /* reg. failed, release priv and ref */
+			nm_if_rele(ifp);        /* return the refcount */
 			priv->np_ifp = NULL;
 			priv->np_nifp = NULL;
 			NMA_UNLOCK();
 			break;
 		}
-
-		na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
 
 		/* the following assignment is a commitment.
 		 * Readers (i.e., poll and *SYNC) check for
@@ -1513,6 +1479,7 @@ error:
 		NMA_UNLOCK();
 
 		/* return the offset of the netmap_if object */
+		na = NA(ifp); /* retrieve netmap adapter */
 		nmr->nr_rx_rings = na->num_rx_rings;
 		nmr->nr_tx_rings = na->num_tx_rings;
 		nmr->nr_rx_slots = na->num_rx_desc;
