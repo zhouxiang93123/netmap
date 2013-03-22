@@ -310,6 +310,33 @@ setaffinity(pthread_t me, int i)
 	return 0;
 }
 
+/* attach or detach the NIC to/from the bridge
+ * XXX will be moved to different file in the future, but now it is here for
+ * testing with pkt-gen
+ */
+static int
+bdgconfig(const char *ifname, int cmd)
+{
+	int error = 0, fd = open("/dev/netmap", O_RDWR);
+	struct nmreq hwnmr;
+
+	if (fd == -1)
+		D("Unable to open /dev/netmap");
+	else {
+		bzero(&hwnmr, sizeof(hwnmr));
+		hwnmr.nr_version = NETMAP_API;
+		strncpy(hwnmr.nr_name, ifname, sizeof(hwnmr.nr_name));
+		hwnmr.spare1 = cmd;
+		error = ioctl(fd, NIOCREGIF, &hwnmr);
+		if (error == -1)
+			D("Unable to %s %s to the bridge", cmd == NETMAP_BDG_DETACH?"detach":"attach", ifname);
+		else
+			D("Success to %s %s to the bridge", cmd == NETMAP_BDG_DETACH?"detach":"attach", ifname);
+	}
+	close(fd);
+	return error;
+}
+
 /* Compute the checksum of the given ip header. */
 static uint16_t
 checksum(const void *data, uint16_t len, uint32_t sum)
@@ -1208,6 +1235,7 @@ main(int arc, char **argv)
 	int ch;
 	int wait_link = 2;
 	int devqueues = 1;	/* how many device queues */
+	char *hwname = NULL;
 
 	bzero(&g, sizeof(g));
 
@@ -1226,7 +1254,7 @@ main(int arc, char **argv)
 	g.cpus = 1;
 
 	while ( (ch = getopt(arc, argv,
-			"a:f:n:i:t:r:l:d:s:D:S:b:c:o:p:PT:w:Wv")) != -1) {
+			"a:f:n:i:t:r:l:d:s:D:S:b:c:o:p:PT:w:I:Wv")) != -1) {
 		struct sf *fn;
 
 		switch(ch) {
@@ -1323,6 +1351,9 @@ main(int arc, char **argv)
 		case 'S': /* source mac */
 			g.src_mac.name = optarg;
 			break;
+		case 'I': /* also attach the NIC to the bridge */
+			hwname = optarg;
+			break;
 		case 'v':
 			verbose++;
 		}
@@ -1407,6 +1438,10 @@ main(int arc, char **argv)
 			D("Unable to get if info for %s", g.ifname);
 		}
 		devqueues = nmr.nr_rx_rings;
+	}
+	if (hwname) {
+		bdgconfig(hwname, NETMAP_BDG_ATTACH);
+		// continue anyway
 	}
 
 	/* validate provided nthreads. */
@@ -1494,6 +1529,8 @@ main(int arc, char **argv)
 #endif // XXX
 	start_threads(&g);
 	main_thread(&g);
+	if (hwname)
+		bdgconfig(hwname, NETMAP_BDG_DETACH);
 	return 0;
 }
 
