@@ -143,8 +143,8 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, copy, CTLFLAG_RW, &netmap_copy, 0 , "");
  * faster. The batch size is NM_BDG_BATCH
  */
 #define	NM_NAME			"vale"	/* prefix for the interface */
-#define NM_BDG_MAXPORTS		16	/* up to 32 for bitmap, 254 ok otherwise */
-#define NM_BDG_MAXRINGS		1	/* XXX unclear how many. */
+#define NM_BDG_MAXPORTS		254	/* up to 32 for bitmap, 254 ok otherwise */
+#define NM_BDG_MAXRINGS		16	/* XXX unclear how many. */
 #define NM_BRIDGE_RINGSIZE	1024	/* in the device */
 #define NM_BDG_HASH		1024	/* forwarding table entries */
 #define NM_BDG_BATCH		1024	/* entries in the forwarding buffer */
@@ -1001,7 +1001,7 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp)
 	do {
 		struct nm_bridge *b;
 		struct netmap_adapter *na;
-		int i, l, cand = -1;
+		int i, cand = -1;
 
 		if (strncmp(name, NM_NAME, sizeof(NM_NAME) - 1))
 			break;
@@ -1056,9 +1056,6 @@ no_port:
 		 * We need one entry per destination, plus one for the
 		 * broadcast packets. XXX still unused.
 		 */
-		l = sizeof(struct nm_bdg_fwd)*NM_BDG_BATCH ;
-		// XXX only for nm_bdg_flush2
-		// l += sizeof(struct nm_bdg_q)* (NM_BDG_MAXPORTS + 1);
 		/*
 		 * try see if there is a matching NIC with this name
 		 * (after the bridge's name)
@@ -2189,12 +2186,12 @@ netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
  * work_done is non-null on the RX path.
  */
 int
-netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
+netmap_rx_irq(struct ifnet *ifp, int q, int *work_done, int lock)
 {
 	struct netmap_adapter *na;
 	struct netmap_kring *r;
 	NM_SELINFO_T *main_wq;
-	int nic_to_bridge = 0;
+	int locktype, unlocktype, nic_to_bridge = 0;
 
 	if (!(ifp->if_capenable & IFCAP_NETMAP))
 		return 0;
@@ -2219,8 +2216,11 @@ netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
 		main_wq = (na->num_tx_rings > 1) ? &na->tx_si : NULL;
 		work_done = &q; /* dummy */
 	}
+	locktype = work_done == &q ? NETMAP_TX_LOCK : NETMAP_RX_LOCK;
+	unlocktype = work_done == &q ? NETMAP_TX_UNLOCK : NETMAP_RX_UNLOCK;
 	if (na->separate_locks) {
-		mtx_lock(&r->q_lock);
+		if (lock & NETMAP_LOCK_ENTER)
+			na->nm_lock(ifp, locktype, q);
 		/* If a NIC is attached to a bridge, flush packets
 		 * (and no need to wakeup anyone). Otherwise, wakeup
 		 * possible processes waiting for packets.
@@ -2229,14 +2229,17 @@ netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
 			netmap_nic_to_bdg(ifp, q);
 		else
 			selwakeuppri(&r->si, PI_NET);
-		mtx_unlock(&r->q_lock);
+		na->nm_lock(ifp, unlocktype, q);
 		if (main_wq && !nic_to_bridge) {
-			mtx_lock(&na->core_lock);
+			na->nm_lock(ifp, NETMAP_CORE_LOCK, 0);
 			selwakeuppri(main_wq, PI_NET);
-			mtx_unlock(&na->core_lock);
+			na->nm_lock(ifp, NETMAP_CORE_UNLOCK, 0);
 		}
+		if (lock & NETMAP_LOCK_EXIT)
+			na->nm_lock(ifp, locktype, q);
 	} else {
-		mtx_lock(&na->core_lock);
+		if (lock & NETMAP_LOCK_ENTER)
+			na->nm_lock(ifp, NETMAP_CORE_LOCK, 0);
 		if (nic_to_bridge)
 			netmap_nic_to_bdg(ifp, q);
 		else {
@@ -2244,7 +2247,8 @@ netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
 			if (main_wq)
 				selwakeuppri(main_wq, PI_NET);
 		}
-		mtx_unlock(&na->core_lock);
+		if (!(lock & NETMAP_LOCK_EXIT))
+			na->nm_lock(ifp, NETMAP_CORE_UNLOCK, 0);
 	}
 	*work_done = 1; /* do not fire napi again */
 	return 1;
