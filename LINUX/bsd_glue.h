@@ -1,5 +1,5 @@
 /*
- * (C) 2012 Luigi Rizzo - Universita` di Pisa
+ * Copyright (C) 2012-2013 Luigi Rizzo - Universita` di Pisa
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -113,7 +113,6 @@ struct thread;
  * We don't use this in netmap, though.
  *
  *	if_xname	name		device name
- *	if_capabilities	flags		// XXX not used
  *	if_capenable	priv_flags
  *		we would use "features" but it is all taken.
  *		XXX check for conflict in flags use.
@@ -128,7 +127,6 @@ struct thread;
 
 #define ifnet           	net_device      /* remap */
 #define	if_xname		name		/* field ifnet-> net_device */
-//#define	if_capabilities		flags		/* IFCAP_NETMAP */
 #define	if_capenable		priv_flags	/* IFCAP_NETMAP */
 #define	if_bridge		atalk_ptr	/* remap, only for VALE ports */
 #define ifunit_ref(_x)		dev_get_by_name(&init_net, _x);
