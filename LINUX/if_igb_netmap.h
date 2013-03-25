@@ -357,11 +357,13 @@ igb_netmap_configure_rx_ring(struct igb_ring *rxr)
 		uint64_t paddr;
 		int si = netmap_idx_n2k(&na->rx_rings[reg_idx], i);
 
+#if 0
 		// XXX the skb check can go away
 		struct igb_rx_buffer *bi = &rxr->rx_buffer_info[i];
 		if (bi->skb)
 			D("rx buf %d was set", i);
 		bi->skb = NULL; // XXX leak if set
+#endif /* useless */
 
 		PNMB(slot + si, &paddr);
 		rx_desc = E1000_RX_DESC_ADV(*rxr, i);
