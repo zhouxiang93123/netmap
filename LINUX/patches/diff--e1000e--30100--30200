@@ -1,18 +1,18 @@
---- /usr/src/linux-3.3.8-gentoo/drivers/net/ethernet/intel/e1000e/netdev.c	2012-03-19 00:15:34.000000000 +0100
-+++ net/e1000e/netdev.c	2012-07-30 16:13:34.000000000 +0200
-@@ -140,6 +140,10 @@ static const struct e1000_reg_info e1000
- 	{}
- };
+--- e1000e/netdev.c.orig	2011-10-24 09:10:05.000000000 +0200
++++ net/e1000e/netdev.c	2013-03-25 22:30:53.000000000 +0100
+@@ -452,6 +452,10 @@ static int e1000_desc_unused(struct e100
+ 	return ring->count + ring->next_to_clean - ring->next_to_use - 1;
+ }
  
 +#if defined(CONFIG_NETMAP) || defined(CONFIG_NETMAP_MODULE)
 +#include <if_e1000e_netmap.h>
 +#endif
 +
- /*
-  * e1000_regdump - register printout routine
-  */
-@@ -862,6 +866,10 @@ static bool e1000_clean_rx_irq(struct e1
- 	bool cleaned = false;
+ /**
+  * e1000_receive_skb - helper function to handle Rx indications
+  * @adapter: board private structure
+@@ -849,6 +853,10 @@ static bool e1000_clean_rx_irq(struct e1
+ 	bool cleaned = 0;
  	unsigned int total_rx_bytes = 0, total_rx_packets = 0;
  
 +#ifdef DEV_NETMAP
@@ -20,11 +20,11 @@
 +		return 1; /* seems to be ignored */
 +#endif /* DEV_NETMAP */
  	i = rx_ring->next_to_clean;
- 	rx_desc = E1000_RX_DESC_EXT(*rx_ring, i);
- 	staterr = le32_to_cpu(rx_desc->wb.upper.status_error);
-@@ -1097,6 +1105,10 @@ static bool e1000_clean_tx_irq(struct e1
+ 	rx_desc = E1000_RX_DESC(*rx_ring, i);
+ 	buffer_info = &rx_ring->buffer_info[i];
+@@ -1066,6 +1074,10 @@ static bool e1000_clean_tx_irq(struct e1
+ 	unsigned int count = 0;
  	unsigned int total_tx_bytes = 0, total_tx_packets = 0;
- 	unsigned int bytes_compl = 0, pkts_compl = 0;
  
 +#ifdef DEV_NETMAP
 +	if (netmap_tx_irq(netdev, 0))
@@ -33,7 +33,7 @@
  	i = tx_ring->next_to_clean;
  	eop = tx_ring->buffer_info[i].next_to_watch;
  	eop_desc = E1000_TX_DESC(*tx_ring, eop);
-@@ -3282,6 +3294,10 @@ static void e1000_configure(struct e1000
+@@ -3177,6 +3189,10 @@ static void e1000_configure(struct e1000
  	e1000_configure_tx(adapter);
  	e1000_setup_rctl(adapter);
  	e1000_configure_rx(adapter);
@@ -44,7 +44,7 @@
  	adapter->alloc_rx_buf(adapter, e1000_desc_unused(adapter->rx_ring),
  			      GFP_KERNEL);
  }
-@@ -6273,6 +6289,9 @@ static int __devinit e1000_probe(struct
+@@ -6147,6 +6163,9 @@ static int __devinit e1000_probe(struct
  	if (err)
  		goto err_register;
  
@@ -54,7 +54,7 @@
  	/* carrier off reporting is important to ethtool even BEFORE open */
  	netif_carrier_off(netdev);
  
-@@ -6360,6 +6379,10 @@ static void __devexit e1000_remove(struc
+@@ -6234,6 +6253,10 @@ static void __devexit e1000_remove(struc
  	kfree(adapter->tx_ring);
  	kfree(adapter->rx_ring);
  
