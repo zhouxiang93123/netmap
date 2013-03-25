@@ -141,5 +141,5 @@ DETAILS
 --------
 + there are reports of ixgbe and igb unable to read packets.
   We are unable to reproduce the problem.
-  - Ubuntu 12.04 LTS 3.5.0-25-generic.
+  - Ubuntu 12.04 LTS 3.5.0-25-generic. igb read problems ?
   - 3.2.0-32-generic with 82598 not working
