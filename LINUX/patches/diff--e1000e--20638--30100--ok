@@ -1,18 +1,17 @@
-diff -urp net/e1000e/netdev.c net/e1000e/netdev.c
---- net/e1000e/netdev.c	2011-08-05 06:59:21.000000000 +0200
-+++ net/e1000e/netdev.c	2012-02-17 15:15:54.205146915 +0100
-@@ -139,6 +139,10 @@ static const struct e1000_reg_info e1000
- 	{}
- };
+--- e1000e/netdev.c.orig	2011-03-15 02:20:32.000000000 +0100
++++ e1000e/netdev.c	2013-03-25 21:57:13.000000000 +0100
+@@ -448,6 +448,10 @@ static int e1000_desc_unused(struct e100
+ 	return ring->count + ring->next_to_clean - ring->next_to_use - 1;
+ }
  
 +#if defined(CONFIG_NETMAP) || defined(CONFIG_NETMAP_MODULE)
 +#include <if_e1000e_netmap.h>
 +#endif
 +
- /*
-  * e1000_regdump - register printout routine
-  */
-@@ -780,6 +784,10 @@ static bool e1000_clean_rx_irq(struct e1
+ /**
+  * e1000_receive_skb - helper function to handle Rx indications
+  * @adapter: board private structure
+@@ -777,6 +781,10 @@ static bool e1000_clean_rx_irq(struct e1
  	bool cleaned = 0;
  	unsigned int total_rx_bytes = 0, total_rx_packets = 0;
  
@@ -23,7 +22,7 @@ diff -urp net/e1000e/netdev.c net/e1000e/netdev.c
  	i = rx_ring->next_to_clean;
  	rx_desc = E1000_RX_DESC(*rx_ring, i);
  	buffer_info = &rx_ring->buffer_info[i];
-@@ -996,6 +1004,10 @@ static bool e1000_clean_tx_irq(struct e1
+@@ -995,6 +1003,10 @@ static bool e1000_clean_tx_irq(struct e1
  	unsigned int count = 0;
  	unsigned int total_tx_bytes = 0, total_tx_packets = 0;
  
@@ -34,7 +33,7 @@ diff -urp net/e1000e/netdev.c net/e1000e/netdev.c
  	i = tx_ring->next_to_clean;
  	eop = tx_ring->buffer_info[i].next_to_watch;
  	eop_desc = E1000_TX_DESC(*tx_ring, eop);
-@@ -3104,6 +3116,10 @@ static void e1000_configure(struct e1000
+@@ -3091,6 +3103,10 @@ static void e1000_configure(struct e1000
  	e1000_configure_tx(adapter);
  	e1000_setup_rctl(adapter);
  	e1000_configure_rx(adapter);
@@ -45,7 +44,7 @@ diff -urp net/e1000e/netdev.c net/e1000e/netdev.c
  	adapter->alloc_rx_buf(adapter, e1000_desc_unused(adapter->rx_ring));
  }
  
-@@ -6089,6 +6105,9 @@ static int __devinit e1000_probe(struct
+@@ -6015,6 +6031,9 @@ static int __devinit e1000_probe(struct
  	if (err)
  		goto err_register;
  
@@ -55,7 +54,7 @@ diff -urp net/e1000e/netdev.c net/e1000e/netdev.c
  	/* carrier off reporting is important to ethtool even BEFORE open */
  	netif_carrier_off(netdev);
  
-@@ -6176,6 +6195,10 @@ static void __devexit e1000_remove(struc
+@@ -6103,6 +6122,10 @@ static void __devexit e1000_remove(struc
  	kfree(adapter->tx_ring);
  	kfree(adapter->rx_ring);
  
