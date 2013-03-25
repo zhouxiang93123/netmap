@@ -34,7 +34,7 @@
 +	 * clients, which may be sleeping on individual rings
 +	 * or on a global resource for all rings.
 +	 */
-+	if (netmap_tx_irq(adapter->netdev, tx_ring->queue_index))
++	if (netmap_tx_irq(adapter->netdev, tx_ring->queue_index, NETMAP_LOCK_ENTER))
 +		return 1; /* seems to be ignored */
 +#endif /* DEV_NETMAP */
 +
@@ -50,7 +50,7 @@
 +	 * 	 Same as the txeof routine: only wakeup clients on intr.
 +	 */
 +	int dummy;
-+	if (netmap_rx_irq(rx_ring->netdev, rx_ring->queue_index, &dummy))
++	if (netmap_rx_irq(rx_ring->netdev, rx_ring->queue_index, &dummy, NETMAP_LOCK_ENTER))
 +		return true; /* no more interrupts */
 +#endif /* DEV_NETMAP */
 +

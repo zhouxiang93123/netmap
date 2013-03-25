@@ -108,7 +108,7 @@ diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' drivers/net/ether
  	int done;
  
 +#ifdef DEV_NETMAP
-+	if (netmap_rx_irq(cq->dev, cq->ring, &done)) {
++	if (netmap_rx_irq(cq->dev, cq->ring, &done, NETMAP_LOCK_ENTER)) {
 +		ND("rx_irq %d for netmap, budget %d done %d", cq->ring, budget, done);
 +	} else
 +#endif /* DEV_NETMAP */
@@ -133,7 +133,8 @@ diff -urp --exclude '*.o' --exclude '*.cmd' --exclude '*mod.c' drivers/net/ether
  	if (!spin_trylock(&ring->comp_lock))
  		return;
 +#ifdef DEV_NETMAP
-+	if (netmap_tx_irq(cq->dev, cq->ring)) {
++	/* XXX should be integrated with appropriate lock_wrapper manner? */
++	if (netmap_tx_irq(cq->dev, cq->ring, NETMAP_LOCK_ENTER)) {
 +		ND(5, "wakeup queue %d", cq->ring);
 +		spin_unlock(&ring->comp_lock);
 +		return;

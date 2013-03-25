@@ -162,8 +162,8 @@ int netmap_bridge = NM_BDG_BATCH; /* bridge batch size */
 SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
 
 #ifdef linux
-#define refcount_acquire(_a)	atomic_add(1, _a)
-#define refcount_release(_a)	atomic_dec_and_test(_a)
+#define refcount_acquire(_a)	atomic_add(1, (atomic_t *)_a)
+#define refcount_release(_a)	atomic_dec_and_test((atomic_t *)_a)
 #else /* !linux */
 #ifdef __FreeBSD__
 #include <sys/endian.h>
@@ -2733,6 +2733,8 @@ nm_bdg_learning(uint8_t *buf, uint8_t *dst_ring, struct ifnet *ifp)
  * Another version of the flush routine that supports only
  * unicast and broadcast (and much larger number of ports),
  * and lets us replace the learn and dispatch functions.
+ * XXX Linux generates a warning for the large stack size perhaps due to
+ * dsts[NM_BDG_BATCH].
  */
 int
 nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)

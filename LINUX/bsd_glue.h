@@ -159,6 +159,21 @@ static inline void mtx_unlock(safe_spinlock_t *m)
 
 #define mtx_init(a, b, c, d)	spin_lock_init(&((a)->sl))
 #define mtx_destroy(a)		// XXX spin_lock_destroy(a)
+#define rw_init(a, b)		spin_lock_init(&((a)->sl))
+#define rw_destroy(a)
+
+/* BDG_LOCK facilities */
+#define BDG_WLOCK(b)		mtx_lock(&(b)->bdg_lock)
+#define BDG_WUNLOCK(b)		mtx_unlock(&(b)->bdg_lock)
+#define BDG_RLOCK(b)		rcu_read_lock()
+#define BDG_RUNLOCK(b)		rcu_read_unlock()
+#define BDG_SET_VAR(lval, p)	rcu_assign_pointer(lval, p)
+#define BDG_GET_VAR(lval)	rcu_dereference(lval)
+#define BDG_FREE(p)			\
+	do {				\
+		synchronize_rcu();	\
+		free(p, M_DEVBUF);	\
+	} while (0)
 
 /* use volatile to fix a probable compiler error on 2.6.25 */
 #define malloc(_size, type, flags)                      \

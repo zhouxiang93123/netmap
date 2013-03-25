@@ -48,7 +48,7 @@
  	if (test_bit(__IGB_DOWN, &adapter->state))
  		return true;
 +#ifdef DEV_NETMAP
-+        if (netmap_tx_irq(tx_ring->netdev, tx_ring->queue_index))
++        if (netmap_tx_irq(tx_ring->netdev, tx_ring->queue_index, NETMAP_LOCK_ENTER))
 +                return 1; /* cleaned ok */
 +#endif /* DEV_NETMAP */
  
@@ -60,7 +60,7 @@
  
 +#ifdef DEV_NETMAP
 +	int dummy = 1; // select rx irq handling
-+	if (netmap_rx_irq(rx_ring->netdev, rx_ring->queue_index, &dummy))
++	if (netmap_rx_irq(rx_ring->netdev, rx_ring->queue_index, &dummy, NETMAP_LOCK_ENTER))
 +		return 1;
 +#endif /* DEV_NETMAP */
 +

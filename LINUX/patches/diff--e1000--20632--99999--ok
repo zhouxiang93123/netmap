@@ -50,7 +50,7 @@ diff -urp net/e1000/e1000_main.c net/e1000/e1000_main.c
  	unsigned int total_tx_bytes=0, total_tx_packets=0;
  
 +#ifdef DEV_NETMAP
-+	if (netmap_tx_irq(netdev, 0))
++	if (netmap_tx_irq(netdev, 0, NETMAP_LOCK_ENTER))
 +		return 1; /* cleaned ok */
 +#endif /* DEV_NETMAP */
  	i = tx_ring->next_to_clean;
@@ -62,7 +62,7 @@ diff -urp net/e1000/e1000_main.c net/e1000/e1000_main.c
  
 +#ifdef DEV_NETMAP
 +	ND("calling netmap_rx_irq");
-+	if (netmap_rx_irq(netdev, 0, work_done))
++	if (netmap_rx_irq(netdev, 0, work_done, NETMAP_LOCK_ENTER))
 +		return 1; /* seems to be ignored */
 +#endif /* DEV_NETMAP */
  	i = rx_ring->next_to_clean;

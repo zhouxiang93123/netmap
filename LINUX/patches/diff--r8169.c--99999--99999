@@ -28,7 +28,7 @@
  	struct rtl_txc txc = { 0, 0 };
  
 +#ifdef DEV_NETMAP
-+	if (netmap_tx_irq(dev, 0))
++	if (netmap_tx_irq(dev, 0, NETMAP_LOCK_ENTER))
 +		return;
 +#endif /* DEV_NETMAP */
 +
@@ -40,7 +40,7 @@
  	unsigned int count;
  
 +#ifdef DEV_NETMAP
-+	if (netmap_rx_irq(dev, 0, &count))
++	if (netmap_rx_irq(dev, 0, &count, NETMAP_LOCK_ENTER))
 +   		return count;
 +#endif /* DEV_NETMAP */
 +
