@@ -425,11 +425,7 @@ netmap_update_config(struct netmap_adapter *na)
 }
 
 /*------------- memory allocator -----------------*/
-#ifdef NETMAP_MEM2
 #include "netmap_mem2.c"
-#else /* !NETMAP_MEM2 */
-#include "netmap_mem1.c"
-#endif /* !NETMAP_MEM2 */
 /*------------ end of memory allocator ----------*/
 
 

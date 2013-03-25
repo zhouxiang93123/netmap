@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2012 Matteo Landi, Luigi Rizzo. All rights reserved.
+ * Copyright (C) 2011-2013 Matteo Landi, Luigi Rizzo. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -33,8 +33,6 @@
 
 #ifndef _NET_NETMAP_KERN_H_
 #define _NET_NETMAP_KERN_H_
-
-#define NETMAP_MEM2    // use the new memory allocator
 
 #if defined(__FreeBSD__)
 #define likely(x)	__builtin_expect(!!(x), 1)
@@ -460,7 +458,6 @@ netmap_idx_k2n(struct netmap_kring *kr, int idx)
 }
 
 
-#ifdef NETMAP_MEM2
 /* Entries of the look-up table. */
 struct lut_entry {
 	void *vaddr;		/* virtual address. */
@@ -471,9 +468,6 @@ struct netmap_obj_pool;
 extern struct lut_entry *netmap_buffer_lut;
 #define NMB_VA(i)	(netmap_buffer_lut[i].vaddr)
 #define NMB_PA(i)	(netmap_buffer_lut[i].paddr)
-#else /* NETMAP_MEM1 */
-#define NMB_VA(i)	(netmap_buffer_base + (i * NETMAP_BUF_SIZE) )
-#endif /* NETMAP_MEM2 */
 
 /*
  * NMB return the virtual address of a buffer (buffer 0 on bad index)
@@ -491,11 +485,8 @@ PNMB(struct netmap_slot *slot, uint64_t *pp)
 {
 	uint32_t i = slot->buf_idx;
 	void *ret = (i >= netmap_total_buffers) ? NMB_VA(0) : NMB_VA(i);
-#ifdef NETMAP_MEM2
+
 	*pp = (i >= netmap_total_buffers) ? NMB_PA(0) : NMB_PA(i);
-#else
-	*pp = vtophys(ret);
-#endif
 	return ret;
 }
 
