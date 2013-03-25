@@ -269,9 +269,10 @@ enum {
 };
 
 /* Locking instruction in rx_irq */
-#define NETMAP_UNLOCK_EXIT	0x0
-#define NETMAP_LOCK_ENTER	0x1
-#define NETMAP_LOCK_EXIT	0x2
+#define NETMAP_LOCK_ENTER	0x00000000
+#define NETMAP_LOCK_EXIT	0x20000000
+#define NETMAP_UNLOCK_EXIT	0x40000000
+#define NETMAP_LOCK_MASK	0xffff0000
 
 /*
  * The following are support routines used by individual drivers to
@@ -499,8 +500,8 @@ PNMB(struct netmap_slot *slot, uint64_t *pp)
 }
 
 /* default functions to handle rx/tx interrupts */
-int netmap_rx_irq(struct ifnet *, int, int *, int);
-#define netmap_tx_irq(_n, _q, _l) netmap_rx_irq(_n, _q, NULL, _l)
+int netmap_rx_irq(struct ifnet *, int, int *);
+#define netmap_tx_irq(_n, _q) netmap_rx_irq(_n, _q, NULL)
 
 
 extern int netmap_copy;

@@ -31,11 +31,11 @@
 +		goto normal_path;
 +
 +	/* grab tx interrupts (we only care for cos 0 */
-+	netmap_tx_irq(bp->dev, fp->txdata[0].txq_index, NETMAP_LOCK_ENTER);
++	netmap_tx_irq(bp->dev, fp->txdata[0].txq_index);
 +
 +#if 0
 +	/* XXX receive logic */
-+	if (0 && netmap_rx_irq(bp->dev, fp->index, &rx_pkt, NETMAP_LOCK_ENTER))
++	if (0 && netmap_rx_irq(bp->dev, fp->index, &rx_pkt))
 +		return true; /* no more interrupts */
 +#endif /* 0 */
 +

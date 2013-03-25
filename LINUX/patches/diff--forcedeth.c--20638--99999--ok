@@ -31,7 +31,7 @@
  	unsigned long flags;
  
 +#ifdef DEV_NETMAP
-+	if (netmap_tx_irq(dev, 0, NETMAP_LOCK_ENTER))
++	if (netmap_tx_irq(dev, 0))
 +		return IRQ_HANDLED;
 +#endif /* DEV_NETMAP */
 +
@@ -43,7 +43,7 @@
  	unsigned long flags;
  
 +#ifdef DEV_NETMAP
-+	if (netmap_rx_irq(dev, 0, &i, NETMAP_LOCK_ENTER))
++	if (netmap_rx_irq(dev, 0, &i))
 +		return IRQ_HANDLED;
 +#endif /* DEV_NETMAP */
 +

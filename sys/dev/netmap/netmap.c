@@ -2168,15 +2168,19 @@ netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
  * work_done is non-null on the RX path.
  */
 int
-netmap_rx_irq(struct ifnet *ifp, int q, int *work_done, int lock)
+netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
 {
 	struct netmap_adapter *na;
 	struct netmap_kring *r;
 	NM_SELINFO_T *main_wq;
-	int locktype, unlocktype, nic_to_bridge = 0;
+	int locktype, unlocktype, nic_to_bridge = 0, lock;
 
 	if (!(ifp->if_capenable & IFCAP_NETMAP))
 		return 0;
+
+	lock = q & NETMAP_LOCK_MASK;
+	q = q & NETMAP_RING_MASK;
+
 	ND(5, "received %s queue %d", work_done ? "RX" : "TX" , q);
 	na = NA(ifp);
 	if (na->na_flags & NAF_SKIP_INTR) {
