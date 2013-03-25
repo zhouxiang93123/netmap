@@ -48,7 +48,9 @@ KSRC ?= /lib/modules/$(shell uname -r)/build
 SRC ?= $(KSRC)
 
 # extract version number and filter with the available patches.
-LIN_VER = $(shell grep LINUX_VERSION_CODE $(KSRC)/include/linux/version.h | \
+LIN_VER = $(shell V=linux/version.h; G=. ; \
+	[ -f $(KSRC)/include/$${V} ] || G=generated/uapi ;\
+	grep LINUX_VERSION_CODE $(KSRC)/include/$${G}/linux/version.h | \
 	awk '{printf "%03x%02d", $$3/256, $$3%256} ')
 
 PATCHES := $(shell \
