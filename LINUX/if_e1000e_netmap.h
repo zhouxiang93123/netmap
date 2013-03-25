@@ -33,7 +33,7 @@
  *
  * The driver supports 1 TX and 1 RX ring. Single lock.
  * tx buffer address only written on change.
- * Apparently the driver uses extended descriptors on rx.
+ * Apparently the driver uses extended descriptors on rx from 3.2.32
  * Rx Crc stripping ?
  */
 
@@ -43,6 +43,20 @@
 #include <netmap/netmap_kern.h>
 #define SOFTC_T	e1000_adapter
 
+#if LINUX_VERSION_CODE > KERNEL_VERSION(3, 2, 0)
+#warning this driver uses extended descriptors
+#define NM_E1K_RX_DESC_T	union e1000_rx_desc_extended
+#define	NM_E1R_RX_STATUS	wb.upper.status_error
+#define	NM_E1R_RX_LENGTH	wb.upper.length
+#define	NM_E1R_RX_BUFADDR	read.buffer_addr
+#else
+#warning this driver uses regular descriptors
+#define E1000_RX_DESC_EXT	E1000_RX_DESC	// XXX workaround
+#define NM_E1K_RX_DESC_T	struct e1000_rx_desc
+#define	NM_E1R_RX_STATUS	status
+#define	NM_E1R_RX_BUFADDR	buffer_addr
+#define	NM_E1R_RX_LENGTH	length
+#endif /* up to 3.2.x */
 
 /*
  * Register/unregister, similar to e1000_reinit_safe()
@@ -216,12 +230,12 @@ e1000_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		uint16_t slot_flags = kring->nkr_slot_flags;
 
 		for (n = 0; ; n++) {
-			union e1000_rx_desc_extended *curr = E1000_RX_DESC_EXT(*rxr, l);
-			uint32_t staterr = le32toh(curr->wb.upper.status_error);
+			NM_E1K_RX_DESC_T *curr = E1000_RX_DESC_EXT(*rxr, l);
+			uint32_t staterr = le32toh(curr->NM_E1R_RX_STATUS);
 
 			if ((staterr & E1000_RXD_STAT_DD) == 0)
 				break;
-			ring->slot[j].len = le16toh(curr->wb.upper.length) - strip_crc;
+			ring->slot[j].len = le16toh(curr->NM_E1R_RX_LENGTH) - strip_crc;
 			ring->slot[j].flags = slot_flags;
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
@@ -246,7 +260,7 @@ e1000_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		l = netmap_idx_k2n(kring, j); /* NIC ring index */
 		for (n = 0; j != k; n++) {
 			struct netmap_slot *slot = &ring->slot[j];
-			union e1000_rx_desc_extended *curr = E1000_RX_DESC_EXT(*rxr, j);
+			NM_E1K_RX_DESC_T *curr = E1000_RX_DESC_EXT(*rxr, j);
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
 
@@ -255,12 +269,12 @@ e1000_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 					mtx_unlock(&kring->q_lock);
 				return netmap_ring_reinit(kring);
 			}
-			curr->read.buffer_addr = htole64(paddr); /* reload ext.desc. addr. */
+			curr->NM_E1R_RX_BUFADDR = htole64(paddr); /* reload ext.desc. addr. */
 			if (slot->flags & NS_BUF_CHANGED) {
 				// netmap_reload_map(pdev, DMA_TO_DEVICE, old_paddr, addr)
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
-			curr->wb.upper.status_error = 0;
+			curr->NM_E1R_RX_STATUS = 0;
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
 		}
@@ -318,7 +332,7 @@ static int e1000e_netmap_init_buffers(struct SOFTC_T *adapter)
 			D("rx buf %d was set", i);
 		bi->skb = NULL; // XXX leak if set
 		// netmap_load_map(...)
-		E1000_RX_DESC_EXT(*rxr, i)->read.buffer_addr = htole64(paddr);
+		E1000_RX_DESC_EXT(*rxr, i)->NM_E1R_RX_BUFADDR = htole64(paddr);
 	}
 	rxr->next_to_use = 0;
 	/* preserve buffers already made available to clients */

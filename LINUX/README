@@ -143,3 +143,8 @@ DETAILS
   We are unable to reproduce the problem.
   - Ubuntu 12.04 LTS 3.5.0-25-generic. igb read problems ?
   - 3.2.0-32-generic with 82598 not working
+
++ if_e1000_e uses regular descriptor up 3.1 at least
+  3.2.32 is reported to use extended descriptors
+	(in my repo updated at -r 11975)
+	
