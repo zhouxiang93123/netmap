@@ -58,6 +58,16 @@
 #define	NM_E1R_RX_LENGTH	length
 #endif /* up to 3.2.x */
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 4, 0)
+#define NM_WR_TX_TAIL(_x)	writel(_x, txr->tail)	// XXX tx_ring
+#define	NM_WR_RX_TAIL(_x)	writel(_x, rxr->tail)	// XXX rx_ring
+#define	NM_RD_TX_HEAD()		readl(txr->head)
+#else
+#define NM_WR_TX_TAIL(_x)	writel(_x, adapter->hw.hw_addr + txr->tail)
+#define	NM_WR_RX_TAIL(_x)	writel(_x, adapter->hw.hw_addr + rxr->tail)
+#define	NM_RD_TX_HEAD()		readl(adapter->hw.hw_addr + txr->head)
+#endif /* < 3.4.0 */
+
 /*
  * Register/unregister, similar to e1000_reinit_safe()
  */
@@ -167,7 +177,7 @@ e1000_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		wmb(); /* synchronize writes to the NIC ring */
 
 		txr->next_to_use = l;
-		writel(l, adapter->hw.hw_addr + txr->tail);
+		NM_WR_TX_TAIL(l);
 		mmiowb(); // XXX where do we need this ?
 	}
 
@@ -175,7 +185,7 @@ e1000_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		int delta;
 
 		/* record completed transmissions using TDH */
-		l = readl(adapter->hw.hw_addr + txr->head);
+		l = NM_RD_TX_HEAD();	// XXX could scan descriptors ?
 		if (l >= kring->nkr_num_slots) { /* XXX can it happen ? */
 			D("TDH wrap %d", l);
 			l -= kring->nkr_num_slots;
@@ -287,7 +297,7 @@ e1000_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		 * so move l back by one unit
 		 */
 		l = (l == 0) ? lim : l - 1;
-		writel(l, adapter->hw.hw_addr + rxr->tail);
+		NM_WR_RX_TAIL(l);
 	}
 	/* tell userspace that there are new packets */
 	ring->avail = kring->nr_hwavail - resvd;
@@ -338,7 +348,7 @@ static int e1000e_netmap_init_buffers(struct SOFTC_T *adapter)
 	/* preserve buffers already made available to clients */
 	i = rxr->count - 1 - na->rx_rings[0].nr_hwavail;
 	wmb();	/* Force memory writes to complete */
-	writel(i, adapter->hw.hw_addr + rxr->tail);
+	NM_WR_RX_TAIL(i);
 
 	/* now initialize the tx ring */
 	slot = netmap_reset(na, NR_TX, 0, 0);
