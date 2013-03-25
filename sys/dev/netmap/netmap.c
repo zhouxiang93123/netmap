@@ -572,17 +572,18 @@ nm_if_rele(struct ifnet *ifp)
 #else /* NM_BRIDGE */
 	int i, full = 0, is_hw;
 	struct nm_bridge *b;
-	struct netmap_adapter *na;
+	struct netmap_adapter *na = NA(ifp);
 
 	if (strncmp(ifp->if_xname, NM_NAME, sizeof(NM_NAME) - 1)) {
 		if_rele(ifp);
-		/* if the nic is not connected to a bridge, we are done */
-		if (!NA(ifp)->na_bdg)
+		/* if the NIC is not in netmap mode or it is
+		 * not connected to a bridge, we are done
+		 */
+		if (!na || !na->na_bdg)
 			return;
 	}
 	if (!DROP_BDG_REF(ifp))
 		return;
-	na = NA(ifp);
 	b = na->na_bdg;
 	is_hw = nma_is_hw(na);
 
