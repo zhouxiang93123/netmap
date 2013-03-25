@@ -356,6 +356,7 @@ nm_alloc_bdgfwd(struct netmap_adapter *na)
 	num_dstq = NM_BDG_MAXPORTS * NM_BDG_MAXRINGS + 1;
 	l = sizeof(struct nm_bdg_fwd) * NM_BDG_BATCH;
 	l += sizeof(struct nm_bdg_q) * NM_BDG_MAXPORTS * NM_BDG_MAXRINGS;
+	l += sizeof(uint16_t) * NM_BDG_BATCH;
 
 	nrings = nma_is_hw(na) ? na->num_rx_rings : na->num_tx_rings;
 	kring = nma_is_hw(na) ? na->rx_rings : na->tx_rings;
@@ -2741,11 +2742,12 @@ int
 nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 {
 	struct nm_bdg_q *dst_ents, *brddst;
-	uint16_t dsts[NM_BDG_BATCH], num_dsts = 0;
+	uint16_t num_dsts = 0, *dsts;
 	struct nm_bridge *b = NA(ifp)->na_bdg;
 	u_int i, me = NA(ifp)->bdg_port;
 
 	dst_ents = (struct nm_bdg_q *)(ft + NM_BDG_BATCH);
+	dsts = (uint16_t *)(dst_ents + NM_BDG_MAXPORTS * NM_BDG_MAXRINGS);
 
 	BDG_RLOCK(b);
 
