@@ -1,6 +1,6 @@
---- e1000e/netdev.c.orig	2011-03-15 02:20:32.000000000 +0100
-+++ e1000e/netdev.c	2013-03-25 21:57:13.000000000 +0100
-@@ -448,6 +448,10 @@ static int e1000_desc_unused(struct e100
+--- e1000e/netdev.c.orig	2009-12-03 04:51:21.000000000 +0100
++++ net/e1000e/netdev.c	2013-03-25 22:13:23.000000000 +0100
+@@ -87,6 +87,10 @@ static int e1000_desc_unused(struct e100
  	return ring->count + ring->next_to_clean - ring->next_to_use - 1;
  }
  
@@ -11,7 +11,7 @@
  /**
   * e1000_receive_skb - helper function to handle Rx indications
   * @adapter: board private structure
-@@ -777,6 +781,10 @@ static bool e1000_clean_rx_irq(struct e1
+@@ -446,6 +450,10 @@ static bool e1000_clean_rx_irq(struct e1
  	bool cleaned = 0;
  	unsigned int total_rx_bytes = 0, total_rx_packets = 0;
  
@@ -22,7 +22,7 @@
  	i = rx_ring->next_to_clean;
  	rx_desc = E1000_RX_DESC(*rx_ring, i);
  	buffer_info = &rx_ring->buffer_info[i];
-@@ -995,6 +1003,10 @@ static bool e1000_clean_tx_irq(struct e1
+@@ -624,6 +632,10 @@ static bool e1000_clean_tx_irq(struct e1
  	unsigned int count = 0;
  	unsigned int total_tx_bytes = 0, total_tx_packets = 0;
  
@@ -33,7 +33,7 @@
  	i = tx_ring->next_to_clean;
  	eop = tx_ring->buffer_info[i].next_to_watch;
  	eop_desc = E1000_TX_DESC(*tx_ring, eop);
-@@ -3091,6 +3103,10 @@ static void e1000_configure(struct e1000
+@@ -2632,6 +2644,10 @@ static void e1000_configure(struct e1000
  	e1000_configure_tx(adapter);
  	e1000_setup_rctl(adapter);
  	e1000_configure_rx(adapter);
@@ -44,7 +44,7 @@
  	adapter->alloc_rx_buf(adapter, e1000_desc_unused(adapter->rx_ring));
  }
  
-@@ -6015,6 +6031,9 @@ static int __devinit e1000_probe(struct
+@@ -5227,6 +5243,9 @@ static int __devinit e1000_probe(struct
  	if (err)
  		goto err_register;
  
@@ -54,7 +54,7 @@
  	/* carrier off reporting is important to ethtool even BEFORE open */
  	netif_carrier_off(netdev);
  
-@@ -6103,6 +6122,10 @@ static void __devexit e1000_remove(struc
+@@ -5300,6 +5319,10 @@ static void __devexit e1000_remove(struc
  	kfree(adapter->tx_ring);
  	kfree(adapter->rx_ring);
  

@@ -1,5 +1,5 @@
 --- e1000e/netdev.c.orig	2009-12-03 04:51:21.000000000 +0100
-+++ e1000e/netdev.c	2013-03-25 22:13:23.000000000 +0100
++++ net/e1000e/netdev.c	2013-03-25 22:13:23.000000000 +0100
 @@ -87,6 +87,10 @@ static int e1000_desc_unused(struct e100
  	return ring->count + ring->next_to_clean - ring->next_to_use - 1;
  }
