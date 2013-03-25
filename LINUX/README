@@ -136,3 +136,10 @@ REVISION HISTORY
 20120217 - initial version. Only ixgbe, e1000 and e1000e are working.
 	Other drivers (igb, r8169, forcedeth) are supplied only as a
 	proof of concept.
+
+DETAILS
+--------
++ there are reports of ixgbe and igb unable to read packets.
+  We are unable to reproduce the problem.
+  - Ubuntu 12.04 LTS 3.5.0-25-generic.
+  - 3.2.0-32-generic with 82598 not working
