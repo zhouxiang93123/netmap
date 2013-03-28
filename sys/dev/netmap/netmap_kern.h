@@ -161,6 +161,9 @@ struct netmap_adapter {
 #define NAF_SKIP_INTR	1	/* use the regular interrupt handler.
 				 * useful during initialization
 				 */
+#define NAF_NO_SWNA	2	/* tell the attach() not to create another
+				 * adapter to accommodate sw rings
+				 */
 	int refcount; /* number of user-space descriptors using this
 			 interface, which is equal to the number of
 			 struct netmap_if objs in the mapped region. */
@@ -324,6 +327,7 @@ enum {                                  /* verbose flags */
 #define	WNA(_ifp)	(_ifp)->if_pspare[0]
 #endif
 #define	NA(_ifp)	((struct netmap_adapter *)WNA(_ifp))
+#define SWNA(_ifp)	(NA(_ifp) + 1)
 
 /*
  * Macros to determine if an interface is netmap capable or netmap enabled.

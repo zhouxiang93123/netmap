@@ -245,9 +245,15 @@ struct nm_bridge nm_bridges[NM_BRIDGES];
 #endif /* __FreeBSD__ */
 
 static __inline int
+nma_is_host(struct netmap_adapter *na)
+{
+	return na->nm_register == NULL;
+}
+static __inline int
 nma_is_hw(struct netmap_adapter *na)
 {
-	return na->nm_register != bdg_netmap_reg;
+	/* In case of sw adapter, nm_register is NULL */
+	return na->nm_register != bdg_netmap_reg && !nma_is_host(na);
 }
 
 /*
@@ -341,6 +347,8 @@ nm_free_bdgfwd(struct netmap_adapter *na)
 			kring[i].nkr_ft = NULL; /* protect from freeing twice */
 		}
 	}
+	if (nma_is_hw(na))
+		nm_free_bdgfwd(SWNA(na->ifp));
 }
 
 /*
@@ -375,6 +383,8 @@ nm_alloc_bdgfwd(struct netmap_adapter *na)
 			dstq[j].bq_head = dstq[j].bq_tail = NM_BDG_BATCH;
 		kring[i].nkr_ft = ft;
 	}
+	if (nma_is_hw(na))
+		nm_alloc_bdgfwd(SWNA(na->ifp));
 	return 0;
 }
 
@@ -556,6 +566,8 @@ netmap_dtor_locked(void *data)
 		/* knlist_destroy(&na->tx_si.si_note); */
 		/* knlist_destroy(&na->rx_si.si_note); */
 		netmap_free_rings(na);
+		if (nma_is_hw(na))
+			SWNA(ifp)->tx_rings = SWNA(ifp)->rx_rings = NULL;
 		wakeup(na);
 	}
 	netmap_if_free(nifp);
@@ -592,6 +604,7 @@ nm_if_rele(struct ifnet *ifp)
 	 * XXX we should optimize this code, e.g. going directly
 	 * to na->bdg_port, and having a counter of ports that
 	 * are connected. But it is not in a critical path.
+	 * In NIC's case, index of sw na is always higher than hw na
 	 */
 	for (i = 0; i < NM_BDG_MAXPORTS; i++) {
 		struct netmap_adapter *tmp = BDG_GET_VAR(b->bdg_ports[i]);
@@ -600,6 +613,12 @@ nm_if_rele(struct ifnet *ifp)
 			/* disconnect from bridge */
 			BDG_SET_VAR(b->bdg_ports[i], NULL);
 			na->na_bdg = NULL;
+			if (is_hw) {
+				/* disconnect sw adapter too */
+				int j = SWNA(ifp)->bdg_port;
+				BDG_SET_VAR(b->bdg_ports[j], NULL);
+				SWNA(ifp)->na_bdg = NULL;
+			}
 		} else if (tmp != NULL) {
 			full = 1;
 		}
@@ -910,6 +929,28 @@ netmap_sw_to_nic(struct netmap_adapter *na)
 	}
 }
 
+/* XXX should be combined to netmap_sync_to_host() ? */
+static void
+netmap_bdg_to_host(struct netmap_adapter *na)
+{
+	struct netmap_kring *kring = &na->rx_rings[0];
+	struct netmap_ring *ring = kring->ring;
+	u_int lim = kring->nkr_num_slots - 1;
+	struct mbq q = { NULL, NULL };
+
+	/* mark as if the host stack consumed everything (reserved must be 0) */
+	ring->cur += kring->nr_hwavail;
+	if (ring->cur > lim)
+		ring->cur -= lim;
+	/* chain packets by mbuf from hwcur to cur */
+	netmap_grab_packets(kring, &q, 1);
+
+	/* synchronize hwcur and hwavail, and notify the hoststack */
+	kring->nr_hwcur = ring->cur;
+	kring->nr_hwavail = ring->avail = 0;
+	netmap_send_up(na->ifp, q.head);
+}
+
 /*
  * netmap_sync_to_host() passes packets up. We are called from a
  * system call in user process context, and the only contention
@@ -1009,7 +1050,7 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp)
 	do {
 		struct nm_bridge *b;
 		struct netmap_adapter *na;
-		int i, cand = -1;
+		int i, cand = -1, cand2 = -1;
 
 		if (strncmp(name, NM_NAME, sizeof(NM_NAME) - 1))
 			break;
@@ -1027,6 +1068,8 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp)
 			if (na == NULL) {
 				if (cand == -1)
 					cand = i; /* potential insert point */
+				else if (cand2 == -1)
+					cand2 = i;
 				continue;
 			}
 			iter = na->ifp;
@@ -1097,10 +1140,16 @@ no_port:
 			/* bdg_netmap_attach creates a struct netmap_adapter */
 			bdg_netmap_attach(&tmp_na);
 		} else { /* this is a NIC connected to the bridge */
-			if (kern_netmap_regif(iter, nmr->nr_ringid))
+			if (cand2 == -1) /* need extra port for host stack */
+				goto no_port;
+			else if (kern_netmap_regif(iter, nmr->nr_ringid))
 				goto no_port;
 			/* the NIC is activated now */
 			b->act_ports |= (1<<cand);
+			/* bind the host stack to the bridge */
+			BDG_SET_VAR(b->bdg_ports[cand2], SWNA(iter));
+			SWNA(iter)->bdg_port = cand2;
+			SWNA(iter)->na_bdg = b;
 		}
 		na = NA(iter);
 		na->bdg_port = cand;
@@ -1285,6 +1334,10 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 			mtx_init(&na->rx_rings[i].q_lock, "nm_rxq_lock",
 			    MTX_NETWORK_LOCK, MTX_DEF);
 		}
+		if (nma_is_hw(na)) {
+			SWNA(ifp)->tx_rings = &na->tx_rings[na->num_tx_rings];
+			SWNA(ifp)->rx_rings = &na->rx_rings[na->num_rx_rings];
+		}
 		error = na->nm_register(ifp, 1); /* mode on */
 #ifdef NM_BRIDGE
 		if (!error)
@@ -1336,6 +1389,52 @@ error:
 	return error;
 }
 
+/* CORE_LOCK is not necessary */
+static void
+netmap_swlock_wrapper(struct ifnet *dev, int what, u_int queueid)
+{
+	struct netmap_adapter *na = SWNA(dev);
+
+	switch (what) {
+	case NETMAP_TX_LOCK:
+		mtx_lock(&na->tx_rings[queueid].q_lock);
+		break;
+
+	case NETMAP_TX_UNLOCK:
+		mtx_unlock(&na->tx_rings[queueid].q_lock);
+		break;
+
+	case NETMAP_RX_LOCK:
+		mtx_lock(&na->rx_rings[queueid].q_lock);
+		break;
+
+	case NETMAP_RX_UNLOCK:
+		mtx_unlock(&na->rx_rings[queueid].q_lock);
+		break;
+	}
+}
+
+/* Initialize necessary fields of sw adapter located in right after hw's
+ * one.  sw adapter attaches a pair of sw rings of the netmap-mode NIC.
+ * It is always activated and deactivated at the same tie with the hw's one.
+ * Thus we don't need refcounting on the sw adapter.
+ * Regardless of NIC's feature we use separate lock so that anybody can lock
+ * me independently from the hw adapter.
+ * Make sure nm_register is NULL to be handled as FALSE in nma_is_hw
+ */
+static void
+netmap_attach_sw(struct ifnet *ifp)
+{
+	struct netmap_adapter *hw_na = NA(ifp);
+	struct netmap_adapter *na = SWNA(ifp);
+
+	na->ifp = ifp;
+	na->separate_locks = 1;
+	na->nm_lock = netmap_swlock_wrapper;
+	na->num_rx_rings = na->num_tx_rings = 1;
+	na->num_tx_desc = hw_na->num_tx_desc;
+	na->num_rx_desc = hw_na->num_rx_desc;
+}
 
 /*
  * ioctl(2) support for the "netmap" device.
@@ -1916,10 +2015,12 @@ netmap_attach(struct netmap_adapter *arg, int num_queues)
 {
 	struct netmap_adapter *na = NULL;
 	struct ifnet *ifp = arg ? arg->ifp : NULL;
+	int len;
 
 	if (arg == NULL || ifp == NULL)
 		goto fail;
-	na = malloc(sizeof(*na), M_DEVBUF, M_NOWAIT | M_ZERO);
+	len = arg->na_flags & NAF_NO_SWNA ? sizeof(*na) : sizeof(*na) * 2;
+	na = malloc(len, M_DEVBUF, M_NOWAIT | M_ZERO);
 	if (na == NULL)
 		goto fail;
 	WNA(ifp) = na;
@@ -1943,6 +2044,8 @@ netmap_attach(struct netmap_adapter *arg, int num_queues)
 	}
 	na->nm_ndo.ndo_start_xmit = linux_netmap_start;
 #endif
+	if (!(na->na_flags & NAF_NO_SWNA))
+		netmap_attach_sw(ifp);
 	D("success for %s", ifp->if_xname);
 	return 0;
 
@@ -1975,6 +2078,40 @@ netmap_detach(struct ifnet *ifp)
 	free(na, M_DEVBUF);
 }
 
+// XXX non static to silence the compiler
+int
+nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na, u_int ring_nr);
+int
+nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na, u_int ring_nr);
+
+/* we don't need to lock myself */
+static int
+bdg_netmap_start(struct ifnet *ifp, struct mbuf *m)
+{
+	struct netmap_adapter *na = SWNA(ifp);
+	struct nm_bdg_fwd *ft = na->tx_rings[0].nkr_ft;
+	char *buf = NMB(&na->tx_rings[0].ring->slot[0]);
+	u_int len = MBUF_LEN(m), error = EBUSY;
+
+	if (len > NETMAP_BUF_SIZE) {
+		D("%s from_host, drop packet size %d > %d", ifp->if_xname,
+			len, NETMAP_BUF_SIZE);
+		/* too long for us */
+	} else {
+		m_copydata(m, 0, len, buf);
+		ft->ft_len = len;
+		ft->buf = buf;
+		nm_bdg_flush2(ft, 1, na, 0);
+		error = 0;
+	}
+	/* release the mbuf in either cases of success or failure. As an
+	 * alternative, put the mbuf in a free list and free the list
+	 * only when really necessary.
+	 */
+	m_freem(m);
+
+	return (error);
+}
 
 /*
  * Intercept packets from the network stack and pass them
@@ -1993,6 +2130,8 @@ netmap_start(struct ifnet *ifp, struct mbuf *m)
 	if (netmap_verbose & NM_VERB_HOST)
 		D("%s packet %d len %d from the stack", ifp->if_xname,
 			kring->nr_hwcur + kring->nr_hwavail, len);
+	if (na->na_bdg)
+		return bdg_netmap_start(ifp, m);
 	na->nm_lock(ifp, NETMAP_CORE_LOCK, 0);
 	if (kring->nr_hwavail >= lim) {
 		if (netmap_verbose)
@@ -2091,11 +2230,6 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, int n,
 	return kring->ring->slot;
 }
 
-// XXX non static to silence the compiler
-int
-nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr);
-int
-nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr);
 /*
  * Pass packets from nic to the bridge. Must be called with
  * proper locks on the source interface.
@@ -2136,11 +2270,11 @@ netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
 			continue;
 		}
 		if (unlikely(++ft_i == netmap_bridge))
-			ft_i = nm_bdg_flush2(ft, ft_i, ifp, ring_nr);
+			ft_i = nm_bdg_flush2(ft, ft_i, na, ring_nr);
 		cur = (cur+1 == ring->num_slots ? 0: cur+1);
 	}
 	if (ft_i)
-		ft_i = nm_bdg_flush2(ft, ft_i, ifp, ring_nr);
+		ft_i = nm_bdg_flush2(ft, ft_i, na, ring_nr);
 	/* we consume everything, but we cannot update kring directly
 	 * because the nic may have destroyed the info in the NIC ring.
 	 * So we need to call rxsync again to restore it.
@@ -2533,15 +2667,16 @@ done:
  * but the logic will change.
  */
 int
-nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
+nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na, u_int ring_nr)
 {
 	int i, ifn;
 	uint64_t all_dst, dst;
 	uint32_t sh, dh;
-	uint64_t mysrc = 1 << NA(ifp)->bdg_port;
+	uint64_t mysrc = 1 << na->bdg_port;
 	uint64_t smac, dmac;
 	struct netmap_slot *slot;
-	struct nm_bridge *b = NA(ifp)->na_bdg;
+	struct nm_bridge *b = na->na_bdg;
+	struct ifnet *ifp = na->ifp;
 
 	BDG_RLOCK(b);
 	ND("prepare to send %d packets, act_ports 0x%x", n, b->act_ports);
@@ -2598,15 +2733,15 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 	all_dst = (b->act_ports & ~mysrc);
 	for (ifn = 0; all_dst; ifn++) {
 		struct ifnet *dst_ifp;
-		struct netmap_adapter *na = BDG_GET_VAR(b->bdg_ports[ifn]);
+		struct netmap_adapter *dst_na = BDG_GET_VAR(b->bdg_ports[ifn]);
 		struct netmap_kring *kring;
 		struct netmap_ring *ring;
 		int j, lim, sent, locked, is_hw, howmany;
 		u_int dst_ring_nr = ring_nr;	/* XXX fixme */
 
-		if (!na)
+		if (!dst_na)
 			continue;
-		dst_ifp = na->ifp;
+		dst_ifp = dst_na->ifp;
 		ND("scan port %d %s", ifn, dst_ifp->if_xname);
 		dst = 1 << ifn;
 		if ((dst & all_dst) == 0)	/* skip if not set */
@@ -2623,19 +2758,19 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 			if ((ft[i].ft_dst & dst) == 0)
 				continue;	/* not here */
 			if (!locked) {
-				is_hw = nma_is_hw(na);
+				is_hw = nma_is_hw(dst_na);
 				if (is_hw) { /* going to a physical port */
-					kring = &na->tx_rings[dst_ring_nr];
+					kring = &dst_na->tx_rings[dst_ring_nr];
 					ring = kring->ring;
 					lim = kring->nkr_num_slots - 1;
-					na->nm_lock(dst_ifp, NETMAP_TX_LOCK, dst_ring_nr);
+					dst_na->nm_lock(dst_ifp, NETMAP_TX_LOCK, dst_ring_nr);
 					/*
 					 * txsync checks with the interface whether buffers have
 					 * been completed, and adds them to the 'avail' set.
 					 * As a side effect it might also push out pending
 					 * transmissions.
 					 */
-					na->nm_txsync(dst_ifp, dst_ring_nr, 0);
+					dst_na->nm_txsync(dst_ifp, dst_ring_nr, 0);
 					/* XXX better to read values from the kring.
 					 * They should be the same, but if not, at least
 					 * the kring value is correct.
@@ -2643,10 +2778,10 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 					j = kring->nr_hwcur;
 					howmany = kring->nr_hwavail;
 				} else { /* a VALE port */
-					kring = &na->rx_rings[ring_nr];
+					kring = &dst_na->rx_rings[ring_nr];
 					ring = kring->ring;
 					lim = kring->nkr_num_slots - 1;
-					na->nm_lock(dst_ifp, NETMAP_RX_LOCK, ring_nr);
+					dst_na->nm_lock(dst_ifp, NETMAP_RX_LOCK, ring_nr);
 					/* need to be locked to access these kring fields */
 					j = kring->nr_hwcur + kring->nr_hwavail;
 					if (j > lim)
@@ -2673,15 +2808,18 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 				if (sent) {
 					ring->avail -= sent;
 					ring->cur = j;
-					na->nm_txsync(dst_ifp, dst_ring_nr, 0);
+					dst_na->nm_txsync(dst_ifp, dst_ring_nr, 0);
 				}
-				na->nm_lock(dst_ifp, NETMAP_TX_UNLOCK, dst_ring_nr);
+				dst_na->nm_lock(dst_ifp, NETMAP_TX_UNLOCK, dst_ring_nr);
 			} else {
 				if (sent) {
 					kring->nr_hwavail += sent;
-					selwakeuppri(&kring->si, PI_NET);
+					if (nma_is_host(dst_na))
+						netmap_bdg_to_host(dst_na);
+					else
+						selwakeuppri(&kring->si, PI_NET);
 				}
-				na->nm_lock(dst_ifp, NETMAP_RX_UNLOCK, dst_ring_nr);
+				dst_na->nm_lock(dst_ifp, NETMAP_RX_UNLOCK, dst_ring_nr);
 			}
 		}
 	}
@@ -2691,11 +2829,11 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 
 /* Returns the destination port index */
 static u_int
-nm_bdg_learning(uint8_t *buf, uint8_t *dst_ring, struct ifnet *ifp)
+nm_bdg_learning(uint8_t *buf, uint8_t *dst_ring, struct netmap_adapter *na)
 {
-	struct nm_hash_ent *ht = NA(ifp)->na_bdg->ht;
+	struct nm_hash_ent *ht = na->na_bdg->ht;
 	uint32_t sh, dh;
-	u_int dst, mysrc = NA(ifp)->bdg_port;
+	u_int dst, mysrc = na->bdg_port;
 	uint64_t smac, dmac;
 
 	dmac = le64toh(*(uint64_t *)(buf)) & 0xffffffffffff;
@@ -2739,12 +2877,13 @@ nm_bdg_learning(uint8_t *buf, uint8_t *dst_ring, struct ifnet *ifp)
  * dsts[NM_BDG_BATCH].
  */
 int
-nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
+nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na,
+		u_int ring_nr)
 {
 	struct nm_bdg_q *dst_ents, *brddst;
 	uint16_t num_dsts = 0, *dsts;
-	struct nm_bridge *b = NA(ifp)->na_bdg;
-	u_int i, me = NA(ifp)->bdg_port;
+	struct nm_bridge *b = na->na_bdg;
+	u_int i, me = na->bdg_port;
 
 	dst_ents = (struct nm_bdg_q *)(ft + NM_BDG_BATCH);
 	dsts = (uint16_t *)(dst_ents + NM_BDG_MAXPORTS * NM_BDG_MAXRINGS + 1);
@@ -2759,10 +2898,10 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 		struct nm_bdg_q *d;
 
 		/* This function will be modular.  We expect module-specific
-		 * data can be extracted using ifp
+		 * data can be extracted using na
 		 * XXX We don't support sending packets to myself
 		 */
-		dst_port = nm_bdg_learning(buf, &dst_ring, ifp);
+		dst_port = nm_bdg_learning(buf, &dst_ring, na);
 		if (dst_port == NM_BDG_NOPORT)
 			continue;
 		else if (dst_port == NM_BDG_BROADCAST)
@@ -2801,7 +2940,7 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 	/* second pass: scan destinations (XXX will be modular somehow) */
 	for (i = 0; i < num_dsts; i++) {
 		struct ifnet *dst_ifp;
-		struct netmap_adapter *na;
+		struct netmap_adapter *dst_na;
 		struct netmap_kring *kring;
 		struct netmap_ring *ring;
 		u_int dst_nr, is_hw, lim, j, sent = 0, d_i, next, brd_next;
@@ -2810,8 +2949,8 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 
 		d_i = dsts[i];
 		d = dst_ents + d_i;
-		na = BDG_GET_VAR(b->bdg_ports[d_i/NM_BDG_MAXRINGS]);
-		dst_ifp = na->ifp;
+		dst_na = BDG_GET_VAR(b->bdg_ports[d_i/NM_BDG_MAXRINGS]);
+		dst_ifp = dst_na->ifp;
 		/*
 		 * The interface may be in !netmap mode in two cases:
 		 * - when na is attached but not activated yet;
@@ -2819,27 +2958,26 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 		 */
 		if (unlikely(!(dst_ifp->if_capenable & IFCAP_NETMAP)))
 			continue;
-		na = NA(dst_ifp);
-		is_hw = nma_is_hw(na);
+		is_hw = nma_is_hw(dst_na);
 		dst_nr = d_i & (NM_BDG_MAXRINGS-1);
 		if (is_hw) {
-			if (dst_nr >= na->num_tx_rings)
-				dst_nr = dst_nr % na->num_tx_rings;
-			kring = &na->tx_rings[dst_nr];
+			if (dst_nr >= dst_na->num_tx_rings)
+				dst_nr = dst_nr % dst_na->num_tx_rings;
+			kring = &dst_na->tx_rings[dst_nr];
 			ring = kring->ring;
 			lim = kring->nkr_num_slots - 1;
-			na->nm_lock(dst_ifp, NETMAP_TX_LOCK, dst_nr);
-			na->nm_txsync(dst_ifp, dst_nr, 0);
+			dst_na->nm_lock(dst_ifp, NETMAP_TX_LOCK, dst_nr);
+			dst_na->nm_txsync(dst_ifp, dst_nr, 0);
 			/* see nm_bdg_flush() */
 			j = kring->nr_hwcur;
 			howmany = kring->nr_hwavail;
 		} else {
-			if (dst_nr >= na->num_rx_rings)
-				dst_nr = dst_nr % na->num_rx_rings;
-			kring = &na->rx_rings[dst_nr];
+			if (dst_nr >= dst_na->num_rx_rings)
+				dst_nr = dst_nr % dst_na->num_rx_rings;
+			kring = &dst_na->rx_rings[dst_nr];
 			ring = kring->ring;
 			lim = kring->nkr_num_slots - 1;
-			na->nm_lock(dst_ifp, NETMAP_RX_LOCK, dst_nr);
+			dst_na->nm_lock(dst_ifp, NETMAP_RX_LOCK, dst_nr);
 			j = kring->nr_hwcur + kring->nr_hwavail;
 			if (j > lim)
 				j -= kring->nkr_num_slots;
@@ -2860,7 +2998,7 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 				brd_next = ft_p->ft_next;
 			}
 			slot = &ring->slot[j];
-			ND("send %d %d bytes at %s:%d", i, ft_p->len, dst_ifp->if_xname, j);
+			ND("send %d %d bytes at %s:%d", i, ft_p->ft_len, dst_ifp->if_xname, j);
 			pkt_copy(ft_p->buf, NMB(slot), ft_p->ft_len);
 			slot->len = ft_p->ft_len;
 			j = (j == lim) ? 0: j + 1; /* XXX to be macro-ed */
@@ -2874,15 +3012,18 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct ifnet *ifp, u_int ring_nr)
 			if (sent) {
 				ring->avail -= sent;
 				ring->cur = j;
-				na->nm_txsync(dst_ifp, dst_nr, 0);
+				dst_na->nm_txsync(dst_ifp, dst_nr, 0);
 			}
-			na->nm_lock(dst_ifp, NETMAP_TX_UNLOCK, dst_nr);
+			dst_na->nm_lock(dst_ifp, NETMAP_TX_UNLOCK, dst_nr);
 		} else {
 			if (sent) {
 				kring->nr_hwavail += sent;
-				selwakeuppri(&kring->si, PI_NET);
+				if (nma_is_host(dst_na))
+					netmap_bdg_to_host(dst_na);
+				else
+					selwakeuppri(&kring->si, PI_NET);
 			}
-			na->nm_lock(dst_ifp, NETMAP_RX_UNLOCK, dst_nr);
+			dst_na->nm_lock(dst_ifp, NETMAP_RX_UNLOCK, dst_nr);
 		}
 		d->bq_head = d->bq_tail = NM_BDG_BATCH; /* cleanup */
 	}
@@ -2927,10 +3068,10 @@ bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		if (unlikely(len < 14))
 			continue;
 		if (unlikely(++ft_i == netmap_bridge))
-			ft_i = nm_bdg_flush2(ft, ft_i, ifp, ring_nr);
+			ft_i = nm_bdg_flush2(ft, ft_i, na, ring_nr);
 	}
 	if (ft_i)
-		ft_i = nm_bdg_flush2(ft, ft_i, ifp, ring_nr);
+		ft_i = nm_bdg_flush2(ft, ft_i, na, ring_nr);
 	/* count how many packets we sent */
 	i = k - j;
 	if (i < 0)
@@ -3025,6 +3166,8 @@ bdg_netmap_attach(struct netmap_adapter *arg)
 	na.nm_txsync = bdg_netmap_txsync;
 	na.nm_rxsync = bdg_netmap_rxsync;
 	na.nm_register = bdg_netmap_reg;
+	/* virtual interface does not support software adapter */
+	na.na_flags |= NAF_NO_SWNA;
 	netmap_attach(&na, na.num_tx_rings);
 }
 
