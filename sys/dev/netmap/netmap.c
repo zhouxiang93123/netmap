@@ -2230,6 +2230,32 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, int n,
 	return kring->ring->slot;
 }
 
+/* returns the next position in the ring */
+static int
+nm_bdg_preflush(struct netmap_adapter *na, u_int ring_nr,
+	struct netmap_kring *kring, u_int end)
+{
+	struct netmap_ring *ring = kring->ring;
+	struct nm_bdg_fwd *ft = kring->nkr_ft;
+	u_int j = kring->nr_hwcur, lim = kring->nkr_num_slots - 1;
+	u_int ft_i = 0;	/* start from 0 */
+
+	for (; likely(j != end); j = unlikely(j == lim) ? 0 : j+1) {
+		struct netmap_slot *slot = &ring->slot[j];
+		int len = ft[ft_i].ft_len = slot->len;
+		char *buf = ft[ft_i].buf = NMB(slot);
+
+		prefetch(buf);
+		if (unlikely(len < 14))
+			continue;
+		if (unlikely(++ft_i == netmap_bridge))
+			ft_i = nm_bdg_flush2(ft, ft_i, na, ring_nr);
+	}
+	if (ft_i)
+		ft_i = nm_bdg_flush2(ft, ft_i, na, ring_nr);
+	return j;
+}
+
 /*
  * Pass packets from nic to the bridge. Must be called with
  * proper locks on the source interface.
@@ -2242,44 +2268,28 @@ netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	int j, cur, howmany;
-	struct nm_bdg_fwd *ft = kring->nkr_ft;
-	int ft_i;       /* position in the forwarding table */
+	int j, k, lim = kring->nkr_num_slots - 1;
 
 	/* fetch packets that have arrived */
 	na->nm_rxsync(ifp, ring_nr, 0);
 	/* XXX we don't count reserved, but it should be 0 */
-	cur = kring->nr_hwcur;
-	howmany = kring->nr_hwavail;
-	if (howmany == 0 && netmap_verbose) {
+	j = kring->nr_hwcur;
+	k = j + kring->nr_hwavail;
+	if (k > lim)
+		k -= lim + 1;
+	if (k == j && netmap_verbose) {
 		D("how strange, interrupt with no packets on %s",
 			ifp->if_xname);
 		return;
 	}
-	ft_i = 0;
-	/* this loop is similar to bdg_netmap_txsync() */
-	for (j = 0; likely(j < howmany); j++) {
-		struct netmap_slot *slot = &ring->slot[cur];
-		int len = ft[ft_i].ft_len = slot->len;
-		char *buf = ft[ft_i].buf = NMB(slot);
 
-		prefetch(buf);
-		if (unlikely(len < 14)) {
-			/* we don't advance ft_i */
-			cur = (cur+1 == ring->num_slots ? 0: cur+1);
-			continue;
-		}
-		if (unlikely(++ft_i == netmap_bridge))
-			ft_i = nm_bdg_flush2(ft, ft_i, na, ring_nr);
-		cur = (cur+1 == ring->num_slots ? 0: cur+1);
-	}
-	if (ft_i)
-		ft_i = nm_bdg_flush2(ft, ft_i, na, ring_nr);
+	j = nm_bdg_preflush(na, ring_nr, kring, k);
+
 	/* we consume everything, but we cannot update kring directly
 	 * because the nic may have destroyed the info in the NIC ring.
 	 * So we need to call rxsync again to restore it.
 	 */
-	ring->cur = cur;
+	ring->cur = j;
 	ring->avail = 0;
 	na->nm_rxsync(ifp, ring_nr, 0);
 	return;
@@ -3042,8 +3052,6 @@ bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	int i, j, k, lim = kring->nkr_num_slots - 1;
-	struct nm_bdg_fwd *ft = kring->nkr_ft;
-	int ft_i;	/* position in the forwarding table */
 
 	k = ring->cur;
 	if (k > lim)
@@ -3058,21 +3066,7 @@ bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	if (netmap_bridge > NM_BDG_BATCH)
 		netmap_bridge = NM_BDG_BATCH;
 
-	ft_i = 0;	/* start from 0 */
-	for (j = kring->nr_hwcur; likely(j != k); j = unlikely(j == lim) ? 0 : j+1) {
-		struct netmap_slot *slot = &ring->slot[j];
-		int len = ft[ft_i].ft_len = slot->len;
-		char *buf = ft[ft_i].buf = NMB(slot);
-
-		prefetch(buf);
-		if (unlikely(len < 14))
-			continue;
-		if (unlikely(++ft_i == netmap_bridge))
-			ft_i = nm_bdg_flush2(ft, ft_i, na, ring_nr);
-	}
-	if (ft_i)
-		ft_i = nm_bdg_flush2(ft, ft_i, na, ring_nr);
-	/* count how many packets we sent */
+	j = nm_bdg_preflush(na, ring_nr, kring, k);
 	i = k - j;
 	if (i < 0)
 		i += kring->nkr_num_slots;
