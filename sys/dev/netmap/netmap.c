@@ -941,7 +941,7 @@ netmap_bdg_to_host(struct netmap_adapter *na)
 	/* mark as if the host stack consumed everything (reserved must be 0) */
 	ring->cur += kring->nr_hwavail;
 	if (ring->cur > lim)
-		ring->cur -= lim;
+		ring->cur -= lim + 1;
 	/* chain packets by mbuf from hwcur to cur */
 	netmap_grab_packets(kring, &q, 1);
 
