@@ -270,9 +270,8 @@ enum {
 };
 
 /* Locking instruction in rx_irq */
-#define NETMAP_LOCK_ENTER	0x00000000
-#define NETMAP_LOCK_EXIT	0x20000000
-#define NETMAP_UNLOCK_EXIT	0x40000000
+#define NETMAP_LOCKED_ENTER	0x10000000
+#define NETMAP_LOCKED_EXIT	0x20000000
 #define NETMAP_LOCK_MASK	0xffff0000
 
 /*

@@ -2344,10 +2344,15 @@ netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
 		main_wq = (na->num_tx_rings > 1) ? &na->tx_si : NULL;
 		work_done = &q; /* dummy */
 	}
-	locktype = work_done == &q ? NETMAP_TX_LOCK : NETMAP_RX_LOCK;
-	unlocktype = work_done == &q ? NETMAP_TX_UNLOCK : NETMAP_RX_UNLOCK;
+	if (work_done == &q) {
+		locktype = NETMAP_TX_LOCK;
+		unlocktype = NETMAP_TX_UNLOCK;
+	} else {
+		locktype = NETMAP_RX_LOCK;
+		unlocktype = NETMAP_RX_UNLOCK;
+	}
 	if (na->separate_locks) {
-		if (lock & NETMAP_LOCK_ENTER)
+		if (!(lock & NETMAP_LOCKED_ENTER))
 			na->nm_lock(ifp, locktype, q);
 		/* If a NIC is attached to a bridge, flush packets
 		 * (and no need to wakeup anyone). Otherwise, wakeup
@@ -2363,10 +2368,11 @@ netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
 			selwakeuppri(main_wq, PI_NET);
 			na->nm_lock(ifp, NETMAP_CORE_UNLOCK, 0);
 		}
-		if (lock & NETMAP_LOCK_EXIT)
+		/* lock the queue again if instructed */
+		if (lock & NETMAP_LOCKED_EXIT)
 			na->nm_lock(ifp, locktype, q);
 	} else {
-		if (lock & NETMAP_LOCK_ENTER)
+		if (!(lock & NETMAP_LOCKED_ENTER))
 			na->nm_lock(ifp, NETMAP_CORE_LOCK, 0);
 		if (nic_to_bridge)
 			netmap_nic_to_bdg(ifp, q);
@@ -2375,7 +2381,7 @@ netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
 			if (main_wq)
 				selwakeuppri(main_wq, PI_NET);
 		}
-		if (!(lock & NETMAP_LOCK_EXIT))
+		if (!(lock & NETMAP_LOCKED_EXIT))
 			na->nm_lock(ifp, NETMAP_CORE_UNLOCK, 0);
 	}
 	*work_done = 1; /* do not fire napi again */
