@@ -697,6 +697,7 @@ static struct cdev_pager_ops netmap_cdev_pager_ops = {
         .cdev_pg_fault = NULL,
 };
 
+// XXX check whether we need netmap_mmap_single _and_ netmap_mmap
 static int
 netmap_mmap_single(struct cdev *cdev, vm_ooffset_t *foff,
 	vm_size_t objsize,  vm_object_t *objp, int prot)
@@ -2443,7 +2444,7 @@ linux_netmap_mmap(struct file *f, struct vm_area_struct *vma)
 		 * vtophys mapping in lut[k] so we use that, scanning
 		 * the lut[] array in steps of clustentries,
 		 * and we map each cluster (not individual pages,
-		 * it would be overkill).
+		 * it would be overkill -- XXX slow ? 20130415).
 		 */
 
 		/*
