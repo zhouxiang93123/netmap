@@ -1142,7 +1142,7 @@ main_thread(struct glob_arg *g)
 		rx_output(count, delta_t);
 
 	if (g->dev_type == DEV_NETMAP) {
-		ioctl(g->main_fd, NIOCUNREGIF, NULL); // XXX deprecated
+		// ioctl(g->main_fd, NIOCUNREGIF, NULL); // XXX deprecated
 		munmap(g->mmap_addr, g->mmap_size);
 		close(g->main_fd);
 	}
