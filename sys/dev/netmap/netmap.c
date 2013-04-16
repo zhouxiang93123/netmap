@@ -569,7 +569,7 @@ netmap_dtor_locked(void *data)
 		netmap_free_rings(na);
 		if (nma_is_hw(na))
 			SWNA(ifp)->tx_rings = SWNA(ifp)->rx_rings = NULL;
-		wakeup(na); // XXX do we still use it ?
+		// wakeup(na); // XXX do we still use it ?
 	}
 	netmap_if_free(nifp);
 }
