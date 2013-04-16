@@ -445,7 +445,6 @@ pcap_close(pcap_t *p)
 	if (me->mem)
 		munmap(me->mem, me->memsize);
 	/* restore original flags ? */
-	ioctl(me->fd, NIOCUNREGIF, NULL);
 	close(me->fd);
 	bzero(me, sizeof(*me));
 	free(me);

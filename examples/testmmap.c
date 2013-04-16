@@ -174,30 +174,6 @@ void do_regif()
 	output_err(ret, "ioctl(%d, NIOCREGIF) for %s =%d", fd, name, ret);
 }
 
-void do_unregif()
-{
-	struct nmreq nmr;
-	int ret;
-	char *arg;
-	int fd;
-	char *name;
-
-	bzero(&nmr, sizeof(nmr));
-	nmr.nr_version = NETMAP_API;
-
-	name = nextarg();
-	if (!name) {
-		output("missing ifname");
-		return;
-	}
-	strncpy(nmr.nr_name, name, sizeof(nmr.nr_name));
-	arg = nextarg();
-
-	fd = arg ? atoi(arg) : last_fd;
-
-	ret = ioctl(fd, NIOCUNREGIF, &nmr);
-	output_err(ret, "ioctl(%d, NIOCUNREGIF) for %s =%d", fd, name, ret);
-}
 
 volatile char tmp1;
 void do_access()
@@ -434,10 +410,6 @@ struct cmd_def commands[] = {
 	{
 		.name = "regif",
 		.f    = do_regif,
-	},
-	{
-		.name = "unregif",
-		.f    = do_unregif,
 	},
 	{
 		.name = "mmap",

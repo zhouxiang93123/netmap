@@ -186,7 +186,6 @@ netmap_close(struct my_ring *me)
 	D("");
 	if (me->mem)
 		munmap(me->mem, me->memsize);
-	ioctl(me->fd, NIOCUNREGIF, NULL);
 	close(me->fd);
 	return (0);
 }
