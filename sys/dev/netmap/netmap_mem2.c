@@ -296,12 +296,12 @@ netmap_obj_offset(struct netmap_obj_pool *p, const void *vaddr)
 	netmap_obj_offset(&nm_mem.pools[NETMAP_IF_POOL], (v))
 
 #define netmap_ring_offset(v)					\
-    (nm_mem.pools[NETMAP_IF_POOL]._memtotal + 				\
+    (nm_mem.pools[NETMAP_IF_POOL]._memtotal + 			\
 	netmap_obj_offset(&nm_mem.pools[NETMAP_RING_POOL], (v)))
 
 #define netmap_buf_offset(v)					\
-    (nm_mem.pools[NETMAP_IF_POOL]._memtotal +				\
-	nm_mem.pools[NETMAP_RING_POOL]._memtotal +			\
+    (nm_mem.pools[NETMAP_IF_POOL]._memtotal +			\
+	nm_mem.pools[NETMAP_RING_POOL]._memtotal +		\
 	netmap_obj_offset(&nm_mem.pools[NETMAP_BUF_POOL], (v)))
 
 
@@ -429,7 +429,7 @@ netmap_new_bufs(struct netmap_if *nifp,
 		 * in the NIC ring. This is a hack that hides missing
 		 * initializations in the drivers, and should go away.
 		 */
-		slot[i].flags = NS_BUF_CHANGED;
+		// slot[i].flags = NS_BUF_CHANGED;
 	}
 
 	ND("allocated %d buffers, %d available, first at %d", n, p->objfree, pos);
@@ -683,7 +683,6 @@ static int
 netmap_memory_config(void)
 {
 	int i;
-
 
 	if (!netmap_memory_config_changed())
 		goto out;
