@@ -99,6 +99,7 @@ MALLOC_DEFINE(M_NETMAP, "netmap", "Network memory map");
 #include <net/netmap.h>
 #include <dev/netmap/netmap_kern.h>
 
+/* XXX the following variables must be deprecated and included in nm_mem */
 u_int netmap_total_buffers;
 u_int netmap_buf_size;
 char *netmap_buffer_base;	/* address of an invalid buffer */
@@ -568,7 +569,7 @@ netmap_dtor_locked(void *data)
 		netmap_free_rings(na);
 		if (nma_is_hw(na))
 			SWNA(ifp)->tx_rings = SWNA(ifp)->rx_rings = NULL;
-		wakeup(na);
+		wakeup(na); // XXX do we still use it ?
 	}
 	netmap_if_free(nifp);
 }
