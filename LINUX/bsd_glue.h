@@ -128,7 +128,7 @@ struct thread;
 #define ifnet           	net_device      /* remap */
 #define	if_xname		name		/* field ifnet-> net_device */
 #define	if_capenable		priv_flags	/* IFCAP_NETMAP */
-#define	if_bridge		atalk_ptr	/* remap, only for VALE ports */
+// #define	if_bridge		atalk_ptr	/* remap, only for VALE ports */
 #define ifunit_ref(_x)		dev_get_by_name(&init_net, _x);
 #define if_rele(ifp)		dev_put(ifp)
 #define CURVNET_SET(x)
@@ -195,12 +195,13 @@ static inline void mtx_unlock(safe_spinlock_t *m)
 /* wake_up() or wake_up_interruptible() ? */
 #define	selwakeuppri(sw, pri)	wake_up(sw)
 #define selrecord(x, y)		poll_wait((struct file *)x, y, pwait)
-#define knlist_destroy(x)	// XXX todo
 
-/* we use tsleep/wakeup to sleep a bit. */
-#define	tsleep(a, b, c, t)	msleep(10)	// XXX
-#define	wakeup(sw)				// XXX double check
-#define microtime		do_gettimeofday
+// #define knlist_destroy(x)	// XXX todo
+
+// #define	tsleep(a, b, c, t)	msleep(10)	// XXX unused
+// #define	wakeup(sw)				// XXX double check
+
+#define microtime		do_gettimeofday		// debugging
 
 
 /*
@@ -222,6 +223,9 @@ typedef unsigned int (d_poll_t)(struct file * file, struct poll_table_struct *pw
 /*
  * make_dev will set an error and return the first argument.
  * This relies on the availability of the 'error' local variable.
+ * For old linux systems that do not have devfs, generate a
+ * message in syslog so the sysadmin knows which command to run
+ * in order to create the /dev/netmap entry
  */
 #define make_dev(_cdev, _zero, _uid, _gid, _perm, _name)	\
 	({error = misc_register(_cdev);				\
