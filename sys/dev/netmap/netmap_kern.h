@@ -105,6 +105,8 @@
 struct netmap_adapter;
 struct nm_bridge;
 struct netmap_priv_d;
+typedef u_int (*BDG_LOOKUP_T)(char *buf, u_int len, uint8_t *ring_nr,
+		struct netmap_adapter *);
 
 /*
  * private, kernel view of a ring. Keeps track of the status of
@@ -299,6 +301,20 @@ enum txrx { NR_RX = 0, NR_TX = 1 };
 struct netmap_slot *netmap_reset(struct netmap_adapter *na,
 	enum txrx tx, int n, u_int new_cur);
 int netmap_ring_reinit(struct netmap_kring *);
+
+/*
+ * The following bridge-related interfaces are used by other kernel modules
+ * In the version that only supports unicast or broadcast, the lookup
+ * function can return 0..NM_BDG_MAXPORTS-1 for regular ports,
+ * NM_BDG_MAXPORTS for broadcast, NM_BDG_MAXPORTS+1 for unknown.
+ * XXX in practice "unknown" might be handled same as broadcast.
+ */
+int netmap_bdg_ctl(struct nmreq *nmr, BDG_LOOKUP_T func);
+u_int netmap_bdg_learning(char *, u_int, uint8_t *, struct netmap_adapter *);
+#define	NM_NAME			"vale"	/* prefix for the interface */
+#define NM_BDG_MAXPORTS		254	/* up to 32 for bitmap, 254 ok otherwise */
+#define	NM_BDG_BROADCAST	NM_BDG_MAXPORTS
+#define	NM_BDG_NOPORT		(NM_BDG_MAXPORTS+1)
 
 extern u_int netmap_buf_size;
 #define NETMAP_BUF_SIZE	netmap_buf_size

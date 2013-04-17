@@ -143,21 +143,12 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, copy, CTLFLAG_RW, &netmap_copy, 0 , "");
  * In the tx loop, we aggregate traffic in batches to make all operations
  * faster. The batch size is NM_BDG_BATCH
  */
-#define	NM_NAME			"vale"	/* prefix for the interface */
-#define NM_BDG_MAXPORTS		254	/* up to 32 for bitmap, 254 ok otherwise */
 #define NM_BDG_MAXRINGS		16	/* XXX unclear how many. */
 #define NM_BRIDGE_RINGSIZE	1024	/* in the device */
 #define NM_BDG_HASH		1024	/* forwarding table entries */
 #define NM_BDG_BATCH		1024	/* entries in the forwarding buffer */
 #define	NM_BRIDGES		4	/* number of bridges */
 
-/* In the version that only supports unicast or broadcast, the lookup
- * function can return 0..NM_BDG_MAXPORTS-1 for regular ports,
- * NM_BDG_MAXPORTS for broadcast, NM_BDG_MAXPORTS+1 for unknown.
- * XXX in practice "unknown" might be handled same as broadcast.
- */
-#define	NM_BDG_BROADCAST	NM_BDG_MAXPORTS
-#define	NM_BDG_NOPORT		(NM_BDG_MAXPORTS+1)
 
 int netmap_bridge = NM_BDG_BATCH; /* bridge batch size */
 SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
@@ -228,7 +219,16 @@ struct nm_bridge {
 	char basename[IFNAMSIZ];
 	/* the forwarding table, MAC+ports */
 	struct nm_hash_ent ht[NM_BDG_HASH];
-
+	/*
+	 * The modular function to decide the destination port.
+	 * It returns either of an index of the destination port,
+	 * NM_BDG_BROADCAST to broadcast this packet, or NM_BDG_NOPORT not to
+	 * forward this packet.  ring_nr is the source ring index, and the
+	 * function may overwrite this value to forward this packet to a
+	 * different ring index.
+	 * This function must be set by netmap_bdgctl().
+	 */
+	BDG_LOOKUP_T nm_bdg_lookup;
 };
 
 struct nm_bridge nm_bridges[NM_BRIDGES];
@@ -324,6 +324,8 @@ nm_find_bridge(const char *name)
 			b = nm_bridges + e;
 			strncpy(b->basename, name, namelen);
 			b->namelen = namelen;
+			/* set the default function */
+			b->nm_bdg_lookup = netmap_bdg_learning;
 		}
 	}
 	BDG_WUNLOCK(nm_bridges);
@@ -628,6 +630,7 @@ nm_if_rele(struct ifnet *ifp)
 	if (full == 0) {
 		ND("marking bridge %d as free", b - nm_bridges);
 		b->namelen = 0;
+		b->nm_bdg_lookup = NULL;
 	}
 	if (na->na_bdg) /* still attached to the bridge */
 		D("ouch, cannot find ifp to remove");
@@ -1445,6 +1448,56 @@ netmap_attach_sw(struct ifnet *ifp)
 	na->num_rx_desc = hw_na->num_rx_desc;
 }
 
+/* exported to kernel callers */
+int
+netmap_bdg_ctl(struct nmreq *nmr, BDG_LOOKUP_T func)
+{
+	struct ifnet *ifp;
+	struct nm_bridge *b;
+	int cmd = nmr->spare1;
+	int error = 0, i;
+
+	switch (cmd) {
+	case NETMAP_BDG_ATTACH:
+	case NETMAP_BDG_DETACH:
+		error = get_ifp(nmr, &ifp);
+		if (error)
+			break;
+		if (!nma_is_hw(NA(ifp))) {
+			D("must specify a NIC, not %s", nmr->nr_name);
+			error = EINVAL;
+			break;
+		}
+	        if (cmd == NETMAP_BDG_DETACH) {
+			struct netmap_adapter *na = NA(ifp);
+			netmap_dtor(na->na_kpriv);
+			na->na_kpriv = NULL;
+		}
+		break;
+	case NETMAP_BDG_LOOKUP_REG:
+		/* nmr->nr_name must be just bridge's name */
+		BDG_WLOCK(nm_bridges);
+		for (i = 0; i < NM_BRIDGES; i++) {
+			b = nm_bridges + i;
+			if (!strncmp(nmr->nr_name, b->basename, b->namelen))
+				break;
+		}
+		BDG_WUNLOCK(nm_bridges);
+		if (i < NM_BRIDGES) {
+			BDG_WLOCK(b);
+			b->nm_bdg_lookup = func;
+			BDG_WUNLOCK(b);
+		} else
+			error = EINVAL;
+		break;
+	default:
+		D("invalid cmd (nmr->spare1) (%d)", cmd);
+		error = EINVAL;
+		break;
+	}
+	return error;
+}
+
 /*
  * ioctl(2) support for the "netmap" device.
  *
@@ -1540,19 +1593,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		/* possibly attach/detach NIC and VALE switch */
 		i = nmr->spare1;
 		if (i == NETMAP_BDG_ATTACH || i == NETMAP_BDG_DETACH) {
-			error = get_ifp(nmr, &ifp);
-			if (error)
-				break;
-			if (!nma_is_hw(NA(ifp))) {
-				D("must specify a NIC, not %s", nmr->nr_name);
-				error = EINVAL;
-				break;
-			}
-		        if (i == NETMAP_BDG_DETACH) {
-				na = NA(ifp);
-				netmap_dtor(na->na_kpriv);
-				na->na_kpriv = NULL;
-			}
+			error = netmap_bdg_ctl(nmr, NULL);
 			break;
 		} else if (i != 0) {
 			D("spare1 must be 0 not %d", i);
@@ -2581,6 +2622,8 @@ EXPORT_SYMBOL(netmap_reset);		// ring init routines
 EXPORT_SYMBOL(netmap_buf_size);
 EXPORT_SYMBOL(netmap_rx_irq);		// default irq handler
 EXPORT_SYMBOL(netmap_no_pendintr);	// XXX mitigation - should go away
+EXPORT_SYMBOL(netmap_bdg_ctl);		// bridge configuration routine
+EXPORT_SYMBOL(netmap_bdg_learning);	// the default lookup function
 
 
 MODULE_AUTHOR("http://info.iet.unipi.it/~luigi/netmap/");
@@ -2853,8 +2896,9 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na, u_int ring
 }
 
 /* Returns the destination port index */
-static u_int
-nm_bdg_learning(uint8_t *buf, uint8_t *dst_ring, struct netmap_adapter *na)
+u_int
+netmap_bdg_learning(char *buf, u_int __unused len, uint8_t *dst_ring,
+		struct netmap_adapter *na)
 {
 	struct nm_hash_ent *ht = na->na_bdg->ht;
 	uint32_t sh, dh;
@@ -2918,15 +2962,11 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na,
 	/* first pass: find a destination */
 	for (i = 0; likely(i < n); i++) {
 		uint8_t *buf = ft[i].buf;
-		uint8_t dst_ring = 0;
+		uint8_t dst_ring = ring_nr;
 		uint16_t dst_port, d_i;
 		struct nm_bdg_q *d;
 
-		/* This function will be modular.  We expect module-specific
-		 * data can be extracted using na
-		 * XXX We don't support sending packets to myself
-		 */
-		dst_port = nm_bdg_learning(buf, &dst_ring, na);
+		dst_port = b->nm_bdg_lookup(buf, ft[i].ft_len, &dst_ring, na);
 		if (dst_port == NM_BDG_NOPORT)
 			continue;
 		else if (dst_port == NM_BDG_BROADCAST)

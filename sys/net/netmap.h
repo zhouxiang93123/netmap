@@ -320,6 +320,7 @@ struct nmreq {
 	uint16_t	spare1;
 #define NETMAP_BDG_ATTACH	0x1
 #define NETMAP_BDG_DETACH	0x2
+#define NETMAP_BDG_LOOKUP_REG	0x4
 	uint32_t	spare2[4];
 };
 
