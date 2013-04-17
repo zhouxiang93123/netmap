@@ -672,6 +672,13 @@ netmap_dtor(void *data)
 #include <vm/vm_pager.h>
 #include <vm/uma.h>
 
+/*
+ * In order to track whether pages are still mapped, we hook into
+ * the standard cdev_pager and intercept the constructor and
+ * destructor.
+ * XXX but then ? Do we really use the information ?
+ * Need to investigate.
+ */
 static struct cdev_pager_ops saved_cdev_pager_ops;
 
 static int
