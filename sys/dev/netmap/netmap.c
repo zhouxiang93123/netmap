@@ -2897,7 +2897,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na, u_int ring
 
 /* Returns the destination port index */
 u_int
-netmap_bdg_learning(char *buf, u_int __unused len, uint8_t *dst_ring,
+netmap_bdg_learning(char *buf, u_int len, uint8_t *dst_ring,
 		struct netmap_adapter *na)
 {
 	struct nm_hash_ent *ht = na->na_bdg->ht;
