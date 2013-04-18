@@ -38,6 +38,7 @@ DRIVER_SUBDIRS += broadcom .
 # fact the kernel sources path must be specified.
 
 # Additional compile flags (e.g. header location)
+PWD ?= $(CURDIR)
 M:=$(PWD)
 EXTRA_CFLAGS := -I$(M) -I$(M)/../sys -I$(M)/../sys/dev -DCONFIG_NETMAP
 EXTRA_CFLAGS += -Wno-unused-but-set-variable
