@@ -42,7 +42,7 @@
  * Only nm_buf_pool needs to be dma-able,
  * but for convenience use the same type of allocator for all.
  *
- * Once mapped, the three pool are exported to userspace
+ * Once mapped, the three pools are exported to userspace
  * as a contiguous block, starting from nm_if_pool. Each
  * cluster (and pool) is an integral number of pages.
  *   [ . . . ][ . . . . . .][ . . . . . . . . . .]
