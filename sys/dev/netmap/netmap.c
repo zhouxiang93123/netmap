@@ -1479,7 +1479,10 @@ netmap_bdg_ctl(struct nmreq *nmr, BDG_LOOKUP_T func)
 		BDG_WLOCK(nm_bridges);
 		for (i = 0; i < NM_BRIDGES; i++) {
 			b = nm_bridges + i;
-			if (!strncmp(nmr->nr_name, b->basename, b->namelen))
+			if (!b->namelen)
+				continue;
+			else if (!strncmp(nmr->nr_name, b->basename,
+			    b->namelen))
 				break;
 		}
 		BDG_WUNLOCK(nm_bridges);
