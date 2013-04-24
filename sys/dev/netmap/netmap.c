@@ -2976,7 +2976,9 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na,
 		struct nm_bdg_q *d;
 
 		dst_port = b->nm_bdg_lookup(buf, ft[i].ft_len, &dst_ring, na);
-		if (dst_port == NM_BDG_NOPORT)
+		if (unlikely(dst_port > NM_BDG_MAXPORTS))
+			continue;
+		else if (dst_port == NM_BDG_NOPORT)
 			continue;
 		else if (dst_port == NM_BDG_BROADCAST)
 			dst_ring = 0; /* broadcasts always go to ring 0 */
@@ -3024,6 +3026,11 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na,
 		d_i = dsts[i];
 		d = dst_ents + d_i;
 		dst_na = BDG_GET_VAR(b->bdg_ports[d_i/NM_BDG_MAXRINGS]);
+		/* protect from the lookup function returning an inactive
+		 * destination port
+		 */
+		if (unlikely(dst_na == NULL))
+			continue;
 		dst_ifp = dst_na->ifp;
 		/*
 		 * The interface may be in !netmap mode in two cases:
