@@ -66,7 +66,7 @@ DRIVERS := $(shell \
 all:	get-drivers build
 
 build:
-	make -C $(KSRC) M=$(PWD) CONFIG_NETMAP=m	\
+	$(MAKE) -C $(KSRC) M=$(PWD) CONFIG_NETMAP=m	\
 		CONFIG_E1000=m CONFIG_E1000E=m \
 		CONFIG_BNX2X=m CONFIG_MLX4=m \
 		CONFIG_IXGBE=m CONFIG_IGB=m EXTRA_CFLAGS='$(EXTRA_CFLAGS)' \
@@ -79,7 +79,7 @@ test:
 	@echo "drivers $(DRIVERS)"
 
 clean:
-	-@ make -C $(KSRC) M=$(PWD) clean
+	-@ $(MAKE) -C $(KSRC) M=$(PWD) clean
 	-@ (rm -rf $(DRIVER_SRCS) *.orig *.rej *.ko *.o get-drivers )
 
 # the source is not here so we need to specify a dependency
@@ -112,4 +112,4 @@ get-drivers:
 #
 
 apps:
-	(cd ../examples; make)
+	(cd ../examples; $(MAKE))

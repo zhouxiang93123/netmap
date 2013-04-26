@@ -2090,7 +2090,11 @@ netmap_attach(struct netmap_adapter *arg, int num_queues)
 	if (ifp->netdev_ops) {
 		ND("netdev_ops %p", ifp->netdev_ops);
 		/* prepare a clone of the netdev ops */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 28)
+		na->nm_ndo.ndo_start_xmit = ifp->netdev_ops;
+#else
 		na->nm_ndo = *ifp->netdev_ops;
+#endif
 	}
 	na->nm_ndo.ndo_start_xmit = linux_netmap_start;
 #endif
@@ -2453,7 +2457,9 @@ netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
 static u_int
 linux_netmap_poll(struct file * file, struct poll_table_struct *pwait)
 {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,4,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,28)
+	int events = POLLIN | POLLOUT; /* XXX maybe... */
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(3,4,0)
 	int events = pwait ? pwait->key : POLLIN | POLLOUT;
 #else /* in 3.4.0 field 'key' was renamed to '_key' */
 	int events = pwait ? pwait->_key : POLLIN | POLLOUT;

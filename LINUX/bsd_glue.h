@@ -79,6 +79,14 @@ struct thread;
 #define bzero(a, len)		memset(a, 0, len)
 #define bcopy(_s, _d, len) 	memcpy(_d, _s, len)
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 28)
+#define	netdev_tx_t	int
+#define	netdev_ops	hard_start_xmit
+struct net_device_ops {
+	int (*ndo_start_xmit)(struct sk_buff *skb, struct net_device *dev);
+
+};
+#endif /* < 2.6.28 */
 
 // XXX maybe implement it as a proper function somewhere
 // it is important to set s->len before the copy.
