@@ -137,6 +137,10 @@ struct net_device_ops {
 #define	if_xname		name		/* field ifnet-> net_device */
 #define	if_capenable		priv_flags	/* IFCAP_NETMAP */
 // #define	if_bridge		atalk_ptr	/* remap, only for VALE ports */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 27)
+typedef unsigned long phys_addr_t;
+extern struct net init_net;
+#endif
 #define ifunit_ref(_x)		dev_get_by_name(&init_net, _x);
 #define if_rele(ifp)		dev_put(ifp)
 #define CURVNET_SET(x)
