@@ -124,11 +124,14 @@ int netmap_drop = 0;	/* debugging */
 int netmap_flags = 0;	/* debug flags */
 int netmap_fwd = 0;	/* force transparent mode */
 int netmap_copy = 0;	/* debugging, copy content */
+int netmap_bridge_host = 0;	/* connect the host stack to the bridge */
 
 SYSCTL_INT(_dev_netmap, OID_AUTO, drop, CTLFLAG_RW, &netmap_drop, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, flags, CTLFLAG_RW, &netmap_flags, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, fwd, CTLFLAG_RW, &netmap_fwd, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, copy, CTLFLAG_RW, &netmap_copy, 0 , "");
+SYSCTL_INT(_dev_netmap, OID_AUTO, bridge_host, CTLFLAG_RW, &netmap_bridge_host,
+	0 , "");
 
 #ifdef NM_BRIDGE /* support for netmap bridge */
 
@@ -1152,16 +1155,19 @@ no_port:
 			/* bdg_netmap_attach creates a struct netmap_adapter */
 			bdg_netmap_attach(&tmp_na);
 		} else { /* this is a NIC connected to the bridge */
-			if (cand2 == -1) /* need extra port for host stack */
+			/* need an extra port for host stack */
+			if (netmap_bridge_host && cand2 == -1)
 				goto no_port;
 			else if (kern_netmap_regif(iter, nmr->nr_ringid))
 				goto no_port;
 			/* the NIC is activated now */
 			b->act_ports |= (1<<cand);
 			/* bind the host stack to the bridge */
-			BDG_SET_VAR(b->bdg_ports[cand2], SWNA(iter));
-			SWNA(iter)->bdg_port = cand2;
-			SWNA(iter)->na_bdg = b;
+			if (netmap_bridge_host) {
+				BDG_SET_VAR(b->bdg_ports[cand2], SWNA(iter));
+				SWNA(iter)->bdg_port = cand2;
+				SWNA(iter)->na_bdg = b;
+			}
 		}
 		na = NA(iter);
 		na->bdg_port = cand;
@@ -2188,7 +2194,7 @@ netmap_start(struct ifnet *ifp, struct mbuf *m)
 		D("%s packet %d len %d from the stack", ifp->if_xname,
 			kring->nr_hwcur + kring->nr_hwavail, len);
 	if (na->na_bdg)
-		return bdg_netmap_start(ifp, m);
+		return netmap_bridge_host ? bdg_netmap_start(ifp, m) : error;
 	na->nm_lock(ifp, NETMAP_CORE_LOCK, 0);
 	if (kring->nr_hwavail >= lim) {
 		if (netmap_verbose)
