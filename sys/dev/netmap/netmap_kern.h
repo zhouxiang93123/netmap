@@ -109,8 +109,6 @@
 struct netmap_adapter;
 struct nm_bridge;
 struct netmap_priv_d;
-typedef u_int (*BDG_LOOKUP_T)(char *buf, u_int len, uint8_t *ring_nr,
-		struct netmap_adapter *);
 
 /*
  * private, kernel view of a ring. Keeps track of the status of
@@ -309,19 +307,21 @@ int netmap_ring_reinit(struct netmap_kring *);
 /*
  * The following bridge-related interfaces are used by other kernel modules
  * In the version that only supports unicast or broadcast, the lookup
- * function can return 0..NM_BDG_MAXPORTS-1 for regular ports,
+ * function can return 0 .. NM_BDG_MAXPORTS-1 for regular ports,
  * NM_BDG_MAXPORTS for broadcast, NM_BDG_MAXPORTS+1 for unknown.
  * XXX in practice "unknown" might be handled same as broadcast.
  */
+typedef u_int (*BDG_LOOKUP_T)(char *buf, u_int len, uint8_t *ring_nr,
+		struct netmap_adapter *);
 int netmap_bdg_ctl(struct nmreq *nmr, BDG_LOOKUP_T func);
 u_int netmap_bdg_learning(char *, u_int, uint8_t *, struct netmap_adapter *);
-#define	NM_NAME			"vale"	/* prefix for the interface */
-#define NM_BDG_MAXPORTS		254	/* up to 32 for bitmap, 254 ok otherwise */
+#define	NM_NAME			"vale"	/* prefix for the bridge port name */
+#define	NM_BDG_MAXPORTS		254	/* up to 32 for bitmap, 254 ok otherwise */
 #define	NM_BDG_BROADCAST	NM_BDG_MAXPORTS
 #define	NM_BDG_NOPORT		(NM_BDG_MAXPORTS+1)
 
 extern u_int netmap_buf_size;
-#define NETMAP_BUF_SIZE	netmap_buf_size
+#define NETMAP_BUF_SIZE	netmap_buf_size	// XXX remove
 extern int netmap_mitigate;
 extern int netmap_no_pendintr;
 extern u_int netmap_total_buffers;
@@ -341,12 +341,15 @@ enum {                                  /* verbose flags */
 /*
  * NA returns a pointer to the struct netmap adapter from the ifp,
  * WNA is used to write it.
+ * SWNA() is used for the "host stack" endpoint associated
+ *	to an interface. It is allocated together with the main NA(),
+ *	as an array of two objects.
  */
 #ifndef WNA
 #define	WNA(_ifp)	(_ifp)->if_pspare[0]
 #endif
 #define	NA(_ifp)	((struct netmap_adapter *)WNA(_ifp))
-#define SWNA(_ifp)	(NA(_ifp) + 1)
+#define	SWNA(_ifp)	(NA(_ifp) + 1)
 
 /*
  * Macros to determine if an interface is netmap capable or netmap enabled.
@@ -484,7 +487,7 @@ netmap_idx_k2n(struct netmap_kring *kr, int idx)
 /* Entries of the look-up table. */
 struct lut_entry {
 	void *vaddr;		/* virtual address. */
-	vm_paddr_t paddr;	/* phisical address. */
+	vm_paddr_t paddr;	/* physical address. */
 };
 
 struct netmap_obj_pool;
@@ -517,6 +520,4 @@ PNMB(struct netmap_slot *slot, uint64_t *pp)
 int netmap_rx_irq(struct ifnet *, int, int *);
 #define netmap_tx_irq(_n, _q) netmap_rx_irq(_n, _q, NULL)
 
-
-extern int netmap_copy;
 #endif /* _NET_NETMAP_KERN_H_ */

@@ -123,25 +123,29 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, no_pendintr,
 int netmap_drop = 0;	/* debugging */
 int netmap_flags = 0;	/* debug flags */
 int netmap_fwd = 0;	/* force transparent mode */
-int netmap_copy = 0;	/* debugging, copy content */
 int netmap_bridge_host = 0;	/* connect the host stack to the bridge */
 
 SYSCTL_INT(_dev_netmap, OID_AUTO, drop, CTLFLAG_RW, &netmap_drop, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, flags, CTLFLAG_RW, &netmap_flags, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, fwd, CTLFLAG_RW, &netmap_fwd, 0 , "");
-SYSCTL_INT(_dev_netmap, OID_AUTO, copy, CTLFLAG_RW, &netmap_copy, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, bridge_host, CTLFLAG_RW, &netmap_bridge_host,
 	0 , "");
 
-#ifdef NM_BRIDGE /* support for netmap bridge */
+#ifdef NM_BRIDGE /* support for netmap virtual switch, called VALE */
 
 /*
- * system parameters.
+ * system parameters (most of them in netmap_kern.h)
+ * NM_NAME	prefix for switch port names, default "vale"
+ * NM_MAXPORTS	number of ports
+ * NM_BRIDGES	max number of switches in the system.
+ *	XXX should become a runtime constant.
  *
- * All switched ports have prefix NM_NAME.
- * The switch has a max of NM_BDG_MAXPORTS ports (often stored in a bitmap,
- * so a practical upper bound is 64).
- * Each tx ring is read-write, whereas rx rings are readonly (XXX not done yet).
+ * Switch ports are named valeX:Y where X is the switch name and Y
+ * is the port. If Y matches a physical interface name, the port is
+ * connected to a physical device.
+ *
+ * Unlike physical interfaces, switch ports use their own memory region
+ * for rings and buffers.
  * The virtual interfaces use per-queue lock instead of core lock.
  * In the tx loop, we aggregate traffic in batches to make all operations
  * faster. The batch size is NM_BDG_BATCH
@@ -150,7 +154,7 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, bridge_host, CTLFLAG_RW, &netmap_bridge_host,
 #define NM_BRIDGE_RINGSIZE	1024	/* in the device */
 #define NM_BDG_HASH		1024	/* forwarding table entries */
 #define NM_BDG_BATCH		1024	/* entries in the forwarding buffer */
-#define	NM_BRIDGES		4	/* number of bridges */
+#define	NM_BRIDGES		8	/* number of bridges */
 
 
 int netmap_bridge = NM_BDG_BATCH; /* bridge batch size */
@@ -220,8 +224,6 @@ struct nm_bridge {
 	struct netmap_adapter *bdg_ports[NM_BDG_MAXPORTS];
 
 	char basename[IFNAMSIZ];
-	/* the forwarding table, MAC+ports */
-	struct nm_hash_ent ht[NM_BDG_HASH];
 	/*
 	 * The modular function to decide the destination port.
 	 * It returns either of an index of the destination port,
@@ -232,6 +234,9 @@ struct nm_bridge {
 	 * This function must be set by netmap_bdgctl().
 	 */
 	BDG_LOOKUP_T nm_bdg_lookup;
+
+	/* the forwarding table, MAC+ports */
+	struct nm_hash_ent ht[NM_BDG_HASH];
 };
 
 struct nm_bridge nm_bridges[NM_BRIDGES];
