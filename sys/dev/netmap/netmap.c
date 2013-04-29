@@ -184,7 +184,7 @@ static int kern_netmap_regif(struct ifnet *ifp, uint16_t ringid);
 /* per-tx-queue entry */
 struct nm_bdg_fwd {	/* forwarding entry for a bridge */
 	void *buf;
-	uint32_t ft_dst;	/* dst mask, at least NM_BDG_MAXPORTS bits */
+	uint32_t ft_dst;	/* dst port */
 	uint16_t ft_len;	/* src len */
 	uint16_t ft_next;	/* next packet to same destination */
 };
@@ -206,9 +206,10 @@ struct nm_hash_ent {
 };
 
 /*
- * Interfaces for a bridge are all in ports[].
+ * Interfaces for a bridge are all in bdg_ports[].
  * The array has fixed size, an empty entry does not terminate
- * the search.
+ * the search. But lookups only occur on attach/detach so we
+ * don't mind if they are slow.
  *
  * The bridge is non blocking on the transmit ports.
  *
@@ -217,7 +218,7 @@ struct nm_hash_ent {
  */
 struct nm_bridge {
 	int namelen;	/* 0 means free */
-	uint64_t act_ports;	/* bitmap of active ports */
+	// uint64_t act_ports;	/* bitmap of active ports */
 
 	/* XXX what is the proper alignment/layout ? */
 	NM_RWLOCK_T bdg_lock;	/* protects bdg_ports */
@@ -1166,7 +1167,7 @@ no_port:
 			else if (kern_netmap_regif(iter, nmr->nr_ringid))
 				goto no_port;
 			/* the NIC is activated now */
-			b->act_ports |= (1<<cand);
+			// XXX b->act_ports |= (1<<cand);
 			/* bind the host stack to the bridge */
 			if (netmap_bridge_host) {
 				BDG_SET_VAR(b->bdg_ports[cand2], SWNA(iter));
@@ -2147,8 +2148,11 @@ netmap_detach(struct ifnet *ifp)
 }
 
 // XXX non static to silence the compiler
+#if 0 /* UNUSED */
 int
 nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na, u_int ring_nr);
+#endif	/* UNUSED */
+
 int
 nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na, u_int ring_nr);
 
@@ -2737,13 +2741,13 @@ bdg_netmap_reg(struct ifnet *ifp, int onoff)
 		}
 		ND("setting %s in netmap mode", ifp->if_xname);
 		ifp->if_capenable |= IFCAP_NETMAP;
-		b->act_ports |= (1<<i);
+		// b->act_ports |= (1<<i);
 	} else {
 		/* should be in the list, too -- remove from the mask */
 		ND("removing %s from netmap mode", ifp->if_xname);
 		ifp->if_capenable &= ~IFCAP_NETMAP;
 		i = NA(ifp)->bdg_port;
-		b->act_ports &= ~(1<<i);
+		// b->act_ports &= ~(1<<i);
 	}
 done:
 	BDG_WUNLOCK(b);
@@ -2751,6 +2755,7 @@ done:
 }
 
 
+#if 0 /* UNUSED */
 /*
  * Take one input ring and do the forwarding of the traffic to the
  * various output destinations.
@@ -2917,6 +2922,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na, u_int ring
 	BDG_RUNLOCK(b);
 	return 0;
 }
+#endif /* UNUSED */
 
 /* Returns the destination port index */
 u_int
