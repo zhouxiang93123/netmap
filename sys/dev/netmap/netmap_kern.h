@@ -107,6 +107,7 @@
 	} while (0)
 
 struct netmap_adapter;
+struct nm_bdg_fwd;
 struct nm_bridge;
 struct netmap_priv_d;
 
