@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011 Matteo Landi, Luigi Rizzo. All rights reserved.
+ * Copyright (C) 2011-2013 Matteo Landi, Luigi Rizzo. All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -32,7 +32,6 @@
 
 /*
  * $FreeBSD: head/sys/net/netmap.h 234227 2012-04-13 16:03:07Z luigi $
- * $Id$
  *
  * Definitions of constants and the structures used by the netmap
  * framework, for the part visible to both kernel and userspace.
@@ -278,9 +277,9 @@ struct netmap_if {
  * NIOCREGIF takes an interface name within a struct ifreq,
  *	and activates netmap mode on the interface (if possible).
  *
- *	For vale port, starting with NETMAP_API = 4, nr_tx_rings and nr_rx_rings
- *	are used to specify how many software rings are created (0 defaults to 1,
- *	and larger values up to XXX are allowed).
+ *	For vale ports, starting with NETMAP_API = 4,
+ *	nr_tx_rings and nr_rx_rings specify how many software rings
+ *	are created (0 means 1, values up to XXX are supported).
  *
  *	NIOCREGIF is also used to attach a NIC to a VALE switch.
  *	In this case the name is vale*:ifname, and "spare1"
@@ -295,8 +294,7 @@ struct netmap_if {
  * NIOCTXSYNC, NIOCRXSYNC synchronize tx or rx queues,
  *	whose identity is set in NIOCREGIF through nr_ringid
  *
- * API version:
- *	in version 3, when 
+ * NETMAP_API is the API version.
  */
 
 /*
