@@ -2371,6 +2371,10 @@ netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
  * N rings, separate locks:
  *	lock(i); wake(i); unlock(i); lock(core) wake(N+1) unlock(core)
  * work_done is non-null on the RX path.
+ *
+ * The 'q' argument also includes flag to tell whether the queue is
+ * already locked on enter, and whether it should remain locked on exit.
+ * This helps adapting to different defaults in drivers and OSes.
  */
 int
 netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
@@ -2378,7 +2382,7 @@ netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
 	struct netmap_adapter *na;
 	struct netmap_kring *r;
 	NM_SELINFO_T *main_wq;
-	int locktype, unlocktype, nic_to_bridge = 0, lock;
+	int locktype, unlocktype, nic_to_bridge, lock;
 
 	if (!(ifp->if_capenable & IFCAP_NETMAP))
 		return 0;
@@ -2395,24 +2399,23 @@ netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
 
 	if (work_done) { /* RX path */
 		if (q >= na->num_rx_rings)
-			return 0;	// regular queue
+			return 0;	// not a physical queue
 		r = na->rx_rings + q;
 		r->nr_kflags |= NKR_PENDINTR;
 		main_wq = (na->num_rx_rings > 1) ? &na->rx_si : NULL;
-		nic_to_bridge = na->na_bdg != NULL;
-	} else { /* tx path */
+		/* set a flag if the NIC is attached to a VALE switch */
+		nic_to_bridge = (na->na_bdg != NULL);
+		locktype = NETMAP_RX_LOCK;
+		unlocktype = NETMAP_RX_UNLOCK;
+	} else { /* TX path */
 		if (q >= na->num_tx_rings)
 			return 0;	// regular queue
 		r = na->tx_rings + q;
 		main_wq = (na->num_tx_rings > 1) ? &na->tx_si : NULL;
 		work_done = &q; /* dummy */
-	}
-	if (work_done == &q) {
+		nic_to_bridge = 0;
 		locktype = NETMAP_TX_LOCK;
 		unlocktype = NETMAP_TX_UNLOCK;
-	} else {
-		locktype = NETMAP_RX_LOCK;
-		unlocktype = NETMAP_RX_UNLOCK;
 	}
 	if (na->separate_locks) {
 		if (!(lock & NETMAP_LOCKED_ENTER))
