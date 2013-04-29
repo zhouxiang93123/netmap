@@ -26,7 +26,6 @@
 
 /*
  * $FreeBSD: head/sys/dev/netmap/if_lem_netmap.h 231881 2012-02-17 14:09:04Z luigi $
- * $Id$
  *
  * netmap support for "lem"
  *

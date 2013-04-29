@@ -25,7 +25,6 @@
 
 /*
  * $FreeBSD: head/sys/dev/netmap/if_re_netmap.h 234225 2012-04-13 15:33:12Z luigi $
- * $Id$
  *
  * netmap support for "re"
  * For details on netmap support please see ixgbe_netmap.h

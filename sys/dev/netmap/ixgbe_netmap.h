@@ -25,7 +25,6 @@
 
 /*
  * $FreeBSD: head/sys/dev/netmap/ixgbe_netmap.h 244514 2012-12-20 22:26:03Z luigi $
- * $Id$
  *
  * netmap modifications for ixgbe
  *
@@ -228,7 +227,6 @@ ixgbe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n = 0;
 	u_int const k = ring->cur, lim = kring->nkr_num_slots - 1;
-	/* XXX k and lim are const ? */
 
 	/*
 	 * ixgbe can generate an interrupt on every tx packet, but it

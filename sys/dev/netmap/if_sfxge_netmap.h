@@ -25,7 +25,6 @@
 
 /*
  * $FreeBSD: head/sys/dev/netmap/ixgbe_netmap.h 232238 2012-02-27 19:05:01Z luigi $
- * $Id: ixgbe_netmap.h 10627 2012-02-23 19:37:15Z luigi $
  *
  * netmap modifications for sfxge
 

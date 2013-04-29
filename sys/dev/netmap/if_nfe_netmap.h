@@ -25,7 +25,6 @@
 
 /*
  * $FreeBSD: head/sys/dev/netmap/if_em_netmap.h 231881 2012-02-17 14:09:04Z luigi $
- * $Id: if_nfe_netmap.h 10669 2012-02-27 18:55:05Z luigi $
  *
  * netmap support for nfe. XXX not yet tested.
  *

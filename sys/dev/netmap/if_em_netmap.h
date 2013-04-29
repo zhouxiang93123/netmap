@@ -25,7 +25,6 @@
 
 /*
  * $FreeBSD: head/sys/dev/netmap/if_em_netmap.h 238985 2012-08-02 11:59:43Z luigi $
- * $Id$
  *
  * netmap support for em.
  *

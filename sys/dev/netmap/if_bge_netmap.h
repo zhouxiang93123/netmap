@@ -4,7 +4,6 @@
  * BSD copyright
  *
  * $FreeBSD$
- * $Id$
  *
  * netmap support for if_bge.c
  * see ixgbe_netmap.h for details on the structure of the
