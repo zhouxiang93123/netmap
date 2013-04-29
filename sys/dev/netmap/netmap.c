@@ -249,6 +249,10 @@ struct nm_bridge nm_bridges[NM_BRIDGES];
 #define BDG_WUNLOCK(b)		rw_wunlock(&(b)->bdg_lock)
 #define BDG_RLOCK(b)		rw_rlock(&(b)->bdg_lock)
 #define BDG_RUNLOCK(b)		rw_runlock(&(b)->bdg_lock)
+
+/* set/get variables. OS-specific macros may wrap these
+ * assignments into read/write lock or similar
+ */
 #define BDG_SET_VAR(lval, p)	(lval = p)
 #define BDG_GET_VAR(lval)	(lval)
 #define BDG_FREE(p)		free(p, M_DEVBUF)
@@ -315,8 +319,10 @@ nm_find_bridge(const char *name)
 		namelen = IFNAMSIZ;
 	ND("--- prefix is '%.*s' ---", namelen, name);
 
-	/* use the first entry for locking */
-	BDG_WLOCK(nm_bridges); // XXX do better
+	/* use the first entry for locking, others for actual bridges.
+	 * XXX what a waste. must do it properly and start the loop from 0
+	 */
+	BDG_WLOCK(nm_bridges);
 	for (e = -1, i = 1; i < NM_BRIDGES; i++) {
 		b = nm_bridges + i;
 		if (b->namelen == 0)
@@ -2163,26 +2169,20 @@ bdg_netmap_start(struct ifnet *ifp, struct mbuf *m)
 	struct netmap_adapter *na = SWNA(ifp);
 	struct nm_bdg_fwd *ft = na->tx_rings[0].nkr_ft;
 	char *buf = NMB(&na->tx_rings[0].ring->slot[0]);
-	u_int len = MBUF_LEN(m), error = EBUSY;
+	u_int len = MBUF_LEN(m);
 
-	if (len > NETMAP_BUF_SIZE) {
-		D("%s from_host, drop packet size %d > %d", ifp->if_xname,
-			len, NETMAP_BUF_SIZE);
-		/* too long for us */
-	} else {
-		m_copydata(m, 0, len, buf);
-		ft->ft_len = len;
-		ft->buf = buf;
-		nm_bdg_flush2(ft, 1, na, 0);
-		error = 0;
-	}
+	m_copydata(m, 0, len, buf);
+	ft->ft_len = len;
+	ft->buf = buf;
+	nm_bdg_flush2(ft, 1, na, 0);
+
 	/* release the mbuf in either cases of success or failure. As an
 	 * alternative, put the mbuf in a free list and free the list
 	 * only when really necessary.
 	 */
 	m_freem(m);
 
-	return (error);
+	return (0);
 }
 
 /*
@@ -2202,6 +2202,14 @@ netmap_start(struct ifnet *ifp, struct mbuf *m)
 	if (netmap_verbose & NM_VERB_HOST)
 		D("%s packet %d len %d from the stack", ifp->if_xname,
 			kring->nr_hwcur + kring->nr_hwavail, len);
+	if (len > NETMAP_BUF_SIZE) { /* too long for us */
+		D("%s from_host, drop packet size %d > %d", ifp->if_xname,
+			len, NETMAP_BUF_SIZE);
+		m_freem(m);
+		return EINVAL;
+	}
+
+	// XXX inline the function ?
 	if (na->na_bdg)
 		return netmap_bridge_host ? bdg_netmap_start(ifp, m) : error;
 	na->nm_lock(ifp, NETMAP_CORE_LOCK, 0);
@@ -2209,11 +2217,6 @@ netmap_start(struct ifnet *ifp, struct mbuf *m)
 		if (netmap_verbose)
 			D("stack ring %s full\n", ifp->if_xname);
 		goto done;	/* no space */
-	}
-	if (len > NETMAP_BUF_SIZE) {
-		D("%s from_host, drop packet size %d > %d", ifp->if_xname,
-			len, NETMAP_BUF_SIZE);
-		goto done;	/* too long for us */
 	}
 
 	/* compute the insert position */
@@ -2924,7 +2927,12 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na, u_int ring
 }
 #endif /* UNUSED */
 
-/* Returns the destination port index */
+/*
+ * Lookup function for a learning bridge.
+ * Update the hash table with the source address,
+ * and then returns the destination port index, and the
+ * ring in *dst_ring (at the moment, always use ring 0)
+ */
 u_int
 netmap_bdg_learning(char *buf, u_int len, uint8_t *dst_ring,
 		struct netmap_adapter *na)
@@ -2962,6 +2970,7 @@ netmap_bdg_learning(char *buf, u_int len, uint8_t *dst_ring,
 			    D("dst %02x:%02x:%02x:%02x:%02x:%02x to port %x",
 				d[0], d[1], d[2], d[3], d[4], d[5], (uint32_t)(dst >> 16));
 		}
+		/* XXX otherwise return NM_BDG_UNKNOWN ? */
 	}
 	*dst_ring = 0;
 	return dst;
@@ -2971,8 +2980,6 @@ netmap_bdg_learning(char *buf, u_int len, uint8_t *dst_ring,
  * Another version of the flush routine that supports only
  * unicast and broadcast (and much larger number of ports),
  * and lets us replace the learn and dispatch functions.
- * XXX Linux generates a warning for the large stack size perhaps due to
- * dsts[NM_BDG_BATCH].
  */
 int
 nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na,
@@ -2996,14 +3003,16 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na,
 		struct nm_bdg_q *d;
 
 		dst_port = b->nm_bdg_lookup(buf, ft[i].ft_len, &dst_ring, na);
-		if (unlikely(dst_port > NM_BDG_MAXPORTS))
+		if (unlikely(dst_port > NM_BDG_MAXPORTS)) {
 			continue;
-		else if (dst_port == NM_BDG_NOPORT)
+		} else if (dst_port == NM_BDG_NOPORT) {
+			/* XXX uhmm... maybe handle as broadcast ? */
 			continue;
-		else if (dst_port == NM_BDG_BROADCAST)
+		} else if (dst_port == NM_BDG_BROADCAST) {
 			dst_ring = 0; /* broadcasts always go to ring 0 */
-		else if (dst_port == me || !BDG_GET_VAR(b->bdg_ports[dst_port]))
+		} else if (dst_port == me || !BDG_GET_VAR(b->bdg_ports[dst_port])) {
 			continue;
+		}
 
 		/* get a position in the scratch pad */
 		d_i = dst_port * NM_BDG_MAXRINGS + dst_ring;
