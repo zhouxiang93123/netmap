@@ -265,7 +265,18 @@ struct sysctl_req;
 		module_param_named(_name, *(_var), _ty,         \
 			( (_perm) == CTLFLAG_RD) ? 0444: 0644 )
 
-#define SYSCTL_PROC(_base, _oid, _name, _mode, _var, _val, _desc, _a, _b)
+/* XXX should implement this */
+extern struct kernel_param_ops generic_sysctl_ops;
+
+#define SYSCTL_PROC(_base, _oid, _name, _mode, _var, _val, _fn, _ty, _desc) \
+		module_param_cb(_name, &generic_sysctl_ops, _fn,	\
+			( (_mode) & CTLFLAG_WR) ? 0644: 0444 )
+
+
+/* for a string, _var is a preallocated buffer of size _varlen */
+#define SYSCTL_STRING(_base, _oid, _name, _mode, _var, _varlen, _desc)	\
+		module_param_string(_name, _var, _varlen,		\
+			((_mode) == CTLFLAG_RD) ? 0444: 0644 )
 
 #define SYSCTL_INT(_base, _oid, _name, _mode, _var, _val, _desc)        \
         _SYSCTL_BASE(_name, _var, int, _mode)
@@ -279,7 +290,7 @@ struct sysctl_req;
 #define SYSCTL_UINT(_base, _oid, _name, _mode, _var, _val, _desc)       \
          _SYSCTL_BASE(_name, _var, uint, _mode)
 
-#define TUNABLE_INT(_name, _ptr)
+// #define TUNABLE_INT(_name, _ptr)
 
 #define SYSCTL_VNET_PROC                SYSCTL_PROC
 #define SYSCTL_VNET_INT                 SYSCTL_INT
