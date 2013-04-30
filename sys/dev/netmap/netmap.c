@@ -2127,6 +2127,7 @@ netmap_attach(struct netmap_adapter *arg, int num_queues)
 
 fail:
 	D("fail, arg %p ifp %p na %p", arg, ifp, na);
+	netmap_detach(ifp);
 	return (na ? EINVAL : ENOMEM);
 }
 
@@ -2400,7 +2401,7 @@ netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
 	if (!(ifp->if_capenable & IFCAP_NETMAP))
 		return 0;
 
-	lock = q & NETMAP_LOCK_MASK;
+	lock = q & (NETMAP_LOCKED_ENTER | NETMAP_LOCKED_EXIT);
 	q = q & NETMAP_RING_MASK;
 
 	ND(5, "received %s queue %d", work_done ? "RX" : "TX" , q);
@@ -2422,7 +2423,7 @@ netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
 		unlocktype = NETMAP_RX_UNLOCK;
 	} else { /* TX path */
 		if (q >= na->num_tx_rings)
-			return 0;	// regular queue
+			return 0;	// not a physical queue
 		r = na->tx_rings + q;
 		main_wq = (na->num_tx_rings > 1) ? &na->tx_si : NULL;
 		work_done = &q; /* dummy */
@@ -2447,7 +2448,7 @@ netmap_rx_irq(struct ifnet *ifp, int q, int *work_done)
 			selwakeuppri(main_wq, PI_NET);
 			na->nm_lock(ifp, NETMAP_CORE_UNLOCK, 0);
 		}
-		/* lock the queue again if instructed */
+		/* lock the queue again if requested */
 		if (lock & NETMAP_LOCKED_EXIT)
 			na->nm_lock(ifp, locktype, q);
 	} else {
