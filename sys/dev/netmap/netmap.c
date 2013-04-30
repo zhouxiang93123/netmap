@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2012 Matteo Landi, Luigi Rizzo. All rights reserved.
+ * Copyright (C) 2011-2013 Matteo Landi, Luigi Rizzo. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -1472,7 +1472,7 @@ netmap_bdg_ctl(struct nmreq *nmr, BDG_LOOKUP_T func)
 {
 	struct ifnet *ifp;
 	struct nm_bridge *b;
-	int cmd = nmr->spare1;
+	int cmd = nmr->nr_cmd;
 	int error = 0, i;
 
 	switch (cmd) {
@@ -1492,7 +1492,8 @@ netmap_bdg_ctl(struct nmreq *nmr, BDG_LOOKUP_T func)
 			na->na_kpriv = NULL;
 		}
 		break;
-	case NETMAP_BDG_LOOKUP_REG:
+
+	case NETMAP_BDG_LOOKUP_REG:	// XXX what is this for ?
 		/* nmr->nr_name must be just bridge's name */
 		BDG_WLOCK(nm_bridges);
 		for (i = 0; i < NM_BRIDGES; i++) {
@@ -1512,7 +1513,7 @@ netmap_bdg_ctl(struct nmreq *nmr, BDG_LOOKUP_T func)
 			error = EINVAL;
 		break;
 	default:
-		D("invalid cmd (nmr->spare1) (%d)", cmd);
+		D("invalid cmd (nmr->nr_cmd) (%d)", cmd);
 		error = EINVAL;
 		break;
 	}
@@ -1612,12 +1613,12 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			break;
 		}
 		/* possibly attach/detach NIC and VALE switch */
-		i = nmr->spare1;
+		i = nmr->nr_cmd;
 		if (i == NETMAP_BDG_ATTACH || i == NETMAP_BDG_DETACH) {
 			error = netmap_bdg_ctl(nmr, NULL);
 			break;
 		} else if (i != 0) {
-			D("spare1 must be 0 not %d", i);
+			D("nr_cmd must be 0 not %d", i);
 			error = EINVAL;
 			break;
 		}

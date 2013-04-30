@@ -32,7 +32,6 @@
 
 /*
  * $FreeBSD: head/sys/net/netmap_user.h 241166 2012-10-03 21:41:20Z emaste $
- * $Id$
  *
  * This header contains the macros used to manipulate netmap structures
  * and packets in userspace. See netmap(4) for more information.

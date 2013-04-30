@@ -279,10 +279,10 @@ struct netmap_if {
  *
  *	For vale ports, starting with NETMAP_API = 4,
  *	nr_tx_rings and nr_rx_rings specify how many software rings
- *	are created (0 means 1, values up to XXX are supported).
+ *	are created (0 means 1).
  *
  *	NIOCREGIF is also used to attach a NIC to a VALE switch.
- *	In this case the name is vale*:ifname, and "spare1"
+ *	In this case the name is vale*:ifname, and "nr_cmd"
  *	is set to 'NETMAP_BDG_ATTACH' or 'NETMAP_BDG_DETACH'.
  *	nr_ringid specifies which rings should be attached, 0 means all,
  *	NETMAP_HW_RING + n means only the n-th ring.
@@ -315,10 +315,10 @@ struct nmreq {
 #define NETMAP_SW_RING	0x2000		/* process the sw ring */
 #define NETMAP_NO_TX_POLL	0x1000	/* no automatic txsync on poll */
 #define NETMAP_RING_MASK 0xfff		/* the ring number */
-	uint16_t	spare1;
+	uint16_t	nr_cmd;
 #define NETMAP_BDG_ATTACH	0x1
 #define NETMAP_BDG_DETACH	0x2
-#define NETMAP_BDG_LOOKUP_REG	0x4
+#define NETMAP_BDG_LOOKUP_REG	0x4	// XXX what is this for ?
 	uint32_t	spare2[4];
 };
 
