@@ -1590,7 +1590,6 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		/* memsize is always valid */
 		nmr->nr_memsize = nm_mem.nm_totalsize;
 		nmr->nr_offset = 0;
-		nmr->nr_rx_rings = nmr->nr_tx_rings = 0;
 		nmr->nr_rx_slots = nmr->nr_tx_slots = 0;
 		if (nmr->nr_name[0] == '\0')	/* just get memory info */
 			break;
