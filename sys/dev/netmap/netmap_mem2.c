@@ -326,7 +326,7 @@ cleanup:
 }
 
 
-void
+static void
 netmap_free_buf(struct netmap_if *nifp, uint32_t i)
 {
 	struct netmap_obj_pool *p = &nm_mem.pools[NETMAP_BUF_POOL];
@@ -337,14 +337,6 @@ netmap_free_buf(struct netmap_if *nifp, uint32_t i)
 		return;
 	}
 	netmap_obj_free(p, i);
-}
-
-void
-netmap_free_if(struct netmap_if *nifp)
-{
-	struct netmap_obj_pool *p = &nm_mem.pools[NETMAP_IF_POOL];
-
-	netmap_obj_free_va(p, nifp);
 }
 
 static void
@@ -689,7 +681,7 @@ netmap_memory_fini(void)
 	NMA_LOCK_DESTROY();
 }
 
-void
+static void
 netmap_free_rings(struct netmap_adapter *na)
 {
 	u_int i;
@@ -750,8 +742,7 @@ netmap_if_new(const char *ifname, struct netmap_adapter *na)
 	*(int *)(uintptr_t)&nifp->ni_rx_rings = na->num_rx_rings;
 	strncpy(nifp->ni_name, ifname, (size_t)IFNAMSIZ);
 
-	(na->refcount)++;	/* XXX atomic ? we are under lock */
-	if (na->refcount > 1) { /* already setup, we are done */
+	if (na->refcount) { /* already setup, we are done */
 		goto final;
 	}
 
@@ -872,8 +863,32 @@ final:
 cleanup:
 	netmap_free_rings(na);
 	netmap_if_free(nifp);
-	(na->refcount)--;
 	return NULL;
+}
+
+void
+netmap_if_delete(struct netmap_adapter *na, struct netmap_if *nifp)
+{
+	if (na->refcount <= 0) {
+		/* last instance, release bufs and rings */
+		u_int i, j, lim;
+		struct netmap_ring *ring;
+
+		for (i = 0; i < na->num_tx_rings + 1; i++) {
+			ring = na->tx_rings[i].ring;
+			lim = na->tx_rings[i].nkr_num_slots;
+			for (j = 0; j < lim; j++)
+				netmap_free_buf(nifp, ring->slot[j].buf_idx);
+		}
+		for (i = 0; i < na->num_rx_rings + 1; i++) {
+			ring = na->rx_rings[i].ring;
+			lim = na->rx_rings[i].nkr_num_slots;
+			for (j = 0; j < lim; j++)
+				netmap_free_buf(nifp, ring->slot[j].buf_idx);
+		}
+		netmap_free_rings(na);	
+	}
+	netmap_if_free(nifp);
 }
 
 /* call with NMA_LOCK held */

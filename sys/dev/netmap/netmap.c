@@ -770,7 +770,7 @@ netmap_dtor_locked(void *data)
 
 	na->refcount--;
 	if (na->refcount <= 0) {	/* last instance */
-		u_int i, j, lim;
+		u_int i;
 
 		if (netmap_verbose)
 			D("deleting last instance for %s", ifp->if_xname);
@@ -791,31 +791,19 @@ netmap_dtor_locked(void *data)
 		selwakeuppri(&na->tx_si, PI_NET);
 		selwakeuppri(&na->rx_si, PI_NET);
 		nm_free_bdgfwd(na);
-		/* release all buffers */
 		for (i = 0; i < na->num_tx_rings + 1; i++) {
-			struct netmap_ring *ring = na->tx_rings[i].ring;
-			lim = na->tx_rings[i].nkr_num_slots;
-			for (j = 0; j < lim; j++)
-				netmap_free_buf(nifp, ring->slot[j].buf_idx);
-			/* knlist_destroy(&na->tx_rings[i].si.si_note); */
 			mtx_destroy(&na->tx_rings[i].q_lock);
 		}
 		for (i = 0; i < na->num_rx_rings + 1; i++) {
-			struct netmap_ring *ring = na->rx_rings[i].ring;
-			lim = na->rx_rings[i].nkr_num_slots;
-			for (j = 0; j < lim; j++)
-				netmap_free_buf(nifp, ring->slot[j].buf_idx);
-			/* knlist_destroy(&na->rx_rings[i].si.si_note); */
 			mtx_destroy(&na->rx_rings[i].q_lock);
 		}
 		/* XXX kqueue(9) needed; these will mirror knlist_init. */
 		/* knlist_destroy(&na->tx_si.si_note); */
 		/* knlist_destroy(&na->rx_si.si_note); */
-		netmap_free_rings(na);
 		if (nma_is_hw(na))
 			SWNA(ifp)->tx_rings = SWNA(ifp)->rx_rings = NULL;
 	}
-	netmap_free_if(nifp);
+	netmap_if_delete(na, nifp);
 }
 
 
@@ -1577,7 +1565,10 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 	nifp = netmap_if_new(ifp->if_xname, na);
 	if (nifp == NULL) { /* allocation failed */
 		error = ENOMEM;
-	} else if (ifp->if_capenable & IFCAP_NETMAP) {
+		goto out;
+	}
+	na->refcount++;
+	if (ifp->if_capenable & IFCAP_NETMAP) {
 		/* was already set */
 	} else {
 		u_int i;
@@ -1601,7 +1592,7 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 		if (error) {
 			netmap_dtor_locked(priv);
 			/* nifp is not yet in priv, so free it separately */
-			netmap_free_if(nifp);
+			netmap_if_delete(na, nifp);
 			nifp = NULL;
 		}
 

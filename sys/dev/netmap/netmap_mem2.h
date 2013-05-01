@@ -165,13 +165,11 @@ struct netmap_mem_d {
 extern struct netmap_mem_d nm_mem;
 
 vm_paddr_t netmap_ofstophys(vm_offset_t offset);
-void netmap_free_buf(struct netmap_if *nifp, uint32_t i);
-void netmap_free_if(struct netmap_if *nifp);
 int netmap_memory_finalize(void);
 int netmap_memory_init(void);
 void netmap_memory_fini(void);
-void netmap_free_rings(struct netmap_adapter *na);
 void* netmap_if_new(const char *ifname, struct netmap_adapter *na);
+void netmap_if_delete(struct netmap_adapter *na, struct netmap_if *nifp);
 void netmap_memory_deref(void);
 ssize_t netmap_obj_offset(struct netmap_obj_pool *p, const void *vaddr);
 
