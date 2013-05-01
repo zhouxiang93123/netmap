@@ -1087,7 +1087,6 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp)
 			return (ENXIO);
 		}
 		/* Now we are sure that name starts with the bridge's name */
-		/* XXX locking */
 		BDG_WLOCK(b);
 		/* lookup in the local list of ports */
 		for (i = 0; i < NM_BDG_MAXPORTS; i++) {
@@ -1110,7 +1109,7 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp)
 			} else if (namelen > b->namelen &&
 			     !strcmp(iter->if_xname, name + b->namelen + 1)) {
 				/* must be a NIC port */
-				/* XXX do we need a refcount ? */
+				/* NIC is not in the context of any process */
 				ND("found existing NIC");
 				BDG_WUNLOCK(b);
 				break;
@@ -1129,10 +1128,6 @@ no_port:
 		/*
 		 * create a struct ifnet for the new port.
 		 * The forwarding table is attached to the kring(s).
-		 *
-		 * and also for the pointers to the packet queues.
-		 * We need one entry per destination, plus one for the
-		 * broadcast packets. XXX still unused.
 		 */
 		/*
 		 * try see if there is a matching NIC with this name
@@ -1375,7 +1370,8 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 #endif /* NM_BRIDGE */
 		if (error) {
 			netmap_dtor_locked(priv);
-			netmap_if_free(nifp); /* XXX needed ? */
+			/* nifp is not yet in priv, so free it separately */
+			netmap_if_free(nifp);
 			nifp = NULL;
 		}
 
@@ -1493,8 +1489,10 @@ netmap_bdg_ctl(struct nmreq *nmr, BDG_LOOKUP_T func)
 		}
 		break;
 
-	case NETMAP_BDG_LOOKUP_REG:	// XXX what is this for ?
-		/* nmr->nr_name must be just bridge's name */
+	case NETMAP_BDG_LOOKUP_REG:
+		/* register a lookup function to the given bridge.
+		 * nmr->nr_name must be just bridge's name
+		 */
 		BDG_WLOCK(nm_bridges);
 		for (i = 0; i < NM_BRIDGES; i++) {
 			b = nm_bridges + i;
@@ -2172,6 +2170,8 @@ bdg_netmap_start(struct ifnet *ifp, struct mbuf *m)
 	char *buf = NMB(&na->tx_rings[0].ring->slot[0]);
 	u_int len = MBUF_LEN(m);
 
+	if (!netmap_bridge_host)
+		return EBUSY;
 	m_copydata(m, 0, len, buf);
 	ft->ft_len = len;
 	ft->buf = buf;
@@ -2209,10 +2209,9 @@ netmap_start(struct ifnet *ifp, struct mbuf *m)
 		m_freem(m);
 		return EINVAL;
 	}
-
-	// XXX inline the function ?
 	if (na->na_bdg)
-		return netmap_bridge_host ? bdg_netmap_start(ifp, m) : error;
+		return bdg_netmap_start(ifp, m);
+
 	na->nm_lock(ifp, NETMAP_CORE_LOCK, 0);
 	if (kring->nr_hwavail >= lim) {
 		if (netmap_verbose)
@@ -3007,8 +3006,7 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na,
 		if (unlikely(dst_port > NM_BDG_MAXPORTS)) {
 			continue;
 		} else if (dst_port == NM_BDG_NOPORT) {
-			/* XXX uhmm... maybe handle as broadcast ? */
-			continue;
+			continue; /* this packet is identified to be dropped */
 		} else if (dst_port == NM_BDG_BROADCAST) {
 			dst_ring = 0; /* broadcasts always go to ring 0 */
 		} else if (dst_port == me || !BDG_GET_VAR(b->bdg_ports[dst_port])) {
@@ -3029,8 +3027,8 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na,
 	}
 
 	/* if there is a broadcast, set ring 0 of all ports to be scanned
-	 * XXX This should be made better, allocating continuous
-	 * number of ports as much as possible, but still ugly...
+	 * XXX This would be optimized by recording the highest index of active
+	 * ports.
 	 */
 	brddst = dst_ents + NM_BDG_BROADCAST * NM_BDG_MAXRINGS;
 	if (brddst->bq_head != NM_BDG_BATCH) {
