@@ -15,7 +15,7 @@ CONFIG_IXGBE:=m
 CONFIG_IGB:=m
 CONFIG_BNX2X:=m
 
-netmap_lin-objs := netmap.o
+netmap_lin-objs := netmap.o netmap_mem2.o
 
 obj-$(CONFIG_NETMAP) = netmap_lin.o
 ifndef NODRIVERS
@@ -101,6 +101,10 @@ $(obj)/netmap.o: $(M)/../sys/dev/netmap/netmap.c
 	$(call cmd,cc_o_c)
 	$(call cmd,modversions)
 #	$(call quiet_cmd,cc_o_c)
+
+$(obj)/netmap_mem2.o: $(M)/../sys/dev/netmap/netmap_mem2.c
+	$(call cmd,cc_o_c)
+	$(call cmd,modversions)
 
 #-- copy and patch initial files
 # The location changes depending on the OS version, so ...

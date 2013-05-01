@@ -23,108 +23,35 @@
  * SUCH DAMAGE.
  */
 
-/*
- * $FreeBSD: head/sys/dev/netmap/netmap_mem2.c 250441 2013-05-10 08:46:10Z luigi $
- *
- * (New) memory allocator for netmap
- */
-
-/*
- * This allocator creates three memory pools:
- *	nm_if_pool	for the struct netmap_if
- *	nm_ring_pool	for the struct netmap_ring
- *	nm_buf_pool	for the packet buffers.
- *
- * that contain netmap objects. Each pool is made of a number of clusters,
- * multiple of a page size, each containing an integer number of objects.
- * The clusters are contiguous in user space but not in the kernel.
- * Only nm_buf_pool needs to be dma-able,
- * but for convenience use the same type of allocator for all.
- *
- * Once mapped, the three pools are exported to userspace
- * as a contiguous block, starting from nm_if_pool. Each
- * cluster (and pool) is an integral number of pages.
- *   [ . . . ][ . . . . . .][ . . . . . . . . . .]
- *    nm_if     nm_ring            nm_buf
- *
- * The userspace areas contain offsets of the objects in userspace.
- * When (at init time) we write these offsets, we find out the index
- * of the object, and from there locate the offset from the beginning
- * of the region.
- *
- * The invididual allocators manage a pool of memory for objects of
- * the same size.
- * The pool is split into smaller clusters, whose size is a
- * multiple of the page size. The cluster size is chosen
- * to minimize the waste for a given max cluster size
- * (we do it by brute force, as we have relatively few objects
- * per cluster).
- *
- * Objects are aligned to the cache line (64 bytes) rounding up object
- * sizes when needed. A bitmap contains the state of each object.
- * Allocation scans the bitmap; this is done only on attach, so we are not
- * too worried about performance
- *
- * For each allocator we can define (thorugh sysctl) the size and
- * number of each object. Memory is allocated at the first use of a
- * netmap file descriptor, and can be freed when all such descriptors
- * have been released (including unmapping the memory).
- * If memory is scarce, the system tries to get as much as possible
- * and the sysctl values reflect the actual allocation.
- * Together with desired values, the sysctl export also absolute
- * min and maximum values that cannot be overridden.
- *
- * struct netmap_if:
- *	variable size, max 16 bytes per ring pair plus some fixed amount.
- *	1024 bytes should be large enough in practice.
- *
- *	In the worst case we have one netmap_if per ring in the system.
- *
- * struct netmap_ring
- *	variable size, 8 byte per slot plus some fixed amount.
- *	Rings can be large (e.g. 4k slots, or >32Kbytes).
- *	We default to 36 KB (9 pages), and a few hundred rings.
- *
- * struct netmap_buffer
- *	The more the better, both because fast interfaces tend to have
- *	many slots, and because we may want to use buffers to store
- *	packets in userspace avoiding copies.
- *	Must contain a full frame (eg 1518, or more for vlans, jumbo
- *	frames etc.) plus be nicely aligned, plus some NICs restrict
- *	the size to multiple of 1K or so. Default to 2K
- */
-
-#define NETMAP_BUF_MAX_NUM	20*4096*2	/* large machine */
-
 #ifdef linux
-// XXX a mtx would suffice here 20130415 lr
-// #define NMA_LOCK_T		safe_spinlock_t
-#define NMA_LOCK_T		struct semaphore
-#define NMA_LOCK_INIT()		sema_init(&nm_mem.nm_mtx, 1)
-#define NMA_LOCK_DESTROY()
-#define NMA_LOCK()		down(&nm_mem.nm_mtx)
-#define NMA_UNLOCK()		up(&nm_mem.nm_mtx)
-#else /* !linux */
-#define NMA_LOCK_T		struct mtx
-#define NMA_LOCK_INIT()		mtx_init(&nm_mem.nm_mtx, "netmap memory allocator lock", NULL, MTX_DEF)
-#define NMA_LOCK_DESTROY()	mtx_destroy(&nm_mem.nm_mtx)
-#define NMA_LOCK()		mtx_lock(&nm_mem.nm_mtx)
-#define NMA_UNLOCK()		mtx_unlock(&nm_mem.nm_mtx)
+#include "bsd_glue.h"
 #endif /* linux */
 
-enum {
-	NETMAP_IF_POOL   = 0,
-	NETMAP_RING_POOL,
-	NETMAP_BUF_POOL,
-	NETMAP_POOLS_NR
-};
+#ifdef __APPLE__
+#include "osx_glue.h"
+#endif /* __APPLE__ */
 
+#ifdef __FreeBSD__
+#include <sys/cdefs.h> /* prerequisite */
+__FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 241723 2012-10-19 09:41:45Z glebius $");
 
-struct netmap_obj_params {
-	u_int size;
-	u_int num;
-};
+#include <sys/types.h>
+#include <sys/malloc.h>
+#include <sys/proc.h>
+#include <vm/vm.h>	/* vtophys */
+#include <vm/pmap.h>	/* vtophys */
+#include <sys/socket.h> /* sockaddrs */
+#include <sys/selinfo.h>
+#include <sys/sysctl.h>
+#include <net/if.h>
+#include <net/vnet.h>
+#include <machine/bus.h>	/* bus_dmamap_* */
 
+#endif /* __FreeBSD__ */
+
+#include <net/netmap.h>
+#include <dev/netmap/netmap_kern.h>
+#include "netmap_mem2.h"
 
 struct netmap_obj_params netmap_params[NETMAP_POOLS_NR] = {
 	[NETMAP_IF_POOL] = {
@@ -142,47 +69,12 @@ struct netmap_obj_params netmap_params[NETMAP_POOLS_NR] = {
 };
 
 
-struct netmap_obj_pool {
-	char name[16];		/* name of the allocator */
-	u_int objtotal;         /* actual total number of objects. */
-	u_int objfree;          /* number of free objects. */
-	u_int clustentries;	/* actual objects per cluster */
-
-	/* limits */
-	u_int objminsize;	/* minimum object size */
-	u_int objmaxsize;	/* maximum object size */
-	u_int nummin;		/* minimum number of objects */
-	u_int nummax;		/* maximum number of objects */
-
-	/* the total memory space is _numclusters*_clustsize */
-	u_int _numclusters;	/* how many clusters */
-	u_int _clustsize;        /* cluster size */
-	u_int _objsize;		/* actual object size */
-
-	u_int _memtotal;	/* _numclusters*_clustsize */
-	struct lut_entry *lut;  /* virt,phys addresses, objtotal entries */
-	uint32_t *bitmap;       /* one bit per buffer, 1 means free */
-	uint32_t bitmap_slots;	/* number of uint32 entries in bitmap */
-};
-
-
-struct netmap_mem_d {
-	NMA_LOCK_T nm_mtx;  /* protect the allocator */
-	u_int nm_totalsize; /* shorthand */
-
-	int finalized;		/* !=0 iff preallocation done */
-	int lasterr;		/* last error for curr config */
-	int refcount;		/* existing priv structures */
-	/* the three allocators */
-	struct netmap_obj_pool pools[NETMAP_POOLS_NR];
-};
-
 /*
  * nm_mem is the memory allocator used for all physical interfaces
  * running in netmap mode.
  * Virtual (VALE) ports will have each its own allocator.
  */
-static struct netmap_mem_d nm_mem = {	/* Our memory allocator. */
+struct netmap_mem_d nm_mem = {	/* Our memory allocator. */
 	.pools = {
 		[NETMAP_IF_POOL] = {
 			.name 	= "netmap_if",
@@ -215,6 +107,7 @@ struct lut_entry *netmap_buffer_lut;	/* exported */
 
 #define STRINGIFY(x) #x
 
+
 #define DECLARE_SYSCTLS(id, name) \
 	SYSCTL_INT(_dev_netmap, OID_AUTO, name##_size, \
 	    CTLFLAG_RW, &netmap_params[id].size, 0, "Requested size of netmap " STRINGIFY(name) "s"); \
@@ -225,6 +118,7 @@ struct lut_entry *netmap_buffer_lut;	/* exported */
         SYSCTL_INT(_dev_netmap, OID_AUTO, name##_curr_num, \
             CTLFLAG_RD, &nm_mem.pools[id].objtotal, 0, "Current number of netmap " STRINGIFY(name) "s")
 
+SYSCTL_DECL(_dev_netmap);
 DECLARE_SYSCTLS(NETMAP_IF_POOL, if);
 DECLARE_SYSCTLS(NETMAP_RING_POOL, ring);
 DECLARE_SYSCTLS(NETMAP_BUF_POOL, buf);
@@ -237,7 +131,7 @@ DECLARE_SYSCTLS(NETMAP_BUF_POOL, buf);
  * First, find the allocator that contains the requested offset,
  * then locate the cluster through a lookup table.
  */
-static inline vm_paddr_t
+vm_paddr_t
 netmap_ofstophys(vm_ooffset_t offset)
 {
 	int i;
@@ -268,7 +162,7 @@ netmap_ofstophys(vm_ooffset_t offset)
  * Algorithm: scan until we find the cluster, then add the
  * actual offset in the cluster
  */
-static ssize_t
+ssize_t
 netmap_obj_offset(struct netmap_obj_pool *p, const void *vaddr)
 {
 	int i, k = p->clustentries, n = p->objtotal;
@@ -290,19 +184,6 @@ netmap_obj_offset(struct netmap_obj_pool *p, const void *vaddr)
 	    vaddr, p->name);
 	return 0; /* An error occurred */
 }
-
-/* Helper functions which convert virtual addresses to offsets */
-#define netmap_if_offset(v)					\
-	netmap_obj_offset(&nm_mem.pools[NETMAP_IF_POOL], (v))
-
-#define netmap_ring_offset(v)					\
-    (nm_mem.pools[NETMAP_IF_POOL]._memtotal + 			\
-	netmap_obj_offset(&nm_mem.pools[NETMAP_RING_POOL], (v)))
-
-#define netmap_buf_offset(v)					\
-    (nm_mem.pools[NETMAP_IF_POOL]._memtotal +			\
-	nm_mem.pools[NETMAP_RING_POOL]._memtotal +		\
-	netmap_obj_offset(&nm_mem.pools[NETMAP_BUF_POOL], (v)))
 
 
 /*
@@ -445,7 +326,7 @@ cleanup:
 }
 
 
-static void
+void
 netmap_free_buf(struct netmap_if *nifp, uint32_t i)
 {
 	struct netmap_obj_pool *p = &nm_mem.pools[NETMAP_BUF_POOL];
@@ -456,6 +337,14 @@ netmap_free_buf(struct netmap_if *nifp, uint32_t i)
 		return;
 	}
 	netmap_obj_free(p, i);
+}
+
+void
+netmap_free_if(struct netmap_if *nifp)
+{
+	struct netmap_obj_pool *p = &nm_mem.pools[NETMAP_IF_POOL];
+
+	netmap_obj_free_va(p, nifp);
 }
 
 static void
@@ -721,7 +610,7 @@ out:
 }
 
 /* call with lock held */
-static int
+int
 netmap_memory_finalize(void)
 {
 	int i;
@@ -782,14 +671,14 @@ cleanup:
 	return nm_mem.lasterr;
 }
 
-static int
+int
 netmap_memory_init(void)
 {
 	NMA_LOCK_INIT();
 	return (0);
 }
 
-static void
+void
 netmap_memory_fini(void)
 {
 	int i;
@@ -800,7 +689,7 @@ netmap_memory_fini(void)
 	NMA_LOCK_DESTROY();
 }
 
-static void
+void
 netmap_free_rings(struct netmap_adapter *na)
 {
 	u_int i;
@@ -825,7 +714,7 @@ netmap_free_rings(struct netmap_adapter *na)
  * Allocate the per-fd structure netmap_if.
  * If this is the first instance, also allocate the krings, rings etc.
  */
-static void *
+void *
 netmap_if_new(const char *ifname, struct netmap_adapter *na)
 {
 	struct netmap_if *nifp;
@@ -988,7 +877,7 @@ cleanup:
 }
 
 /* call with NMA_LOCK held */
-static void
+void
 netmap_memory_deref(void)
 {
 	nm_mem.refcount--;

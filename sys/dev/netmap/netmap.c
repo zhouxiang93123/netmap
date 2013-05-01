@@ -196,6 +196,8 @@ static netdev_tx_t linux_netmap_start(struct sk_buff *, struct net_device *);
  */
 #include <net/netmap.h>
 #include <dev/netmap/netmap_kern.h>
+#include <dev/netmap/netmap_mem2.h>
+
 
 /* XXX the following variables must be deprecated and included in nm_mem */
 u_int netmap_total_buffers;
@@ -662,7 +664,7 @@ nm_alloc_bdgfwd(struct netmap_adapter *na)
  * Fetch configuration from the device, to cope with dynamic
  * reconfigurations after loading the module.
  */
-static int
+int
 netmap_update_config(struct netmap_adapter *na)
 {
 	struct ifnet *ifp = na->ifp;
@@ -701,10 +703,6 @@ netmap_update_config(struct netmap_adapter *na)
 	D("configuration changed while active, this is bad...");
 	return 1;
 }
-
-/*------------- memory allocator -----------------*/
-#include "netmap_mem2.c"
-/*------------ end of memory allocator ----------*/
 
 
 /* Structure associated to each thread which registered an interface.
@@ -817,7 +815,7 @@ netmap_dtor_locked(void *data)
 		if (nma_is_hw(na))
 			SWNA(ifp)->tx_rings = SWNA(ifp)->rx_rings = NULL;
 	}
-	netmap_if_free(nifp);
+	netmap_free_if(nifp);
 }
 
 
@@ -1603,7 +1601,7 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 		if (error) {
 			netmap_dtor_locked(priv);
 			/* nifp is not yet in priv, so free it separately */
-			netmap_if_free(nifp);
+			netmap_free_if(nifp);
 			nifp = NULL;
 		}
 

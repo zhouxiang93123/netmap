@@ -644,4 +644,10 @@ PNMB(struct netmap_slot *slot, uint64_t *pp)
 int netmap_rx_irq(struct ifnet *, u_int, u_int *);
 #define netmap_tx_irq(_n, _q) netmap_rx_irq(_n, _q, NULL)
 
+int netmap_update_config(struct netmap_adapter *na);
+
+#ifdef __FreeBSD__
+MALLOC_DECLARE(M_NETMAP);
+#endif /* __FreeBSD__ */
+
 #endif /* _NET_NETMAP_KERN_H_ */
