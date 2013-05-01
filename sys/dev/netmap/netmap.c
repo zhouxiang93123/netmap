@@ -241,10 +241,13 @@ struct nm_bridge {
 };
 
 struct nm_bridge nm_bridges[NM_BRIDGES];
+NM_LOCK_T	netmap_bridge_mutex;
 
 /* other OS will have these macros defined in their own glue code. */
 
 #ifdef __FreeBSD__
+#define BDG_LOCK()		mtx_lock(&netmap_bridge_mutex)
+#define BDG_UNLOCK()		mtx_unlock(&netmap_bridge_mutex)
 #define BDG_WLOCK(b)		rw_wlock(&(b)->bdg_lock)
 #define BDG_WUNLOCK(b)		rw_wunlock(&(b)->bdg_lock)
 #define BDG_RLOCK(b)		rw_rlock(&(b)->bdg_lock)
@@ -322,7 +325,7 @@ nm_find_bridge(const char *name)
 	/* use the first entry for locking, others for actual bridges.
 	 * XXX what a waste. must do it properly and start the loop from 0
 	 */
-	BDG_WLOCK(nm_bridges);
+	BDG_LOCK();
 	for (e = -1, i = 1; i < NM_BRIDGES; i++) {
 		b = nm_bridges + i;
 		if (b->namelen == 0)
@@ -343,7 +346,7 @@ nm_find_bridge(const char *name)
 			b->nm_bdg_lookup = netmap_bdg_learning;
 		}
 	}
-	BDG_WUNLOCK(nm_bridges);
+	BDG_UNLOCK();
 	return b;
 }
 
@@ -1493,7 +1496,7 @@ netmap_bdg_ctl(struct nmreq *nmr, BDG_LOOKUP_T func)
 		/* register a lookup function to the given bridge.
 		 * nmr->nr_name must be just bridge's name
 		 */
-		BDG_WLOCK(nm_bridges);
+		BDG_LOCK();
 		for (i = 0; i < NM_BRIDGES; i++) {
 			b = nm_bridges + i;
 			if (!b->namelen)
@@ -1502,7 +1505,7 @@ netmap_bdg_ctl(struct nmreq *nmr, BDG_LOOKUP_T func)
 			    b->namelen))
 				break;
 		}
-		BDG_WUNLOCK(nm_bridges);
+		BDG_UNLOCK();
 		if (i < NM_BRIDGES) {
 			BDG_WLOCK(b);
 			b->nm_bdg_lookup = func;
@@ -3294,6 +3297,8 @@ netmap_init(void)
 #ifdef NM_BRIDGE
 	{
 	int i;
+	mtx_init(&netmap_bridge_mutex, "netmap_bridge_mutex",
+		MTX_NETWORK_LOCK, MTX_DEF);
 	for (i = 0; i < NM_BRIDGES; i++)
 		rw_init(&nm_bridges[i].bdg_lock, "bdg lock");
 	}

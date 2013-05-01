@@ -173,6 +173,8 @@ static inline void mtx_unlock(safe_spinlock_t *m)
 #define rw_destroy(a)
 
 /* BDG_LOCK facilities */
+#define BDG_LOCK()		mtx_lock(&netmap_bridge_mutex)
+#define BDG_UNLOCK()		mtx_unlock(&netmap_bridge_mutex)
 #define BDG_WLOCK(b)		mtx_lock(&(b)->bdg_lock)
 #define BDG_WUNLOCK(b)		mtx_unlock(&(b)->bdg_lock)
 #define BDG_RLOCK(b)		rcu_read_lock()
