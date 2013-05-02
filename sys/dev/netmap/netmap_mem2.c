@@ -869,6 +869,9 @@ cleanup:
 void
 netmap_if_delete(struct netmap_adapter *na, struct netmap_if *nifp)
 {
+	if (nifp == NULL)
+		/* nothing to do */
+		return;
 	if (na->refcount <= 0) {
 		/* last instance, release bufs and rings */
 		u_int i, j, lim;
