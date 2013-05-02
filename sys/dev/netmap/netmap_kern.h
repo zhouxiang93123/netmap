@@ -275,9 +275,8 @@ enum {
 };
 
 /* How to handle locking support in netmap_rx_irq/netmap_tx_irq */
-#define NETMAP_LOCKED_ENTER	0x10000000	/* already locked on enter */
-#define NETMAP_LOCKED_EXIT	0x20000000	/* keep locked on exit */
-#define NETMAP_LOCK_MASK	0xffff0000
+#define	NETMAP_LOCKED_ENTER	0x10000000	/* already locked on enter */
+#define	NETMAP_LOCKED_EXIT	0x20000000	/* keep locked on exit */
 
 /*
  * The following are support routines used by individual drivers to

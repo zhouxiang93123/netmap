@@ -325,7 +325,7 @@ bge_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 
 static void
 bge_netmap_tx_init(struct bge_softc *sc)
-{   
+{
 	struct bge_tx_bd *d = sc->bge_ldata.bge_tx_ring;
 	int i;
 	struct netmap_adapter *na = NA(sc->bge_ifp);
@@ -364,7 +364,7 @@ bge_netmap_tx_init(struct bge_softc *sc)
 static void
 bge_netmap_rx_init(struct bge_softc *sc)
 {
-	/* slot is NULL if we are not in netmap mode */  
+	/* slot is NULL if we are not in netmap mode */
 	struct netmap_adapter *na = NA(sc->bge_ifp);
 	struct netmap_slot *slot = netmap_reset(na, NR_RX, 0, 0);
 	struct bge_rx_bd *r = sc->bge_ldata.bge_rx_std_ring;

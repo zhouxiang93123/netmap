@@ -102,7 +102,7 @@ nfe_netmap_init_buffers(struct nfe_softc *sc)
 			desc32->length = htole16(NETMAP_BUF_SIZE);
 			desc32->flags = htole16(NFE_RX_READY);
 		}
-  
+
 		netmap_reload_map(sc->rxq.rx_data_tag,
 		    sc->rxq.data[l].rx_data_map, addr);
                 bus_dmamap_sync(sc->rxq.rx_data_tag,
@@ -299,7 +299,7 @@ nfe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 
 	if (k > lim)
 		return netmap_ring_reinit(kring);
- 
+
 	if (do_lock)
 		NFE_LOCK(sc);
 
