@@ -161,14 +161,19 @@ int netmap_bridge = NM_BDG_BATCH; /* bridge batch size */
 SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
 
 #ifdef linux
-#define refcount_acquire(_a)	atomic_add(1, (atomic_t *)_a)
-#define refcount_release(_a)	atomic_dec_and_test((atomic_t *)_a)
+
+#define	refcount_acquire(_a)	atomic_add(1, (atomic_t *)_a)
+#define	refcount_release(_a)	atomic_dec_and_test((atomic_t *)_a)
+
 #else /* !linux */
+
 #ifdef __FreeBSD__
 #include <sys/endian.h>
 #include <sys/refcount.h>
 #endif /* __FreeBSD__ */
+
 #define prefetch(x)	__builtin_prefetch(x)
+
 #endif /* !linux */
 
 /*
