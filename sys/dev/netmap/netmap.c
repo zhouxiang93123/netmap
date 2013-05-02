@@ -327,11 +327,8 @@ nm_find_bridge(const char *name)
 		namelen = IFNAMSIZ;
 	ND("--- prefix is '%.*s' ---", namelen, name);
 
-	/* use the first entry for locking, others for actual bridges.
-	 * XXX what a waste. must do it properly and start the loop from 0
-	 */
 	BDG_LOCK();
-	for (e = -1, i = 1; i < NM_BRIDGES; i++) {
+	for (e = -1, i = 0; i < NM_BRIDGES; i++) {
 		b = nm_bridges + i;
 		if (b->namelen == 0)
 			e = i;	/* record empty slot */
