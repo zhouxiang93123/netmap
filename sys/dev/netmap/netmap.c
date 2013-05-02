@@ -1166,12 +1166,12 @@ no_port:
 			tmp_na.ifp = iter;
 			/* bdg_netmap_attach creates a struct netmap_adapter */
 			bdg_netmap_attach(&tmp_na);
-		} else { /* this is a NIC connected to the bridge */
+		} else if (NETMAP_CAPABLE(iter)) { /* this is a NIC */
 			/* need an extra port for host stack */
 			if (netmap_bridge_host && cand2 == -1)
-				goto no_port;
+				goto unref_no_port;
 			else if (kern_netmap_regif(iter, nmr->nr_ringid))
-				goto no_port;
+				goto unref_no_port;
 			/* the NIC is activated now */
 			// XXX b->act_ports |= (1<<cand);
 			/* bind the host stack to the bridge */
@@ -1180,6 +1180,10 @@ no_port:
 				SWNA(iter)->bdg_port = cand2;
 				SWNA(iter)->na_bdg = b;
 			}
+		} else { /* non-netmap NIC */
+unref_no_port:
+			nm_if_rele(iter);
+			goto no_port;
 		}
 		na = NA(iter);
 		na->bdg_port = cand;
@@ -1190,6 +1194,10 @@ no_port:
 		BDG_WUNLOCK(b);
 		ND("attaching virtual bridge %p", b);
 	} while (0);
+	/* protect from invalid reference to the NIC */
+	if (!iter && (nmr->nr_cmd == NETMAP_BDG_ATTACH ||
+	    nmr->nr_cmd == NETMAP_BDG_DETACH))
+		return (ENXIO);
 	*ifp = iter;
 	if (! *ifp)
 #endif /* NM_BRIDGE */
