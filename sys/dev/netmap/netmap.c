@@ -596,27 +596,19 @@ netmap_dtor_locked(void *data)
 	netmap_if_free(nifp);
 }
 
+#ifdef NM_BRIDGE
+/* we assume netmap adapter exists */
 static void
-nm_if_rele(struct ifnet *ifp)
+bdg_if_rele(struct ifnet *ifp)
 {
-#ifndef NM_BRIDGE
-	if_rele(ifp);
-#else /* NM_BRIDGE */
 	int i, full = 0, is_hw;
-	struct nm_bridge *b;
 	struct netmap_adapter *na = NA(ifp);
+	struct nm_bridge *b = na->na_bdg;
 
-	if (strncmp(ifp->if_xname, NM_NAME, sizeof(NM_NAME) - 1)) {
-		if_rele(ifp);
-		/* if the NIC is not in netmap mode or it is
-		 * not connected to a bridge, we are done
-		 */
-		if (!na || !na->na_bdg)
-			return;
-	}
-	if (!DROP_BDG_REF(ifp))
+	if (!b)
 		return;
-	b = na->na_bdg;
+	else if (!DROP_BDG_REF(ifp))
+		return;
 	is_hw = nma_is_hw(na);
 
 	BDG_WLOCK(b);
@@ -660,6 +652,19 @@ nm_if_rele(struct ifnet *ifp)
 		bzero(ifp, sizeof(*ifp));
 		free(ifp, M_DEVBUF);
 	}
+}
+#endif /* NM_BRIDGE */
+
+static void
+nm_if_rele(struct ifnet *ifp)
+{
+#ifndef NM_BRIDGE
+	if_rele(ifp);
+#else /* NM_BRIDGE */
+	if (strncmp(ifp->if_xname, NM_NAME, sizeof(NM_NAME) - 1)) /* NIC */
+		if_rele(ifp);
+	else /* virtual port */
+		bdg_if_rele(ifp);
 #endif /* NM_BRIDGE */
 }
 
@@ -677,6 +682,10 @@ netmap_dtor(void *data)
 		netmap_dtor_locked(data);
 		na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
 
+		if (NETMAP_OWNED_BY_KERN(ifp)) {
+			na->na_kpriv = NULL;
+			bdg_if_rele(ifp);
+		}
 		nm_if_rele(ifp); /* might also destroy *na */
 	}
 	if (priv->ref_done) {
@@ -1412,6 +1421,12 @@ kern_netmap_regif(struct ifnet *ifp, uint16_t ringid)
 	if (error)
 		goto error;
 	NMA_LOCK();
+	if (NETMAP_OWNED_BY_ANY(ifp)) {
+		/* kernel's access is exclusive */
+		NMA_UNLOCK();
+		error = EBUSY;
+		goto error;
+	}
 	nifp = netmap_do_regif(kpriv, ifp, ringid, &error);
 	if (!nifp) {
 		NMA_UNLOCK();
@@ -1495,11 +1510,8 @@ netmap_bdg_ctl(struct nmreq *nmr, BDG_LOOKUP_T func)
 			error = EINVAL;
 			break;
 		}
-	        if (cmd == NETMAP_BDG_DETACH) {
-			struct netmap_adapter *na = NA(ifp);
-			netmap_dtor(na->na_kpriv);
-			na->na_kpriv = NULL;
-		}
+	        if (cmd == NETMAP_BDG_DETACH)
+			netmap_dtor(NA(ifp)->na_kpriv);
 		break;
 
 	case NETMAP_BDG_LOOKUP_REG:
@@ -1649,6 +1661,11 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		/* find the interface and a reference */
 		error = get_ifp(nmr, &ifp); /* keep reference */
 		if (error) {
+			NMA_UNLOCK();
+			break;
+		} else if (NETMAP_OWNED_BY_KERN(ifp)) {
+			error = EBUSY;
+			nm_if_rele(ifp);
 			NMA_UNLOCK();
 			break;
 		}

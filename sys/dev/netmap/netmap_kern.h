@@ -382,6 +382,16 @@ enum {                                  /* verbose flags */
 
 #endif	/* linux */
 
+/*
+ * Regarding holding a NIC, if the NIC is owned by the kernel
+ * (i.e., bridge), neither another bridge nor user can use it;
+ * if the NIC is owned by a user, only users can share it. na_kpriv
+ * can be used to see whether the NIC is owned by the kernel,
+ * because it is always manipulated under NMA_LOCK()
+ */
+#define NETMAP_OWNED_BY_ANY(ifp)	(NA(ifp)->refcount > 0)
+#define NETMAP_OWNED_BY_KERN(ifp)	(NA(ifp)->na_kpriv)
+
 #ifdef __FreeBSD__
 /* Callback invoked by the dma machinery after a successfull dmamap_load */
 static void netmap_dmamap_cb(__unused void *arg,
