@@ -164,7 +164,7 @@ struct netmap_mem_d {
 
 extern struct netmap_mem_d nm_mem;
 
-vm_paddr_t netmap_mem_ofstophys(vm_offset_t offset);
+vm_paddr_t netmap_mem_ofstophys(vm_ooffset_t offset);
 int	   netmap_mem_finalize(void);
 int 	   netmap_mem_init(void);
 void 	   netmap_mem_fini(void);

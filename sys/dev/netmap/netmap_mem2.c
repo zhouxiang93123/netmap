@@ -726,7 +726,12 @@ netmap_free_rings(struct netmap_adapter *na)
 /*
  * Allocate the per-fd structure netmap_if.
  * If this is the first instance, also allocate the krings, rings etc.
+ *
+ * We assume that the configuration stored in na
+ * (number of tx/rx rings and descs) does not change while
+ * the interface is in netmap mode.
  */
+extern int nma_is_vp(struct netmap_adapter *na);
 void *
 netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
 {
@@ -737,10 +742,6 @@ netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
 	struct netmap_kring *kring;
 	uint32_t *nkr_leases = NULL;
 
-	if (netmap_update_config(na)) {
-		/* configuration mismatch, report and fail */
-		return NULL;
-	}
 	/*
 	 * verify whether virtual port need the stack ring
 	 */

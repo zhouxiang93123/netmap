@@ -371,7 +371,7 @@ NM_LOCK_T	netmap_bridge_mutex;
  * nma_is_host()	port connected to the host stack
  * nma_is_hw()		port connected to a NIC
  */
-static __inline int
+int
 nma_is_vp(struct netmap_adapter *na)
 {
 	return na->nm_register == bdg_netmap_reg;
@@ -664,7 +664,7 @@ nm_alloc_bdgfwd(struct netmap_adapter *na)
  * Fetch configuration from the device, to cope with dynamic
  * reconfigurations after loading the module.
  */
-int
+static int
 netmap_update_config(struct netmap_adapter *na)
 {
 	struct ifnet *ifp = na->ifp;
@@ -702,6 +702,16 @@ netmap_update_config(struct netmap_adapter *na)
 	}
 	D("configuration changed while active, this is bad...");
 	return 1;
+}
+
+static struct netmap_if*
+netmap_if_new(const char *ifname, struct netmap_adapter *na)
+{
+	if (netmap_update_config(na)) {
+		/* configuration mismatch, report and fail */
+		return NULL;
+	}
+	return netmap_mem_if_new(ifname, na);
 }
 
 
@@ -1562,7 +1572,7 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 	error = netmap_set_ringid(priv, ringid);
 	if (error)
 		goto out;
-	nifp = netmap_mem_if_new(ifp->if_xname, na);
+	nifp = netmap_if_new(ifp->if_xname, na);
 	if (nifp == NULL) { /* allocation failed */
 		error = ENOMEM;
 		goto out;
