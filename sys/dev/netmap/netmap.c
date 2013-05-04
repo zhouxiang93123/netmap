@@ -745,7 +745,7 @@ netmap_get_memory(struct netmap_priv_d* p)
 	int error = 0;
 	NMA_LOCK();
 	if (!p->ref_done) {
-		error = netmap_memory_finalize();
+		error = netmap_mem_finalize();
 		if (!error)
 			p->ref_done = 1;
 	}
@@ -803,7 +803,7 @@ netmap_dtor_locked(void *data)
 		if (nma_is_hw(na))
 			SWNA(ifp)->tx_rings = SWNA(ifp)->rx_rings = NULL;
 	}
-	netmap_if_delete(na, nifp);
+	netmap_mem_if_delete(na, nifp);
 }
 
 
@@ -895,7 +895,7 @@ netmap_dtor(void *data)
 		nm_if_rele(ifp); /* might also destroy *na */
 	}
 	if (priv->ref_done) {
-		netmap_memory_deref();
+		netmap_mem_deref();
 	}
 	NMA_UNLOCK();
 	bzero(priv, sizeof(*priv));	/* XXX for safety */
@@ -999,7 +999,7 @@ netmap_mmap(struct cdev *dev,
 		return (error);
 
 	ND("request for offset 0x%x", (uint32_t)offset);
-	*paddr = netmap_ofstophys(offset);
+	*paddr = netmap_mem_ofstophys(offset);
 
 	return (*paddr ? 0 : ENOMEM);
 }
@@ -1562,7 +1562,7 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 	error = netmap_set_ringid(priv, ringid);
 	if (error)
 		goto out;
-	nifp = netmap_if_new(ifp->if_xname, na);
+	nifp = netmap_mem_if_new(ifp->if_xname, na);
 	if (nifp == NULL) { /* allocation failed */
 		error = ENOMEM;
 		goto out;
@@ -1592,7 +1592,7 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 		if (error) {
 			netmap_dtor_locked(priv);
 			/* nifp is not yet in priv, so free it separately */
-			netmap_if_delete(na, nifp);
+			netmap_mem_if_delete(na, nifp);
 			nifp = NULL;
 		}
 
@@ -1998,7 +1998,7 @@ unlock_out:
 		nmr->nr_rx_slots = na->num_rx_desc;
 		nmr->nr_tx_slots = na->num_tx_desc;
 		nmr->nr_memsize = nm_mem.nm_totalsize;
-		nmr->nr_offset = netmap_if_offset(nifp);
+		nmr->nr_offset = netmap_mem_if_offset(nifp);
 		break;
 
 	case NIOCUNREGIF:
@@ -3647,7 +3647,7 @@ netmap_init(void)
 {
 	int i, error;
 
-	error = netmap_memory_init();
+	error = netmap_mem_init();
 	if (error != 0) {
 		printf("netmap: unable to initialize the memory allocator.\n");
 		return (error);
@@ -3674,7 +3674,7 @@ static void
 netmap_fini(void)
 {
 	destroy_dev(netmap_dev);
-	netmap_memory_fini();
+	netmap_mem_fini();
 	printf("netmap: unloaded module.\n");
 }
 

@@ -164,27 +164,15 @@ struct netmap_mem_d {
 
 extern struct netmap_mem_d nm_mem;
 
-vm_paddr_t netmap_ofstophys(vm_offset_t offset);
-int netmap_memory_finalize(void);
-int netmap_memory_init(void);
-void netmap_memory_fini(void);
-void* netmap_if_new(const char *ifname, struct netmap_adapter *na);
-void netmap_if_delete(struct netmap_adapter *na, struct netmap_if *nifp);
-void netmap_memory_deref(void);
-ssize_t netmap_obj_offset(struct netmap_obj_pool *p, const void *vaddr);
+vm_paddr_t netmap_mem_ofstophys(vm_offset_t offset);
+int	   netmap_mem_finalize(void);
+int 	   netmap_mem_init(void);
+void 	   netmap_mem_fini(void);
+void* 	   netmap_mem_if_new(const char *ifname, struct netmap_adapter *na);
+void 	   netmap_mem_if_delete(struct netmap_adapter *na, struct netmap_if *nifp);
+void 	   netmap_mem_deref(void);
+ssize_t    netmap_mem_if_offset(const void *vaddr);
 
-/* Helper functions which convert virtual addresses to offsets */
-#define netmap_if_offset(v)					\
-	netmap_obj_offset(&nm_mem.pools[NETMAP_IF_POOL], (v))
-
-#define netmap_ring_offset(v)					\
-    (nm_mem.pools[NETMAP_IF_POOL]._memtotal + 			\
-	netmap_obj_offset(&nm_mem.pools[NETMAP_RING_POOL], (v)))
-
-#define netmap_buf_offset(v)					\
-    (nm_mem.pools[NETMAP_IF_POOL]._memtotal +			\
-	nm_mem.pools[NETMAP_RING_POOL]._memtotal +		\
-	netmap_obj_offset(&nm_mem.pools[NETMAP_BUF_POOL], (v)))
 
 
 #endif

@@ -132,7 +132,7 @@ DECLARE_SYSCTLS(NETMAP_BUF_POOL, buf);
  * then locate the cluster through a lookup table.
  */
 vm_paddr_t
-netmap_ofstophys(vm_ooffset_t offset)
+netmap_mem_ofstophys(vm_ooffset_t offset)
 {
 	int i;
 	vm_offset_t o = offset;
@@ -162,7 +162,7 @@ netmap_ofstophys(vm_ooffset_t offset)
  * Algorithm: scan until we find the cluster, then add the
  * actual offset in the cluster
  */
-ssize_t
+static ssize_t
 netmap_obj_offset(struct netmap_obj_pool *p, const void *vaddr)
 {
 	int i, k = p->clustentries, n = p->objtotal;
@@ -185,6 +185,27 @@ netmap_obj_offset(struct netmap_obj_pool *p, const void *vaddr)
 	return 0; /* An error occurred */
 }
 
+/* Helper functions which convert virtual addresses to offsets */
+#define netmap_if_offset(v)					\
+	netmap_obj_offset(&nm_mem.pools[NETMAP_IF_POOL], (v))
+
+#define netmap_ring_offset(v)					\
+    (nm_mem.pools[NETMAP_IF_POOL]._memtotal + 			\
+	netmap_obj_offset(&nm_mem.pools[NETMAP_RING_POOL], (v)))
+
+#define netmap_buf_offset(v)					\
+    (nm_mem.pools[NETMAP_IF_POOL]._memtotal +			\
+	nm_mem.pools[NETMAP_RING_POOL]._memtotal +		\
+	netmap_obj_offset(&nm_mem.pools[NETMAP_BUF_POOL], (v)))
+
+
+ssize_t
+netmap_mem_if_offset(const void *addr)
+{
+	ssize_t v;
+	v = netmap_if_offset(addr);
+	return v;
+}
 
 /*
  * report the index, and use start position as a hint,
@@ -603,7 +624,7 @@ out:
 
 /* call with lock held */
 int
-netmap_memory_finalize(void)
+netmap_mem_finalize(void)
 {
 	int i;
 	u_int totalsize = 0;
@@ -664,14 +685,14 @@ cleanup:
 }
 
 int
-netmap_memory_init(void)
+netmap_mem_init(void)
 {
 	NMA_LOCK_INIT();
 	return (0);
 }
 
 void
-netmap_memory_fini(void)
+netmap_mem_fini(void)
 {
 	int i;
 
@@ -707,7 +728,7 @@ netmap_free_rings(struct netmap_adapter *na)
  * If this is the first instance, also allocate the krings, rings etc.
  */
 void *
-netmap_if_new(const char *ifname, struct netmap_adapter *na)
+netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
 {
 	struct netmap_if *nifp;
 	struct netmap_ring *ring;
@@ -867,7 +888,7 @@ cleanup:
 }
 
 void
-netmap_if_delete(struct netmap_adapter *na, struct netmap_if *nifp)
+netmap_mem_if_delete(struct netmap_adapter *na, struct netmap_if *nifp)
 {
 	if (nifp == NULL)
 		/* nothing to do */
@@ -896,7 +917,7 @@ netmap_if_delete(struct netmap_adapter *na, struct netmap_if *nifp)
 
 /* call with NMA_LOCK held */
 void
-netmap_memory_deref(void)
+netmap_mem_deref(void)
 {
 	nm_mem.refcount--;
 	if (netmap_verbose)
