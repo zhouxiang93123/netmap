@@ -18,7 +18,9 @@ CONFIG_BNX2X:=m
 netmap_lin-objs := netmap.o
 
 obj-$(CONFIG_NETMAP) = netmap_lin.o
+ifndef NODRIVERS
 obj-m += $(DRIVERS)
+endif
 # obj-$(CONFIG_R8169) += r8169.o
 # obj-$(CONFIG_FORCEDETH) += forcedeth.o
 # obj-$(CONFIG_E1000) += e1000/
@@ -63,6 +65,14 @@ DRIVERS := $(shell \
 	    if ((!$$3 || $$3 <= v) && (!$$4 || v < $$4)) { ; \
 	    if (match($$2, ".c")) print $$2 ; else print $$2 "/" } }' )
 
+ifdef NODRIVERS
+all: build
+
+build:
+	$(MAKE) -C $(KSRC) M=$(PWD) CONFIG_NETMAP=m	\
+		EXTRA_CFLAGS='$(EXTRA_CFLAGS)' \
+		modules
+else
 all:	get-drivers build
 
 build:
@@ -72,6 +82,8 @@ build:
 		CONFIG_IXGBE=m CONFIG_IGB=m EXTRA_CFLAGS='$(EXTRA_CFLAGS)' \
 		DRIVERS="$(DRIVERS:%.c=%.o)" modules
 	@ls -l `find . -name \*.ko`
+
+endif
 
 test:
 	@echo "version $(LIN_VER)"
