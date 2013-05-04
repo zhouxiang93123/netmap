@@ -53,6 +53,18 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 241723 2012-10-19 09:41:45Z gle
 #include <dev/netmap/netmap_kern.h>
 #include "netmap_mem2.h"
 
+#ifdef linux
+#define NMA_LOCK_INIT()		sema_init(&nm_mem.nm_mtx, 1)
+#define NMA_LOCK_DESTROY()	
+#define NMA_LOCK()		down(&nm_mem.nm_mtx)
+#define NMA_UNLOCK()		up(&nm_mem.nm_mtx)
+#else /* !linux */
+#define NMA_LOCK_INIT()		mtx_init(&nm_mem.nm_mtx, "netmap memory allocator lock", NULL, MTX_DEF)
+#define NMA_LOCK_DESTROY()	mtx_destroy(&nm_mem.nm_mtx)
+#define NMA_LOCK()		mtx_lock(&nm_mem.nm_mtx)
+#define NMA_UNLOCK()		mtx_unlock(&nm_mem.nm_mtx)
+#endif /* linux */
+
 struct netmap_obj_params netmap_params[NETMAP_POOLS_NR] = {
 	[NETMAP_IF_POOL] = {
 		.size = 1024,
@@ -136,14 +148,20 @@ netmap_mem_ofstophys(vm_ooffset_t offset)
 {
 	int i;
 	vm_offset_t o = offset;
-	struct netmap_obj_pool *p = nm_mem.pools;
+	vm_paddr_t pa;
+	struct netmap_obj_pool *p;
+
+	NMA_LOCK();
+	p = nm_mem.pools;
 
 	for (i = 0; i < NETMAP_POOLS_NR; offset -= p[i]._memtotal, i++) {
 		if (offset >= p[i]._memtotal)
 			continue;
 		// now lookup the cluster's address
-		return p[i].lut[offset / p[i]._objsize].paddr +
+		pa = p[i].lut[offset / p[i]._objsize].paddr +
 			offset % p[i]._objsize;
+		NMA_UNLOCK();
+		return pa;
 	}
 	/* this is only in case of errors */
 	D("invalid ofs 0x%x out of 0x%x 0x%x 0x%x", (u_int)o,
@@ -153,6 +171,7 @@ netmap_mem_ofstophys(vm_ooffset_t offset)
 		p[NETMAP_IF_POOL]._memtotal
 			+ p[NETMAP_RING_POOL]._memtotal
 			+ p[NETMAP_BUF_POOL]._memtotal);
+	NMA_UNLOCK();
 	return 0;	// XXX bad address
 }
 
@@ -203,7 +222,9 @@ ssize_t
 netmap_mem_if_offset(const void *addr)
 {
 	ssize_t v;
+	NMA_LOCK();
 	v = netmap_if_offset(addr);
+	NMA_UNLOCK();
 	return v;
 }
 
@@ -622,12 +643,13 @@ out:
 	return nm_mem.lasterr;
 }
 
-/* call with lock held */
 int
 netmap_mem_finalize(void)
 {
-	int i;
+	int i, err;
 	u_int totalsize = 0;
+
+	NMA_LOCK();
 
 	nm_mem.refcount++;
 	if (nm_mem.refcount > 1) {
@@ -672,16 +694,22 @@ netmap_mem_finalize(void)
 out:
 	if (nm_mem.lasterr)
 		nm_mem.refcount--;
+	err = nm_mem.lasterr;
 
-	return nm_mem.lasterr;
+	NMA_UNLOCK();
+
+	return err;
 
 cleanup:
 	for (i = 0; i < NETMAP_POOLS_NR; i++) {
 		netmap_reset_obj_allocator(&nm_mem.pools[i]);
 	}
 	nm_mem.refcount--;
+	err = nm_mem.lasterr;
 
-	return nm_mem.lasterr;
+	NMA_UNLOCK();
+
+	return err;
 }
 
 int
@@ -753,9 +781,13 @@ netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
 	 * For virtual rx rings we also allocate an array of
 	 * pointers to assign to nkr_leases.
 	 */
+
+	NMA_LOCK();
+
 	len = sizeof(struct netmap_if) + (nrx + ntx) * sizeof(ssize_t);
 	nifp = netmap_if_malloc(len);
 	if (nifp == NULL) {
+		NMA_UNLOCK();
 		return NULL;
 	}
 
@@ -881,10 +913,16 @@ final:
 		*(ssize_t *)(uintptr_t)&nifp->ring_ofs[i+ntx] =
 			netmap_ring_offset(na->rx_rings[i].ring) - base;
 	}
+
+	NMA_UNLOCK();
+
 	return (nifp);
 cleanup:
 	netmap_free_rings(na);
 	netmap_if_free(nifp);
+
+	NMA_UNLOCK();
+
 	return NULL;
 }
 
@@ -894,6 +932,8 @@ netmap_mem_if_delete(struct netmap_adapter *na, struct netmap_if *nifp)
 	if (nifp == NULL)
 		/* nothing to do */
 		return;
+	NMA_LOCK();
+
 	if (na->refcount <= 0) {
 		/* last instance, release bufs and rings */
 		u_int i, j, lim;
@@ -914,13 +954,19 @@ netmap_mem_if_delete(struct netmap_adapter *na, struct netmap_if *nifp)
 		netmap_free_rings(na);	
 	}
 	netmap_if_free(nifp);
+
+	NMA_UNLOCK();
 }
 
 /* call with NMA_LOCK held */
 void
 netmap_mem_deref(void)
 {
+	NMA_LOCK();
+
 	nm_mem.refcount--;
 	if (netmap_verbose)
 		D("refcount = %d", nm_mem.refcount);
+
+	NMA_UNLOCK();
 }

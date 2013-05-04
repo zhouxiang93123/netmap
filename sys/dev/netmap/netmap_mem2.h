@@ -99,21 +99,6 @@
 
 #define NETMAP_BUF_MAX_NUM	20*4096*2	/* large machine */
 
-#ifdef linux
-// XXX a mtx would suffice here 20130415 lr
-// #define NMA_LOCK_T		safe_spinlock_t
-#define NMA_LOCK_T		struct semaphore
-#define NMA_LOCK_INIT()		sema_init(&nm_mem.nm_mtx, 1)
-#define NMA_LOCK_DESTROY()	
-#define NMA_LOCK()		down(&nm_mem.nm_mtx)
-#define NMA_UNLOCK()		up(&nm_mem.nm_mtx)
-#else /* !linux */
-#define NMA_LOCK_T		struct mtx
-#define NMA_LOCK_INIT()		mtx_init(&nm_mem.nm_mtx, "netmap memory allocator lock", NULL, MTX_DEF)
-#define NMA_LOCK_DESTROY()	mtx_destroy(&nm_mem.nm_mtx)
-#define NMA_LOCK()		mtx_lock(&nm_mem.nm_mtx)
-#define NMA_UNLOCK()		mtx_unlock(&nm_mem.nm_mtx)
-#endif /* linux */
 
 enum {
 	NETMAP_IF_POOL   = 0,
@@ -150,6 +135,12 @@ struct netmap_obj_pool {
 	uint32_t bitmap_slots;	/* number of uint32 entries in bitmap */
 };
 
+#ifdef linux
+// XXX a mtx would suffice here 20130415 lr
+#define NMA_LOCK_T		struct semaphore
+#else /* !linux */
+#define NMA_LOCK_T		struct mtx
+#endif /* linux */
 
 struct netmap_mem_d {
 	NMA_LOCK_T nm_mtx;  /* protect the allocator */

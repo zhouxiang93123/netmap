@@ -171,6 +171,13 @@ MALLOC_DEFINE(M_NETMAP, "netmap", "Network memory map");
 #define BDG_GET_VAR(lval)	(lval)
 #define BDG_FREE(p)		free(p, M_DEVBUF)
 
+/* netmap global lock */
+#define NMG_LOCK_T		struct mtx
+#define NMG_LOCK_INIT()		mtx_init(&netmap_global_lock, "netmap global lock", NULL, MTX_DEF)
+#define NMG_LOCK_DESTROY()	mtx_destroy(&netmap_global_lock)
+#define NMG_LOCK()		mtx_lock(&netmap_global_lock)
+#define NMG_UNLOCK()		mtx_unlock(&netmap_global_lock)
+
 #elif defined(linux)
 
 #include "bsd_glue.h"
@@ -179,6 +186,57 @@ static netdev_tx_t linux_netmap_start(struct sk_buff *, struct net_device *);
 /* XXX double check */
 #define NM_RWLOCK_T     safe_spinlock_t // see bsd_glue.h
 #define	NM_RWINIT(b)	spin_lock_init(&((b)->bdg_lock.sl))
+
+static struct device_driver*
+linux_netmap_find_driver(struct device *dev)
+{
+	struct device_driver *dd;
+
+	while ( (dd = dev->driver) == NULL ) {
+		if ( (dev = dev->parent) == NULL )
+			return NULL;
+	}
+	return dd;
+}
+
+static struct net_device*
+ifunit_ref(const char *name)
+{
+	struct net_device *ifp = dev_get_by_name(&init_net, name);
+	struct device_driver *dd;
+
+	if (ifp == NULL)
+		return NULL;
+
+	if ( (dd = linux_netmap_find_driver(&ifp->dev)) == NULL )
+		goto error;
+
+	if (!try_module_get(dd->owner))
+		goto error;
+
+	return ifp;
+error:
+	dev_put(ifp);
+	return NULL;
+}
+
+static void
+if_rele(struct net_device *ifp)
+{
+	struct device_driver *dd;
+	dd = linux_netmap_find_driver(&ifp->dev);
+	dev_put(ifp);
+	if (dd)
+		module_put(dd->owner);
+}
+
+// XXX a mtx would suffice here too 20130404 gl
+#define NMG_LOCK_T		struct semaphore
+#define NMG_LOCK_INIT()		sema_init(&netmap_global_lock, 1)
+#define NMG_LOCK_DESTROY()	
+#define NMG_LOCK()		down(&netmap_global_lock)
+#define NMG_UNLOCK()		up(&netmap_global_lock)
+
 
 #elif defined(__APPLE__)
 
@@ -230,6 +288,8 @@ int netmap_fwd = 0;	/* force transparent mode */
 SYSCTL_INT(_dev_netmap, OID_AUTO, drop, CTLFLAG_RW, &netmap_drop, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, flags, CTLFLAG_RW, &netmap_flags, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, fwd, CTLFLAG_RW, &netmap_fwd, 0 , "");
+
+NMG_LOCK_T	netmap_global_lock;
 
 
 /*
@@ -395,7 +455,7 @@ nma_is_hw(struct netmap_adapter *na)
  * Regarding holding a NIC, if the NIC is owned by the kernel
  * (i.e., bridge), neither another bridge nor user can use it;
  * if the NIC is owned by a user, only users can share it.
- * Evaluation must be done under NMA_LOCK().
+ * Evaluation must be done under NMG_LOCK().
  */
 #define NETMAP_OWNED_BY_KERN(ifp)	(!nma_is_vp(NA(ifp)) && NA(ifp)->na_bdg)
 #define NETMAP_OWNED_BY_ANY(ifp) \
@@ -745,7 +805,7 @@ struct netmap_priv_d {
 	u_int		np_qfirst, np_qlast;	/* range of rings to scan */
 	uint16_t	np_txpoll;
 
-	unsigned long	ref_done;	/* use with NMA_LOCK held */
+	unsigned long	ref_done;	/* use with NMG_LOCK held */
 };
 
 
@@ -753,13 +813,13 @@ static int
 netmap_get_memory(struct netmap_priv_d* p)
 {
 	int error = 0;
-	NMA_LOCK();
+	NMG_LOCK();
 	if (!p->ref_done) {
 		error = netmap_mem_finalize();
 		if (!error)
 			p->ref_done = 1;
 	}
-	NMA_UNLOCK();
+	NMG_UNLOCK();
 	return error;
 }
 
@@ -769,7 +829,7 @@ netmap_get_memory(struct netmap_priv_d* p)
  * Call nm_register(ifp,0) to stop netmap mode on the interface and
  * revert to normal operation. We expect that np_ifp has not gone.
  */
-/* call with NMA_LOCK held */
+/* call with NMG_LOCK held */
 static void
 netmap_dtor_locked(void *data)
 {
@@ -890,7 +950,7 @@ netmap_dtor(void *data)
 	struct netmap_priv_d *priv = data;
 	struct ifnet *ifp = priv->np_ifp;
 
-	NMA_LOCK();
+	NMG_LOCK();
 	if (ifp) {
 		struct netmap_adapter *na = NA(ifp);
 
@@ -907,7 +967,7 @@ netmap_dtor(void *data)
 	if (priv->ref_done) {
 		netmap_mem_deref();
 	}
-	NMA_UNLOCK();
+	NMG_UNLOCK();
 	bzero(priv, sizeof(*priv));	/* XXX for safety */
 	free(priv, M_DEVBUF);
 }
@@ -1552,7 +1612,7 @@ netmap_set_ringid(struct netmap_priv_d *priv, u_int ringid)
 /*
  * possibly move the interface to netmap-mode.
  * If success it returns a pointer to netmap_if, otherwise NULL.
- * This must be called with NMA_LOCK held.
+ * This must be called with NMG_LOCK held.
  */
 static struct netmap_if *
 netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
@@ -1632,10 +1692,10 @@ kern_netmap_regif(struct nmreq *nmr)
 	if (error)
 		goto free_exit;
 
-	NMA_LOCK();
+	NMG_LOCK();
 	error = get_ifp(nmr, &ifp);
 	if (error) { /* no device, or another bridge or user owns the device */
-		NMA_UNLOCK();
+		NMG_UNLOCK();
 		goto free_exit;
 	}
 	if (!NETMAP_OWNED_BY_KERN(ifp)) {
@@ -1651,7 +1711,7 @@ kern_netmap_regif(struct nmreq *nmr)
 			error = EINVAL;
 			goto unref_exit;
 		}
-		NMA_UNLOCK();
+		NMG_UNLOCK();
 
 		netmap_dtor(NA(ifp)->na_kpriv); /* unregister */
 		NA(ifp)->na_kpriv = NULL;
@@ -1669,13 +1729,13 @@ kern_netmap_regif(struct nmreq *nmr)
 	wmb(); // XXX do we need it ?
 	npriv->np_nifp = nifp;
 	NA(ifp)->na_kpriv = npriv;
-	NMA_UNLOCK();
+	NMG_UNLOCK();
 	D("registered %s to netmap-mode", ifp->if_xname);
 	return 0;
 
 unref_exit:
 	nm_if_rele(ifp);
-	NMA_UNLOCK();
+	NMG_UNLOCK();
 free_exit:
 	bzero(npriv, sizeof(*npriv));
 	free(npriv, M_DEVBUF);
@@ -1930,15 +1990,15 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		if (nmr->nr_name[0] == '\0')	/* just get memory info */
 			break;
 		/* lock because get_ifp and update_config see na->refcount */
-		NMA_LOCK();
+		NMG_LOCK();
 		error = get_ifp(nmr, &ifp); /* get a refcount */
 		if (error) {
-			NMA_UNLOCK();
+			NMG_UNLOCK();
 			break;
 		}
 		na = NA(ifp); /* retrieve netmap_adapter */
 		netmap_update_config(na);
-		NMA_UNLOCK();
+		NMG_UNLOCK();
 		nmr->nr_rx_rings = na->num_rx_rings;
 		nmr->nr_tx_rings = na->num_tx_rings;
 		nmr->nr_rx_slots = na->num_rx_desc;
@@ -1970,11 +2030,11 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			break;
 
 		/* protect access to priv from concurrent NIOCREGIF */
-		NMA_LOCK();
+		NMG_LOCK();
 		if (priv->np_ifp != NULL) {	/* thread already registered */
 			error = netmap_set_ringid(priv, nmr->nr_ringid);
 unlock_out:
-			NMA_UNLOCK();
+			NMG_UNLOCK();
 			break;
 		}
 		/* find the interface and a reference */
@@ -1999,7 +2059,7 @@ unlock_out:
 		 */
 		wmb(); /* make sure previous writes are visible to all CPUs */
 		priv->np_nifp = nifp;
-		NMA_UNLOCK();
+		NMG_UNLOCK();
 
 		/* return the offset of the netmap_if object */
 		na = NA(ifp); /* retrieve netmap adapter */
@@ -3150,7 +3210,7 @@ bdg_netmap_reg(struct ifnet *ifp, int onoff)
 	/* the interface is already attached to the bridge,
 	 * so we only need to toggle IFCAP_NETMAP.
 	 * Locking is not necessary (we are already under
-	 * NMA_LOCK, and the port is not in use during this call).
+	 * NMG_LOCK, and the port is not in use during this call).
 	 */
 	/* BDG_WLOCK(b); */
 	if (onoff) {
@@ -3657,6 +3717,8 @@ netmap_init(void)
 {
 	int i, error;
 
+	NMG_LOCK_INIT();
+
 	error = netmap_mem_init();
 	if (error != 0) {
 		printf("netmap: unable to initialize the memory allocator.\n");
@@ -3685,6 +3747,7 @@ netmap_fini(void)
 {
 	destroy_dev(netmap_dev);
 	netmap_mem_fini();
+	NMG_LOCK_DESTROY();
 	printf("netmap: unloaded module.\n");
 }
 
