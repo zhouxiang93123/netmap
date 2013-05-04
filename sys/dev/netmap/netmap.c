@@ -2647,6 +2647,7 @@ linux_netmap_open(struct inode *inode, struct file *file)
 }
 
 static struct file_operations netmap_fops = {
+    .owner = THIS_MODULE,
     .open = linux_netmap_open,
     .mmap = linux_netmap_mmap,
     LIN_IOCTL_NAME = linux_netmap_ioctl,
