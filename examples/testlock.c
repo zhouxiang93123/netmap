@@ -370,13 +370,13 @@ test_rdtsc(struct targ *t)
 {
         int64_t m, i;
 	volatile uint64_t v;
-	(void)v;
         for (m = 0; m < t->g->m_cycles; m++) {
 		for (i = 0; i < ONE_MILLION; i++) {
                 	v = rdtsc();
 			t->count++;
 		}
         }
+	(void)v;
 }
 
 void
