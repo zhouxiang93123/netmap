@@ -326,7 +326,7 @@ bdgconfig(const char *ifname, int cmd)
 		bzero(&hwnmr, sizeof(hwnmr));
 		hwnmr.nr_version = NETMAP_API;
 		strncpy(hwnmr.nr_name, ifname, sizeof(hwnmr.nr_name));
-		hwnmr.spare1 = cmd;
+		hwnmr.nr_cmd = cmd;
 		error = ioctl(fd, NIOCREGIF, &hwnmr);
 		if (error == -1)
 			D("Unable to %s %s to the bridge", cmd == NETMAP_BDG_DETACH?"detach":"attach", ifname);
