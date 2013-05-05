@@ -1116,7 +1116,8 @@ main_thread(struct glob_arg *g)
 		 * Join active threads, unregister interfaces and close
 		 * file descriptors.
 		 */
-		pthread_join(targs[i].thread, NULL);
+		if (targs[i].used)
+			pthread_join(targs[i].thread, NULL);
 		close(targs[i].fd);
 
 		if (targs[i].completed == 0)
