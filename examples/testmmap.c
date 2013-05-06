@@ -171,6 +171,7 @@ void do_regif()
 	fd = arg ? atoi(arg) : last_fd;
 
 	ret = ioctl(fd, NIOCREGIF, &nmr);
+	last_memsize = nmr.nr_memsize;
 	output_err(ret, "ioctl(%d, NIOCREGIF) for %s =%d", fd, name, ret);
 }
 
