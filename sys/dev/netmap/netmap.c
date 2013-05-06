@@ -1984,7 +1984,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		if (error)
 			break;
 		/* memsize is always valid */
-		nmr->nr_memsize = nm_mem.nm_totalsize;
+		nmr->nr_memsize = netmap_mem_get_totalsize();
 		nmr->nr_offset = 0;
 		nmr->nr_rx_slots = nmr->nr_tx_slots = 0;
 		if (nmr->nr_name[0] == '\0')	/* just get memory info */
@@ -2067,7 +2067,7 @@ unlock_out:
 		nmr->nr_tx_rings = na->num_tx_rings;
 		nmr->nr_rx_slots = na->num_rx_desc;
 		nmr->nr_tx_slots = na->num_tx_desc;
-		nmr->nr_memsize = nm_mem.nm_totalsize;
+		nmr->nr_memsize = netmap_mem_get_totalsize();
 		nmr->nr_offset = netmap_mem_if_offset(nifp);
 		break;
 
@@ -2970,11 +2970,9 @@ linux_netmap_poll(struct file * file, struct poll_table_struct *pwait)
 static int
 linux_netmap_mmap(struct file *f, struct vm_area_struct *vma)
 {
-	int lut_skip, i, j;
-	int user_skip = 0;
-	struct lut_entry *l_entry;
 	int error = 0;
-	unsigned long off, tomap;
+	unsigned long off, va;
+	vm_offset_t pa;
 	/*
 	 * vma->vm_start: start of mapping user address space
 	 * vma->vm_end: end of the mapping user address space
@@ -2988,51 +2986,23 @@ linux_netmap_mmap(struct file *f, struct vm_area_struct *vma)
 	if (error)
 	    return -error;
 
-	off = vma->vm_pgoff << PAGE_SHIFT; /* offset in bytes */
-	tomap = vma->vm_end - vma->vm_start;
-	for (i = 0; i < NETMAP_POOLS_NR; i++) {  /* loop through obj_pools */
-		const struct netmap_obj_pool *p = &nm_mem.pools[i];
-		/*
-		 * In each pool memory is allocated in clusters
-		 * of size _clustsize, each containing clustentries
-		 * entries. For each object k we already store the
-		 * vtophys mapping in lut[k] so we use that, scanning
-		 * the lut[] array in steps of clustentries,
-		 * and we map each cluster (not individual pages,
-		 * it would be overkill -- XXX slow ? 20130415).
-		 */
-
-		/*
-		 * We interpret vm_pgoff as an offset into the whole
-		 * netmap memory, as if all clusters where contiguous.
-		 */
-		for (lut_skip = 0, j = 0; j < p->_numclusters; j++, lut_skip += p->clustentries) {
-			unsigned long paddr, mapsize;
-			if (p->_clustsize <= off) {
-				off -= p->_clustsize;
-				continue;
-			}
-			l_entry = &p->lut[lut_skip]; /* first obj in the cluster */
-			paddr = l_entry->paddr + off;
-			mapsize = p->_clustsize - off;
-			off = 0;
-			if (mapsize > tomap)
-				mapsize = tomap;
-			ND("remap_pfn_range(%lx, %lx, %lx)",
-				vma->vm_start + user_skip,
-				paddr >> PAGE_SHIFT, mapsize);
-			if (remap_pfn_range(vma, vma->vm_start + user_skip,
-					paddr >> PAGE_SHIFT, mapsize,
-					vma->vm_page_prot))
-				return -EAGAIN; // XXX check return value
-			user_skip += mapsize;
-			tomap -= mapsize;
-			if (tomap == 0)
-				goto done;
-		}
+	if ((vma->vm_start & ~PAGE_MASK) || (vma->vm_end & ~PAGE_MASK)) {
+		D("vm_start = %lx vm_end = %lx", vma->vm_start, vma->vm_end);
+		return -EINVAL;
 	}
-done:
 
+	for (va = vma->vm_start, off = vma->vm_pgoff;
+	     va < vma->vm_end;
+	     va += PAGE_SIZE, off++)
+	{
+		pa = netmap_mem_ofstophys(off << PAGE_SHIFT);
+		if (pa == 0) 
+			return -EINVAL;
+	
+		error = remap_pfn_range(vma, va, pa >> PAGE_SHIFT, PAGE_SIZE, vma->vm_page_prot);
+		if (error) 
+			return error;
+	}
 	return 0;
 }
 

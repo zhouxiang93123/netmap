@@ -162,6 +162,7 @@ void 	   netmap_mem_fini(void);
 void* 	   netmap_mem_if_new(const char *ifname, struct netmap_adapter *na);
 void 	   netmap_mem_if_delete(struct netmap_adapter *na, struct netmap_if *nifp);
 void 	   netmap_mem_deref(void);
+u_int	   netmap_mem_get_totalsize(void);
 ssize_t    netmap_mem_if_offset(const void *vaddr);
 
 

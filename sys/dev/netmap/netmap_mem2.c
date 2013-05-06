@@ -136,10 +136,6 @@ DECLARE_SYSCTLS(NETMAP_RING_POOL, ring);
 DECLARE_SYSCTLS(NETMAP_BUF_POOL, buf);
 
 /*
- * Convert a userspace offset to a physical address.
- * XXX only called in the FreeBSD's netmap_mmap()
- * because in linux we map everything at once.
- *
  * First, find the allocator that contains the requested offset,
  * then locate the cluster through a lookup table.
  */
@@ -173,6 +169,16 @@ netmap_mem_ofstophys(vm_ooffset_t offset)
 			+ p[NETMAP_BUF_POOL]._memtotal);
 	NMA_UNLOCK();
 	return 0;	// XXX bad address
+}
+
+u_int
+netmap_mem_get_totalsize(void)
+{
+	u_int size;
+	NMA_LOCK();
+	size = nm_mem.nm_totalsize;
+	NMA_UNLOCK();
+	return size;
 }
 
 /*
