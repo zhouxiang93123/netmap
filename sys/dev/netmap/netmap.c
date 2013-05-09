@@ -267,6 +267,11 @@ NM_LOCK_T	netmap_bridge_mutex;
 #endif /* __FreeBSD__ */
 
 static __inline int
+nma_is_vp(struct netmap_adapter *na)
+{
+	return na->nm_register == bdg_netmap_reg;
+}
+static __inline int
 nma_is_host(struct netmap_adapter *na)
 {
 	return na->nm_register == NULL;
@@ -275,7 +280,7 @@ static __inline int
 nma_is_hw(struct netmap_adapter *na)
 {
 	/* In case of sw adapter, nm_register is NULL */
-	return na->nm_register != bdg_netmap_reg && !nma_is_host(na);
+	return !nma_is_vp(na) && !nma_is_host(na);
 }
 
 /*
@@ -362,8 +367,8 @@ nm_free_bdgfwd(struct netmap_adapter *na)
 	int nrings, i;
 	struct netmap_kring *kring;
 
-	nrings = nma_is_hw(na) ? na->num_rx_rings : na->num_tx_rings;
-	kring = nma_is_hw(na) ? na->rx_rings : na->tx_rings;
+	nrings = nma_is_vp(na) ? na->num_tx_rings : na->num_rx_rings;
+	kring = nma_is_vp(na) ? na->tx_rings : na->rx_rings;
 	for (i = 0; i < nrings; i++) {
 		if (kring[i].nkr_ft) {
 			free(kring[i].nkr_ft, M_DEVBUF);
@@ -389,8 +394,8 @@ nm_alloc_bdgfwd(struct netmap_adapter *na)
 	l += sizeof(struct nm_bdg_q) * num_dstq;
 	l += sizeof(uint16_t) * NM_BDG_BATCH;
 
-	nrings = nma_is_hw(na) ? na->num_rx_rings : na->num_tx_rings;
-	kring = nma_is_hw(na) ? na->rx_rings : na->tx_rings;
+	nrings = nma_is_vp(na) ? na->num_tx_rings : na->num_rx_rings;
+	kring = nma_is_vp(na) ? na->tx_rings : na->rx_rings;
 	for (i = 0; i < nrings; i++) {
 		struct nm_bdg_fwd *ft;
 		struct nm_bdg_q *dstq;
@@ -970,28 +975,6 @@ netmap_sw_to_nic(struct netmap_adapter *na)
 	}
 }
 
-/* XXX should be combined to netmap_sync_to_host() ? */
-static void
-netmap_bdg_to_host(struct netmap_adapter *na)
-{
-	struct netmap_kring *kring = &na->rx_rings[0];
-	struct netmap_ring *ring = kring->ring;
-	u_int lim = kring->nkr_num_slots - 1;
-	struct mbq q = { NULL, NULL };
-
-	/* mark as if the host stack consumed everything (reserved must be 0) */
-	ring->cur += kring->nr_hwavail;
-	if (ring->cur > lim)
-		ring->cur -= lim + 1;
-	/* chain packets by mbuf from hwcur to cur */
-	netmap_grab_packets(kring, &q, 1);
-
-	/* synchronize hwcur and hwavail, and notify the hoststack */
-	kring->nr_hwcur = ring->cur;
-	kring->nr_hwavail = ring->avail = 0;
-	netmap_send_up(na->ifp, q.head);
-}
-
 /*
  * netmap_sync_to_host() passes packets up. We are called from a
  * system call in user process context, and the only contention
@@ -1023,6 +1006,16 @@ netmap_sync_to_host(struct netmap_adapter *na)
 	// na->nm_lock(na->ifp, NETMAP_CORE_UNLOCK, 0);
 
 	netmap_send_up(na->ifp, q.head);
+}
+
+/* SWNA(ifp)->txrings[0] is always NA(ifp)->txrings[NA(ifp)->num_txrings] */
+static int
+netmap_bdg_to_host(struct ifnet *ifp, u_int ring_nr, int do_lock)
+{
+	(void)ring_nr;
+	(void)do_lock;
+	netmap_sync_to_host(NA(ifp));
+	return 0;
 }
 
 /*
@@ -1488,6 +1481,7 @@ netmap_attach_sw(struct ifnet *ifp)
 	na->num_rx_rings = na->num_tx_rings = 1;
 	na->num_tx_desc = hw_na->num_tx_desc;
 	na->num_rx_desc = hw_na->num_rx_desc;
+	na->nm_txsync = netmap_bdg_to_host;
 }
 
 /* exported to kernel callers */
@@ -2196,8 +2190,8 @@ static int
 bdg_netmap_start(struct ifnet *ifp, struct mbuf *m)
 {
 	struct netmap_adapter *na = SWNA(ifp);
-	struct nm_bdg_fwd *ft = na->tx_rings[0].nkr_ft;
-	char *buf = NMB(&na->tx_rings[0].ring->slot[0]);
+	struct nm_bdg_fwd *ft = na->rx_rings[0].nkr_ft;
+	char *buf = NMB(&na->rx_rings[0].ring->slot[0]);
 	u_int len = MBUF_LEN(m);
 
 	if (!netmap_bridge_host)
@@ -2866,7 +2860,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na, u_int ring
 		struct netmap_adapter *dst_na = BDG_GET_VAR(b->bdg_ports[ifn]);
 		struct netmap_kring *kring;
 		struct netmap_ring *ring;
-		int j, lim, sent, locked, is_hw, howmany;
+		int j, lim, sent, locked, is_vp, howmany;
 		u_int dst_ring_nr = ring_nr;	/* XXX fixme */
 
 		if (!dst_na)
@@ -2880,7 +2874,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na, u_int ring
 
 		ring = NULL;
 		kring = NULL;
-		lim = sent = locked = is_hw = howmany = 0;
+		lim = sent = locked = is_vp = howmany = 0;
 		j = 0; /* XXX silence compiler */
 		/* inside, scan slots */
 		for (i = 0; likely(i < n); i++) {
@@ -2888,8 +2882,18 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na, u_int ring
 			if ((ft[i].ft_dst & dst) == 0)
 				continue;	/* not here */
 			if (!locked) {
-				is_hw = nma_is_hw(dst_na);
-				if (is_hw) { /* going to a physical port */
+				is_vp = nma_is_vp(dst_na);
+				if (is_vp) { /* a VALE port */
+					kring = &dst_na->rx_rings[ring_nr];
+					ring = kring->ring;
+					lim = kring->nkr_num_slots - 1;
+					dst_na->nm_lock(dst_ifp, NETMAP_RX_LOCK, ring_nr);
+					/* need to be locked to access these kring fields */
+					j = kring->nr_hwcur + kring->nr_hwavail;
+					if (j > lim)
+						j -= kring->nkr_num_slots;
+					howmany = lim - kring->nr_hwavail;
+				} else { /* hw or host stack */
 					kring = &dst_na->tx_rings[dst_ring_nr];
 					ring = kring->ring;
 					lim = kring->nkr_num_slots - 1;
@@ -2907,16 +2911,6 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na, u_int ring
 					 */
 					j = kring->nr_hwcur;
 					howmany = kring->nr_hwavail;
-				} else { /* a VALE port */
-					kring = &dst_na->rx_rings[ring_nr];
-					ring = kring->ring;
-					lim = kring->nkr_num_slots - 1;
-					dst_na->nm_lock(dst_ifp, NETMAP_RX_LOCK, ring_nr);
-					/* need to be locked to access these kring fields */
-					j = kring->nr_hwcur + kring->nr_hwavail;
-					if (j > lim)
-						j -= kring->nkr_num_slots;
-					howmany = lim - kring->nr_hwavail;
 				}
 				locked = 1;
 			}
@@ -2934,22 +2928,19 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na, u_int ring
 		}
 		if (locked) {
 			ND("sent %d on %s", sent, dst_ifp->if_xname);
-			if (is_hw) {
+			if (is_vp) {
+				if (sent) {
+					kring->nr_hwavail += sent;
+					selwakeuppri(&kring->si, PI_NET);
+				}
+				dst_na->nm_lock(dst_ifp, NETMAP_RX_UNLOCK, dst_ring_nr);
+			} else {
 				if (sent) {
 					ring->avail -= sent;
 					ring->cur = j;
 					dst_na->nm_txsync(dst_ifp, dst_ring_nr, 0);
 				}
 				dst_na->nm_lock(dst_ifp, NETMAP_TX_UNLOCK, dst_ring_nr);
-			} else {
-				if (sent) {
-					kring->nr_hwavail += sent;
-					if (nma_is_host(dst_na))
-						netmap_bdg_to_host(dst_na);
-					else
-						selwakeuppri(&kring->si, PI_NET);
-				}
-				dst_na->nm_lock(dst_ifp, NETMAP_RX_UNLOCK, dst_ring_nr);
 			}
 		}
 	}
@@ -3078,7 +3069,7 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na,
 		struct netmap_adapter *dst_na;
 		struct netmap_kring *kring;
 		struct netmap_ring *ring;
-		u_int dst_nr, is_hw, lim, j, sent = 0, d_i, next, brd_next;
+		u_int dst_nr, is_vp, lim, j, sent = 0, d_i, next, brd_next;
 		int howmany;
 		struct nm_bdg_q *d;
 
@@ -3098,20 +3089,9 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na,
 		 */
 		if (unlikely(!(dst_ifp->if_capenable & IFCAP_NETMAP)))
 			continue;
-		is_hw = nma_is_hw(dst_na);
+		is_vp = nma_is_vp(dst_na);
 		dst_nr = d_i & (NM_BDG_MAXRINGS-1);
-		if (is_hw) {
-			if (dst_nr >= dst_na->num_tx_rings)
-				dst_nr = dst_nr % dst_na->num_tx_rings;
-			kring = &dst_na->tx_rings[dst_nr];
-			ring = kring->ring;
-			lim = kring->nkr_num_slots - 1;
-			dst_na->nm_lock(dst_ifp, NETMAP_TX_LOCK, dst_nr);
-			dst_na->nm_txsync(dst_ifp, dst_nr, 0);
-			/* see nm_bdg_flush() */
-			j = kring->nr_hwcur;
-			howmany = kring->nr_hwavail;
-		} else {
+		if (is_vp) { /* virtual port */
 			if (dst_nr >= dst_na->num_rx_rings)
 				dst_nr = dst_nr % dst_na->num_rx_rings;
 			kring = &dst_na->rx_rings[dst_nr];
@@ -3122,6 +3102,17 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na,
 			if (j > lim)
 				j -= kring->nkr_num_slots;
 			howmany = lim - kring->nr_hwavail;
+		} else { /* hw or sw adapter */
+			if (dst_nr >= dst_na->num_tx_rings)
+				dst_nr = dst_nr % dst_na->num_tx_rings;
+			kring = &dst_na->tx_rings[dst_nr];
+			ring = kring->ring;
+			lim = kring->nkr_num_slots - 1;
+			dst_na->nm_lock(dst_ifp, NETMAP_TX_LOCK, dst_nr);
+			dst_na->nm_txsync(dst_ifp, dst_nr, 0);
+			/* see nm_bdg_flush() */
+			j = kring->nr_hwcur;
+			howmany = kring->nr_hwavail;
 		}
 		/* there is at least one either unicast or broadcast packet */
 		brd_next = brddst->bq_head;
@@ -3148,22 +3139,19 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na,
 		}
 		if (netmap_verbose && (howmany < 0))
 			D("rx ring full on %s", dst_ifp->if_xname);
-		if (is_hw) {
+		if (is_vp) {
+			if (sent) {
+				kring->nr_hwavail += sent;
+				selwakeuppri(&kring->si, PI_NET);
+			}
+			dst_na->nm_lock(dst_ifp, NETMAP_RX_UNLOCK, dst_nr);
+		} else {
 			if (sent) {
 				ring->avail -= sent;
 				ring->cur = j;
 				dst_na->nm_txsync(dst_ifp, dst_nr, 0);
 			}
 			dst_na->nm_lock(dst_ifp, NETMAP_TX_UNLOCK, dst_nr);
-		} else {
-			if (sent) {
-				kring->nr_hwavail += sent;
-				if (nma_is_host(dst_na))
-					netmap_bdg_to_host(dst_na);
-				else
-					selwakeuppri(&kring->si, PI_NET);
-			}
-			dst_na->nm_lock(dst_ifp, NETMAP_RX_UNLOCK, dst_nr);
 		}
 		d->bq_head = d->bq_tail = NM_BDG_BATCH; /* cleanup */
 	}
