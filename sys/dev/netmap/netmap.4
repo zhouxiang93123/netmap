@@ -186,7 +186,7 @@ struct nmreq {
 #define NETMAP_SW_RING  0x2000    /* we process the sw ring */
 #define NETMAP_NO_TX_POLL 0x1000  /* no gratuitous txsync on poll */
 #define NETMAP_RING_MASK 0xfff    /* the actual ring number */
-        uint16_t        spare1;
+        uint16_t        nr_cmd;
         uint32_t        spare2[4];
 };
 
