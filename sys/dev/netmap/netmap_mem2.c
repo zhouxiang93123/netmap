@@ -24,7 +24,7 @@
  */
 
 /*
- * $FreeBSD: head/sys/dev/netmap/netmap_mem2.c 234290 2012-04-14 16:44:18Z luigi $
+ * $FreeBSD: head/sys/dev/netmap/netmap_mem2.c 250441 2013-05-10 08:46:10Z luigi $
  *
  * (New) memory allocator for netmap
  */
@@ -381,7 +381,7 @@ netmap_obj_free_va(struct netmap_obj_pool *p, void *vaddr)
 		ssize_t relofs = (ssize_t) vaddr - (ssize_t) base;
 
 		/* Given address, is out of the scope of the current cluster.*/
-		if (vaddr < base || relofs > p->_clustsize)
+		if (vaddr < base || relofs >= p->_clustsize)
 			continue;
 
 		j = j + relofs / p->_objsize;
