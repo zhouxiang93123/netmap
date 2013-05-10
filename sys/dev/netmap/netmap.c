@@ -110,21 +110,6 @@ int netmap_verbose;
 static int netmap_no_timestamp; /* don't timestamp on rxsync */
 
 SYSCTL_NODE(_dev, OID_AUTO, netmap, CTLFLAG_RW, 0, "Netmap args");
-char mybuf[10];
-static int
-my_fn(SYSCTL_HANDLER_ARGS)
-{
-	int err;
-
-	D("called");
-	err = sysctl_handle_string(oidp, mybuf, sizeof(mybuf), req);
-	return err;
-}
-
-SYSCTL_STRING(_dev_netmap, OID_AUTO, ss, CTLFLAG_RW, mybuf, sizeof(mybuf), "");
-SYSCTL_PROC(_dev_netmap, OID_AUTO, p, CTLTYPE_STRING | CTLFLAG_RW,
-	NULL, 0, my_fn, "A", "");
-
 SYSCTL_INT(_dev_netmap, OID_AUTO, verbose,
     CTLFLAG_RW, &netmap_verbose, 0, "Verbose mode");
 SYSCTL_INT(_dev_netmap, OID_AUTO, no_timestamp,
