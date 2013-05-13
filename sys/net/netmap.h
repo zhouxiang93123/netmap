@@ -316,9 +316,10 @@ struct nmreq {
 #define NETMAP_NO_TX_POLL	0x1000	/* no automatic txsync on poll */
 #define NETMAP_RING_MASK 0xfff		/* the ring number */
 	uint16_t	nr_cmd;
-#define NETMAP_BDG_ATTACH	0x1
-#define NETMAP_BDG_DETACH	0x2
-#define NETMAP_BDG_LOOKUP_REG	0x4	// XXX what is this for ?
+#define NETMAP_BDG_ATTACH	0x1	/* attach the NIC */
+#define NETMAP_BDG_DETACH	0x2	/* detach the NIC */
+#define NETMAP_BDG_LOOKUP_REG	0x4	/* register lookup function */
+#define NETMAP_BDG_HOST		0x8	/* attach the host stack on ATTACH */
 	uint32_t	spare2[4];
 };
 

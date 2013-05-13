@@ -123,13 +123,10 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, no_pendintr,
 int netmap_drop = 0;	/* debugging */
 int netmap_flags = 0;	/* debug flags */
 int netmap_fwd = 0;	/* force transparent mode */
-int netmap_bridge_host = 0;	/* connect the host stack to the bridge */
 
 SYSCTL_INT(_dev_netmap, OID_AUTO, drop, CTLFLAG_RW, &netmap_drop, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, flags, CTLFLAG_RW, &netmap_flags, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, fwd, CTLFLAG_RW, &netmap_fwd, 0 , "");
-SYSCTL_INT(_dev_netmap, OID_AUTO, bridge_host, CTLFLAG_RW, &netmap_bridge_host,
-	0 , "");
 
 #ifdef NM_BRIDGE /* support for netmap virtual switch, called VALE */
 
@@ -633,7 +630,7 @@ bdg_if_rele(struct ifnet *ifp)
 			/* disconnect from bridge */
 			BDG_SET_VAR(b->bdg_ports[i], NULL);
 			na->na_bdg = NULL;
-			if (is_hw) {
+			if (is_hw && SWNA(ifp)->na_bdg) {
 				/* disconnect sw adapter too */
 				int j = SWNA(ifp)->bdg_port;
 				BDG_SET_VAR(b->bdg_ports[j], NULL);
@@ -1148,6 +1145,8 @@ no_port:
 			 */
 			struct netmap_adapter tmp_na;
 
+			if (nmr->nr_cmd) /* nr_cmd must be for a NIC */
+				goto no_port;
 			bzero(&tmp_na, sizeof(tmp_na));
 			/* bound checking */
 			if (nmr->nr_tx_rings < 1)
@@ -1169,15 +1168,18 @@ no_port:
 			/* bdg_netmap_attach creates a struct netmap_adapter */
 			bdg_netmap_attach(&tmp_na);
 		} else if (NETMAP_CAPABLE(iter)) { /* this is a NIC */
+			if (!(nmr->nr_cmd & NETMAP_BDG_ATTACH) &&
+			    !(nmr->nr_cmd & NETMAP_BDG_DETACH))
+				goto unref_no_port;
 			/* need an extra port for host stack */
-			if (netmap_bridge_host && cand2 == -1)
+			else if (nmr->nr_cmd & NETMAP_BDG_HOST && cand2 == -1)
 				goto unref_no_port;
 			else if (kern_netmap_regif(iter, nmr->nr_ringid))
 				goto unref_no_port;
 			/* the NIC is activated now */
 			// XXX b->act_ports |= (1<<cand);
 			/* bind the host stack to the bridge */
-			if (netmap_bridge_host) {
+			if (nmr->nr_cmd & NETMAP_BDG_HOST) {
 				BDG_SET_VAR(b->bdg_ports[cand2], SWNA(iter));
 				SWNA(iter)->bdg_port = cand2;
 				SWNA(iter)->na_bdg = b;
@@ -1197,8 +1199,8 @@ unref_no_port:
 		ND("attaching virtual bridge %p", b);
 	} while (0);
 	/* protect from invalid reference to the NIC */
-	if (!iter && (nmr->nr_cmd == NETMAP_BDG_ATTACH ||
-	    nmr->nr_cmd == NETMAP_BDG_DETACH))
+	if (!iter && (nmr->nr_cmd & NETMAP_BDG_ATTACH ||
+	    nmr->nr_cmd & NETMAP_BDG_DETACH))
 		return (ENXIO);
 	*ifp = iter;
 	if (! *ifp)
@@ -1493,25 +1495,18 @@ netmap_bdg_ctl(struct nmreq *nmr, BDG_LOOKUP_T func)
 	int cmd = nmr->nr_cmd;
 	int error = 0, i;
 
-	switch (cmd) {
-	case NETMAP_BDG_ATTACH:
-	case NETMAP_BDG_DETACH:
+	if (cmd & NETMAP_BDG_ATTACH || cmd & NETMAP_BDG_DETACH) {
 		error = get_ifp(nmr, &ifp);
 		if (error)
-			break;
-		if (!nma_is_hw(NA(ifp))) {
-			D("must specify a NIC, not %s", nmr->nr_name);
-			error = EINVAL;
-			break;
-		}
-	        if (cmd == NETMAP_BDG_DETACH)
+			return error;
+		else if (cmd & NETMAP_BDG_DETACH)
 			netmap_dtor(NA(ifp)->na_kpriv);
-		break;
-
-	case NETMAP_BDG_LOOKUP_REG:
+	} else if (cmd & NETMAP_BDG_LOOKUP_REG) {
 		/* register a lookup function to the given bridge.
 		 * nmr->nr_name must be just bridge's name
 		 */
+		if (!func)
+			return EINVAL;
 		BDG_LOCK();
 		for (i = 0; i < NM_BRIDGES; i++) {
 			b = nm_bridges + i;
@@ -1527,14 +1522,12 @@ netmap_bdg_ctl(struct nmreq *nmr, BDG_LOOKUP_T func)
 			b->nm_bdg_lookup = func;
 			BDG_WUNLOCK(b);
 		} else
-			error = EINVAL;
-		break;
-	default:
-		D("invalid cmd (nmr->nr_cmd) (%d)", cmd);
-		error = EINVAL;
-		break;
+			return EINVAL;
+	} else {
+		D("invalid cmd (nmr->nr_cmd) (0x%x)", cmd);
+		return EINVAL;
 	}
-	return error;
+	return 0;
 }
 
 /*
@@ -1630,7 +1623,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		}
 		/* possibly attach/detach NIC and VALE switch */
 		i = nmr->nr_cmd;
-		if (i == NETMAP_BDG_ATTACH || i == NETMAP_BDG_DETACH) {
+		if (i & NETMAP_BDG_ATTACH || i & NETMAP_BDG_DETACH) {
 			error = netmap_bdg_ctl(nmr, NULL);
 			break;
 		} else if (i != 0) {
@@ -2112,7 +2105,7 @@ netmap_attach(struct netmap_adapter *arg, int num_queues)
 
 	if (arg == NULL || ifp == NULL)
 		goto fail;
-	len = arg->na_flags & NAF_NO_SWNA ? sizeof(*na) : sizeof(*na) * 2;
+	len = nma_is_vp(arg) ? sizeof(*na) : sizeof(*na) * 2;
 	na = malloc(len, M_DEVBUF, M_NOWAIT | M_ZERO);
 	if (na == NULL)
 		goto fail;
@@ -2141,7 +2134,7 @@ netmap_attach(struct netmap_adapter *arg, int num_queues)
 	}
 	na->nm_ndo.ndo_start_xmit = linux_netmap_start;
 #endif
-	if (!(na->na_flags & NAF_NO_SWNA))
+	if (!nma_is_vp(arg))
 		netmap_attach_sw(ifp);
 	D("success for %s", ifp->if_xname);
 	return 0;
@@ -2194,7 +2187,7 @@ bdg_netmap_start(struct ifnet *ifp, struct mbuf *m)
 	char *buf = NMB(&na->rx_rings[0].ring->slot[0]);
 	u_int len = MBUF_LEN(m);
 
-	if (!netmap_bridge_host)
+	if (!na->na_bdg) /* SWNA is not configured to be attached */
 		return EBUSY;
 	m_copydata(m, 0, len, buf);
 	ft->ft_len = len;
@@ -3081,6 +3074,8 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na,
 		 */
 		if (unlikely(dst_na == NULL))
 			continue;
+		else if (dst_na->na_flags & NAF_SW_ONLY)
+			continue;
 		dst_ifp = dst_na->ifp;
 		/*
 		 * The interface may be in !netmap mode in two cases:
@@ -3278,8 +3273,6 @@ bdg_netmap_attach(struct netmap_adapter *arg)
 	na.nm_txsync = bdg_netmap_txsync;
 	na.nm_rxsync = bdg_netmap_rxsync;
 	na.nm_register = bdg_netmap_reg;
-	/* virtual interface does not support software adapter */
-	na.na_flags |= NAF_NO_SWNA;
 	netmap_attach(&na, na.num_tx_rings);
 }
 

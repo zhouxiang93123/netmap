@@ -12,12 +12,12 @@ bdgconfig(const char *ifname, int cmd)
 		bzero(&hwnmr, sizeof(hwnmr));
 		hwnmr.nr_version = NETMAP_API;
 		strncpy(hwnmr.nr_name, ifname, sizeof(hwnmr.nr_name));
-		hwnmr.spare1 = cmd;
+		hwnmr.nr_cmd = cmd;
 		error = ioctl(fd, NIOCREGIF, &hwnmr);
 		if (error == -1)
-			D("Unable to %s %s to the bridge", cmd == NETMAP_BDG_DETACH?"detach":"attach", ifname);
+			D("Unable to %s %s to the bridge", cmd & NETMAP_BDG_DETACH?"detach":"attach", ifname);
 		else
-			D("Success to %s %s to the bridge", cmd == NETMAP_BDG_DETACH?"detach":"attach", ifname);
+			D("Success to %s %s to the bridge", cmd & NETMAP_BDG_DETACH?"detach":"attach", ifname);
 	}
 	close(fd);
 	return error;
@@ -36,10 +36,11 @@ usage:
 			"%s arguments\n"
 			"\t-d interface	interface name to be detached\n"
 			"\t-a interface	interface name to be attached\n"
+			"\t-h interface	interface name to be attached with the host stack\n"
 			"", cmd);
 		return 0;
 	}
-	while ((ch = getopt(argc, argv, "d:a:")) != -1) {
+	while ((ch = getopt(argc, argv, "d:a:h:")) != -1) {
 		switch (ch) {
 		default:
 			D("bad option %c %s", ch, optarg);
@@ -51,6 +52,9 @@ usage:
 
 		case 'a':
 			bdgconfig(optarg, NETMAP_BDG_ATTACH);
+			break;
+		case 'h':
+			bdgconfig(optarg, NETMAP_BDG_ATTACH | NETMAP_BDG_HOST);
 			break;
 		}
 	}

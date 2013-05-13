@@ -166,9 +166,7 @@ struct netmap_adapter {
 #define NAF_SKIP_INTR	1	/* use the regular interrupt handler.
 				 * useful during initialization
 				 */
-#define NAF_NO_SWNA	2	/* tell the attach() not to create another
-				 * adapter to accommodate sw rings
-				 */
+#define NAF_SW_ONLY	2	/* forward packets only to sw adapter */
 	int refcount; /* number of user-space descriptors using this
 			 interface, which is equal to the number of
 			 struct netmap_if objs in the mapped region. */
