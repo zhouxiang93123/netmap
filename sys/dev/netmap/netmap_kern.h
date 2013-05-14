@@ -65,7 +65,7 @@
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,37)
 #define IFCAP_NETMAP	0x8000
 #else
-#define IFCAP_NETMAP	0x100000
+#define IFCAP_NETMAP	0x200000
 #endif
 
 #elif defined (__APPLE__)
