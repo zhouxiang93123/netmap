@@ -54,21 +54,67 @@ multicore systems.
 .Nm
 requires explicit support in device drivers.
 For a list of supported devices, see the end of this manual page.
+.Pp
+.Nm
+also implements a software switch called
+.Nm VALE
+which has many of the features of the native bridge,
+but with much higher performance.
+.Nm VALE
+switch instances and ports are created and destroyed
+dynamically as clients (e.g. virtual machines) connect to it.
+Network interfaces and the host stack can also be connected to a
+.Nm VALE
+switch.
 .Sh OPERATION
 .Nm
-clients must first open the
+clients must first
 .Pa open("/dev/netmap") ,
 and then issue an
 .Pa ioctl(...,NIOCREGIF,...)
-to bind the file descriptor to a network device.
-.Pp
-When a device is put in
+to bind the file descriptor.
 .Nm
-mode, its data path is disconnected from the host stack.
-The processes owning the file descriptor
+has multiple modes of operation controlled by the
+content of the
+.Pa struct nmreq
+passed to the
+.Pa ioctl() .
+In particular, the
+.Em nr_name
+field specifies whether the client operates on a physical network
+interface or on a port of a
+.Nm VALE
+switch, as follows:
+.Pp
+.Bl -tag -width XXXX
+.It Dv Interface name (e.g.  .Em em0 , eth1, ...)
+The data path of the interface is disconnected from the host stack.
+The file descriptor is bound either to the NIC side, or to the
+host stack
+.It Dv valeXXX:YYY (arbitrary XXX and YYY)
+The file descriptor is bound to port YYY of a VALE switch called XXX,
+where XXX and YYY are arbitrary alphanumeric strings (subject
+to a maximum size if IFNAMSIZ (16 bytes) and YYY not matching
+any existing interface.
+.Pp
+The switch and the port are created if not existing.
+.It Dv valeXXX:ifname (ifname is an existing interface)
+The named interface and the corresponding host stack port are
+connected to the vale switch named XXX.
+Packet I/O is not possible on this file descriptor,
+and traffic between the NIC, the switch and the host stack
+is managed as in an ethernet switch.
+The caller should issue a
+.Pa close()
+and terminate.
+.El
+.Pp
+Irrespective of the type of binding,
+the processes owning the file descriptor
 can exchange packets with the device, or with the host stack,
 through an mmapped memory region that contains pre-allocated
 buffers and metadata.
+.El
 .Pp
 Non blocking I/O is done with special
 .Pa ioctl()'s ,
@@ -91,45 +137,100 @@ The data structures in shared memory are the following:
 .Pp
 .Bl -tag -width XXX
 .It Dv struct netmap_if (one per interface)
-indicates the number of rings supported by an interface, their
+Indicates the number of rings supported by an interface, their
 sizes, and the offsets of the
 .Pa netmap_rings
 associated to the interface.
-The offset of a
+.Pp
 .Pa struct netmap_if
-in the shared memory region is indicated by the
+is located at an offset
 .Pa nr_offset
+in the shared memory region is indicated by the
 field in the structure returned by the
 .Pa NIOCREGIF
 (see below).
 .Bd -literal
 struct netmap_if {
-    char ni_name[IFNAMSIZ]; /* name of the interface. */
-    const u_int ni_num_queues; /* number of hw ring pairs */
-    const ssize_t   ring_ofs[]; /* offset of tx and rx rings */
+    char          ni_name[IFNAMSIZ]; /* name of the interface.    */
+    const u_int   ni_version;        /* API version               */
+    const u_int   ni_rx_rings;       /* number of rx ring pairs   */
+    const u_int   ni_tx_rings;       /* if 0, same as ni_rx_rings */
+    const ssize_t ring_ofs[];        /* offset of tx and rx rings */
 };
 .Ed
 .It Dv struct netmap_ring (one per ring)
-contains the index of the current read or write slot (cur),
-the number of slots available for reception or transmission (avail),
+Contains the positions in the transmit and receive rings to
+synchronize the kernel and the application,
 and an array of
 .Pa slots
 describing the buffers.
-There is one ring pair for each of the N hardware ring pairs
-supported by the card (numbered 0..N-1), plus
-one ring pair (numbered N) for packets from/to the host stack.
+'reserved' is used in receive rings to tell the kernel the
+number of slots after 'cur' that are still in usr
+indicates how many slots starting from 'cur'
+the 
+.Pp
+Each physical interface has one
+.Pa netmap_ring
+for each hardware transmit and receive ring,
+plus one extra transmit and one receive structure
+that connect to the host stack.
 .Bd -literal
 struct netmap_ring {
-    const ssize_t buf_ofs;
-    const uint32_t num_slots; /* number of slots in the ring. */
-    uint32_t avail;           /* number of usable slots */
-    uint32_t cur;             /* 'current' index for the user side */
-    uint32_t reserved;        /* not refilled before current */
+    const ssize_t  buf_ofs;   /* see details */
+    const uint32_t num_slots; /* number of slots in the ring */
+    uint32_t       avail;     /* number of usable slots      */
+    uint32_t       cur;       /* 'current' read/write index  */
+    uint32_t       reserved;  /* not refilled before current */
 
     const uint16_t nr_buf_size;
-    uint16_t flags;
-    struct netmap_slot slot[0]; /* array of slots. */
+    uint16_t       flags;
+#define NR_TIMESTAMP 0x0002   /* set timestamp on *sync()    */
+#define NR_FORWARD   0x0004   /* enable NS_FORWARD for ring  */
+#define NR_RX_TSTMP  0x0008   /* set rx timestamp in slots   */
+    struct timeval ts;
+    struct netmap_slot slot[0]; /* array of slots            */
 }
+.Ed
+.Pp
+In transmit rings, after a system call 'cur' indicates
+the first slot that can be used for transmissions,
+and 'avail' reports how many of them are available.
+Before the next netmap-related system call on the file
+descriptor, the application should fill buffers and
+slots with data, and update 'cur' and 'avail'
+accordingly, as shown in the figure below:
+.Bd -literal
+    
+              cur 
+               |----- avail ---|   (after syscall)
+               v
+     TX  [*****aaaaaaaaaaaaaaaaa**]
+     TX  [*****TTTTTaaaaaaaaaaaa**]
+                    ^ 
+                    |-- avail --|   (before syscall)
+                   cur
+.Ed
+
+In receive rings, after a system call 'cur' indicates
+the first slot that contains a valid packet,
+and 'avail' reports how many of them are available.
+Before the next netmap-related system call on the file
+descriptor, the application can process buffers and
+release them to the kernel updating
+'cur' and 'avail' accordingly, as shown in the figure below.
+Receive rings have an additional field called 'reserved'
+to indicate how many buffers before 'cur' are still
+under processing and cannot be released.
+.Bd -literal
+                 cur 
+            |-res-|-- avail --|   (after syscall)
+                  v
+     RX  [**rrrrrrRRRRRRRRRRRR******]
+     RX  [**...........rrrrRRR******]
+                       |res|--|<avail (before syscall)
+                           ^  
+                          cur
+
 .Ed
 .It Dv struct netmap_slot (one per packet)
 contains the metadata for a packet: a buffer index (buf_idx),
@@ -202,15 +303,27 @@ command codes below are defined in
 and are:
 .Bl -tag -width XXXX
 .It Dv NIOCGINFO
-returns information about the interface named in nr_name.
-On return, nr_memsize indicates the size of the shared netmap
-memory region (this is device-independent),
-nr_tx_slots and nr_rx_slots indicates how many buffers are in a
-transmit and receive ring,
-nr_tx_rings and nr_rx_rings indicates the number of transmit
-and receive rings supported by the hardware.
+returns EINVAL if the named device does not support netmap.
+Otherwise, it returns 0 and (advisory) information
+about the interface.
+Note that all the information below can change before the
+interface is actually put in netmap mode.
 .Pp
-If the device does not support netmap, the ioctl returns EINVAL.
+.Pa nr_memsize
+indicates the size of the netmap
+memory region. Physical devices all share the same memory region,
+whereas VALE ports may have independent regions for each port.
+These sizes can be set through system-wise sysctl variables.
+.Pa nr_tx_slots, nr_rx_slots
+indicate the size of transmit and receive rings.
+.Pa nr_tx_rings, nr_rx_rings
+indicate the number of transmit
+and receive rings.
+Both ring number and sizes may be configured at runtime
+using interface-specific functions (e.g.
+.Pa sysctl
+or
+.Pa ethtool .
 .It Dv NIOCREGIF
 puts the interface named in nr_name into netmap mode, disconnecting
 it from the host stack, and/or defines which rings are controlled
