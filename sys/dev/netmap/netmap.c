@@ -3025,10 +3025,10 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na,
 		struct nm_bdg_q *d;
 
 		dst_port = b->nm_bdg_lookup(buf, ft[i].ft_len, &dst_ring, na);
-		if (unlikely(dst_port > NM_BDG_MAXPORTS)) {
-			continue;
-		} else if (dst_port == NM_BDG_NOPORT) {
+		if (dst_port == NM_BDG_NOPORT) {
 			continue; /* this packet is identified to be dropped */
+		} else if (unlikely(dst_port > NM_BDG_MAXPORTS)) {
+			continue;
 		} else if (dst_port == NM_BDG_BROADCAST) {
 			dst_ring = 0; /* broadcasts always go to ring 0 */
 		} else if (dst_port == me || !BDG_GET_VAR(b->bdg_ports[dst_port])) {
