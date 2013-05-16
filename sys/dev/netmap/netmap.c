@@ -3024,7 +3024,8 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na,
 			continue;
 		} else if (dst_port == NM_BDG_BROADCAST) {
 			dst_ring = 0; /* broadcasts always go to ring 0 */
-		} else if (dst_port == me || !BDG_GET_VAR(b->bdg_ports[dst_port])) {
+		} else if (unlikely(dst_port == me ||
+		    !BDG_GET_VAR(b->bdg_ports[dst_port]))) {
 			continue;
 		}
 
@@ -3047,9 +3048,9 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na,
 	 */
 	brddst = dst_ents + NM_BDG_BROADCAST * NM_BDG_MAXRINGS;
 	if (brddst->bq_head != NM_BDG_BATCH) {
-		for (i = 0; i < NM_BDG_MAXPORTS; i++) {
+		for (i = 0; likely(i < NM_BDG_MAXPORTS); i++) {
 			uint16_t d_i = i * NM_BDG_MAXRINGS;
-			if (i == me || !BDG_GET_VAR(b->bdg_ports[i]))
+			if (unlikely(i == me) || !BDG_GET_VAR(b->bdg_ports[i]))
 				continue;
 			else if (dst_ents[d_i].bq_head == NM_BDG_BATCH)
 				dsts[num_dsts++] = d_i;
