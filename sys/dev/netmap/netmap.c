@@ -663,7 +663,11 @@ nm_if_rele(struct ifnet *ifp)
 #ifndef NM_BRIDGE
 	if_rele(ifp);
 #else /* NM_BRIDGE */
-	if (strncmp(ifp->if_xname, NM_NAME, sizeof(NM_NAME) - 1)) /* NIC */
+	/* netmap implementation always uses nm_if_rele(), including error
+	 * handling of ifunit_ref().  So we check capability first.
+	 */
+	if (!NETMAP_CAPABLE(ifp) ||
+	    (NETMAP_CAPABLE(ifp) && nma_is_hw(NA(ifp)))) /* NIC */
 		if_rele(ifp);
 	else /* virtual port */
 		bdg_if_rele(ifp);
