@@ -181,7 +181,7 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
 
 static void bdg_netmap_attach(struct netmap_adapter *);
 static int bdg_netmap_reg(struct ifnet *ifp, int onoff);
-static int kern_netmap_regif(struct ifnet *ifp, uint16_t ringid);
+static int kern_netmap_regif(struct nmreq *nmr);
 
 /* per-tx-queue entry */
 struct nm_bdg_fwd {	/* forwarding entry for a bridge */
@@ -279,6 +279,16 @@ nma_is_hw(struct netmap_adapter *na)
 	/* In case of sw adapter, nm_register is NULL */
 	return !nma_is_vp(na) && !nma_is_host(na);
 }
+
+/*
+ * Regarding holding a NIC, if the NIC is owned by the kernel
+ * (i.e., bridge), neither another bridge nor user can use it;
+ * if the NIC is owned by a user, only users can share it.
+ * Evaluation must be done under NMA_LOCK().
+ */
+#define NETMAP_OWNED_BY_KERN(ifp)	(!nma_is_vp(NA(ifp)) && NA(ifp)->na_bdg)
+#define NETMAP_OWNED_BY_ANY(ifp) \
+	(NETMAP_OWNED_BY_KERN(ifp) || (NA(ifp)->refcount > 0))
 
 /*
  * NA(ifp)->bdg_port	port index
@@ -600,19 +610,28 @@ netmap_dtor_locked(void *data)
 	netmap_if_free(nifp);
 }
 
-#ifdef NM_BRIDGE
 /* we assume netmap adapter exists */
 static void
-bdg_if_rele(struct ifnet *ifp)
+nm_if_rele(struct ifnet *ifp)
 {
+#ifndef NM_BRIDGE
+	if_rele(ifp);
+#else /* NM_BRIDGE */
 	int i, full = 0, is_hw;
-	struct netmap_adapter *na = NA(ifp);
-	struct nm_bridge *b = na->na_bdg;
+	struct nm_bridge *b;
+	struct netmap_adapter *na;
 
-	if (!b)
+	/* I can be called not only for get_ifp()-ed references where netmap's
+	 * capability is guaranteed, but also for non-netmap-capable NICs.
+	 */
+	if (!NETMAP_CAPABLE(ifp) || (NETMAP_CAPABLE(ifp) && !NA(ifp)->na_bdg)) {
+		if_rele(ifp);
 		return;
-	else if (!DROP_BDG_REF(ifp))
+	} else if (!DROP_BDG_REF(ifp))
 		return;
+
+	na = NA(ifp);
+	b = na->na_bdg;
 	is_hw = nma_is_hw(na);
 
 	BDG_WLOCK(b);
@@ -650,29 +669,14 @@ bdg_if_rele(struct ifnet *ifp)
 	}
 	if (na->na_bdg) /* still attached to the bridge */
 		D("ouch, cannot find ifp to remove");
-	else if (!is_hw) {
+	else if (is_hw)
+		if_rele(ifp);
+	else {
 		bzero(na, sizeof(*na));
 		free(na, M_DEVBUF);
 		bzero(ifp, sizeof(*ifp));
 		free(ifp, M_DEVBUF);
 	}
-}
-#endif /* NM_BRIDGE */
-
-static void
-nm_if_rele(struct ifnet *ifp)
-{
-#ifndef NM_BRIDGE
-	if_rele(ifp);
-#else /* NM_BRIDGE */
-	/* netmap implementation always uses nm_if_rele(), including error
-	 * handling of ifunit_ref().  So we check capability first.
-	 */
-	if (!NETMAP_CAPABLE(ifp) ||
-	    (NETMAP_CAPABLE(ifp) && nma_is_hw(NA(ifp)))) /* NIC */
-		if_rele(ifp);
-	else /* virtual port */
-		bdg_if_rele(ifp);
 #endif /* NM_BRIDGE */
 }
 
@@ -690,10 +694,6 @@ netmap_dtor(void *data)
 		netmap_dtor_locked(data);
 		na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
 
-		if (NETMAP_OWNED_BY_KERN(ifp)) {
-			na->na_kpriv = NULL;
-			bdg_if_rele(ifp);
-		}
 		nm_if_rele(ifp); /* might also destroy *na */
 	}
 	if (priv->ref_done) {
@@ -1075,6 +1075,16 @@ netmap_sync_from_host(struct netmap_adapter *na, struct thread *td, void *pwait)
  * Return ENXIO if the interface does not exist, EINVAL if netmap
  * is not supported by the interface.
  * If successful, hold a reference.
+ *
+ * During the NIC is attached to a bridge, reference is managed
+ * at na->na_bdg_refcount using ADD/DROP_BDG_REF() as well as
+ * virtual ports.  Hence, on the final DROP_BDG_REF(), the NIC
+ * is detached from the bridge, then ifp's refcount is dropped (this
+ * is equivalent to that ifp is destroyed in case of virtual ports.
+ *
+ * This function uses if_rele() when we want to prevent the NIC from
+ * being detached from the bridge in error handling.  But once refcount
+ * is acquired by this function, it must be released using nm_if_rele().
  */
 static int
 get_ifp(struct nmreq *nmr, struct ifnet **ifp)
@@ -1083,14 +1093,17 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp)
 	int namelen = strlen(name);
 #ifdef NM_BRIDGE
 	struct ifnet *iter = NULL;
+	int no_prefix = 0;
 
 	do {
 		struct nm_bridge *b;
 		struct netmap_adapter *na;
 		int i, cand = -1, cand2 = -1;
 
-		if (strncmp(name, NM_NAME, sizeof(NM_NAME) - 1))
+		if (strncmp(name, NM_NAME, sizeof(NM_NAME) - 1)) {
+			no_prefix = 1;
 			break;
+		}
 		b = nm_find_bridge(name);
 		if (b == NULL) {
 			D("no bridges available for '%s'", name);
@@ -1105,22 +1118,16 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp)
 				if (cand == -1)
 					cand = i; /* potential insert point */
 				else if (cand2 == -1)
-					cand2 = i;
+					cand2 = i; /* for host stack */
 				continue;
 			}
 			iter = na->ifp;
 			/* XXX make sure the name only contains one : */
-			if (!strcmp(iter->if_xname, name)) {
-				/* must be a software VALE port */
+			if (!strcmp(iter->if_xname, name) /* virtual port */ ||
+			    (namelen > b->namelen && !strcmp(iter->if_xname,
+			    name + b->namelen + 1)) /* NIC */) {
 				ADD_BDG_REF(iter);
 				ND("found existing interface");
-				BDG_WUNLOCK(b);
-				break;
-			} else if (namelen > b->namelen &&
-			     !strcmp(iter->if_xname, name + b->namelen + 1)) {
-				/* must be a NIC port */
-				/* NIC is not in the context of any process */
-				ND("found existing NIC");
 				BDG_WUNLOCK(b);
 				break;
 			}
@@ -1174,15 +1181,14 @@ no_port:
 			/* bdg_netmap_attach creates a struct netmap_adapter */
 			bdg_netmap_attach(&tmp_na);
 		} else if (NETMAP_CAPABLE(iter)) { /* this is a NIC */
-			if (!(nmr->nr_cmd & NETMAP_BDG_ATTACH) &&
-			    !(nmr->nr_cmd & NETMAP_BDG_DETACH))
-				goto unref_no_port;
-			/* need an extra port for host stack */
-			else if (nmr->nr_cmd & NETMAP_BDG_HOST && cand2 == -1)
-				goto unref_no_port;
-			else if (kern_netmap_regif(iter, nmr->nr_ringid))
-				goto unref_no_port;
-			/* the NIC is activated now */
+			/* cannot attach the NIC that any user or another
+			 * bridge already holds.
+			 */
+			if (NETMAP_OWNED_BY_ANY(iter) || cand2 == -1) {
+ifunit_rele:
+				if_rele(iter); /* don't detach from bridge */
+				goto no_port;
+			}
 			// XXX b->act_ports |= (1<<cand);
 			/* bind the host stack to the bridge */
 			if (nmr->nr_cmd & NETMAP_BDG_HOST) {
@@ -1190,11 +1196,8 @@ no_port:
 				SWNA(iter)->bdg_port = cand2;
 				SWNA(iter)->na_bdg = b;
 			}
-		} else { /* non-netmap NIC */
-unref_no_port:
-			nm_if_rele(iter);
-			goto no_port;
-		}
+		} else /* not a netmap-capable NIC */
+			goto ifunit_rele;
 		na = NA(iter);
 		na->bdg_port = cand;
 		/* bind the port to the bridge (virtual ports are not active) */
@@ -1204,10 +1207,6 @@ unref_no_port:
 		BDG_WUNLOCK(b);
 		ND("attaching virtual bridge %p", b);
 	} while (0);
-	/* protect from invalid reference to the NIC */
-	if (!iter && (nmr->nr_cmd & NETMAP_BDG_ATTACH ||
-	    nmr->nr_cmd & NETMAP_BDG_DETACH))
-		return (ENXIO);
 	*ifp = iter;
 	if (! *ifp)
 #endif /* NM_BRIDGE */
@@ -1217,8 +1216,16 @@ unref_no_port:
 	/* can do this if the capability exists and if_pspare[0]
 	 * points to the netmap descriptor.
 	 */
-	if (NETMAP_CAPABLE(*ifp))
+	if (NETMAP_CAPABLE(*ifp)) {
+#ifdef NM_BRIDGE
+		/* Users cannot use the NIC attached to a bridge directly */
+		if (no_prefix && NETMAP_OWNED_BY_KERN(*ifp)) {
+			if_rele(*ifp); /* don't detach from bridge */
+			return EINVAL;
+		} else
+#endif /* NM_BRIDGE */
 		return 0;	/* valid pointer, we hold the refcount */
+	}
 	nm_if_rele(*ifp);
 	return EINVAL;	// not NETMAP capable
 }
@@ -1405,43 +1412,67 @@ out:
 	return nifp;
 }
 
-
-/* We must be already sure this ifp supports netmap */
+/* Process NETMAP_BDG_ATTACH and NETMAP_BDG_DETACH */
 static int
-kern_netmap_regif(struct ifnet *ifp, uint16_t ringid)
+kern_netmap_regif(struct nmreq *nmr)
 {
-	struct netmap_adapter *na = NA(ifp);
+	struct ifnet *ifp;
 	struct netmap_if *nifp;
-	struct netmap_priv_d *kpriv;
+	struct netmap_priv_d *npriv;
 	int error;
 
-	kpriv = malloc(sizeof(*kpriv), M_DEVBUF, M_NOWAIT|M_ZERO);
-	if (kpriv == NULL)
+	npriv = malloc(sizeof(*npriv), M_DEVBUF, M_NOWAIT|M_ZERO);
+	if (npriv == NULL)
 		return ENOMEM;
-	error = netmap_get_memory(kpriv);
-	if (error)
-		goto error;
-	NMA_LOCK();
-	if (NETMAP_OWNED_BY_ANY(ifp)) {
-		/* kernel's access is exclusive */
-		NMA_UNLOCK();
-		error = EBUSY;
-		goto error;
-	}
-	nifp = netmap_do_regif(kpriv, ifp, ringid, &error);
-	if (!nifp) {
-		NMA_UNLOCK();
-error:
-		bzero(kpriv, sizeof(*kpriv));
-		free(kpriv, M_DEVBUF);
+	error = netmap_get_memory(npriv);
+	if (error) {
+free_exit:
+		bzero(npriv, sizeof(*npriv));
+		free(npriv, M_DEVBUF);
 		return error;
 	}
+
+	NMA_LOCK();
+	error = get_ifp(nmr, &ifp);
+	if (error) { /* no device, or another bridge or user owns the device */
+		NMA_UNLOCK();
+		goto free_exit;
+	} else if (!NETMAP_OWNED_BY_KERN(ifp)) {
+		/* got reference to a virtual port or direct access to a NIC.
+		 * perhaps specified no bridge's prefix or wrong NIC's name
+		 */
+		error = EINVAL;
+unref_exit:
+		nm_if_rele(ifp);
+		NMA_UNLOCK();
+		goto free_exit;
+	}
+
+	if (nmr->nr_cmd & NETMAP_BDG_DETACH) {
+		if (NA(ifp)->refcount == 0) { /* not registered */
+			error = EINVAL;
+			goto unref_exit;
+		}
+		NMA_UNLOCK();
+
+		netmap_dtor(NA(ifp)->na_kpriv); /* unregister */
+		NA(ifp)->na_kpriv = NULL;
+		nm_if_rele(ifp); /* detach from the bridge */
+		goto free_exit;
+	} else if (NA(ifp)->refcount > 0) { /* already registered */
+		error = EINVAL;
+		goto unref_exit;
+	}
+
+	nifp = netmap_do_regif(npriv, ifp, nmr->nr_ringid, &error);
+	if (!nifp)
+		goto unref_exit;
 	wmb(); // XXX do we need it ?
-	kpriv->np_nifp = nifp;
-	na->na_kpriv = kpriv;
+	npriv->np_nifp = nifp;
+	NA(ifp)->na_kpriv = npriv;
 	NMA_UNLOCK();
 	D("registered %s to netmap-mode", ifp->if_xname);
-	return error;
+	return 0;
 }
 
 /* CORE_LOCK is not necessary */
@@ -1496,17 +1527,14 @@ netmap_attach_sw(struct ifnet *ifp)
 int
 netmap_bdg_ctl(struct nmreq *nmr, BDG_LOOKUP_T func)
 {
-	struct ifnet *ifp;
 	struct nm_bridge *b;
 	int cmd = nmr->nr_cmd;
 	int error = 0, i;
 
 	if (cmd & NETMAP_BDG_ATTACH || cmd & NETMAP_BDG_DETACH) {
-		error = get_ifp(nmr, &ifp);
+		error = kern_netmap_regif(nmr);
 		if (error)
 			return error;
-		else if (cmd & NETMAP_BDG_DETACH)
-			netmap_dtor(NA(ifp)->na_kpriv);
 	} else if (cmd & NETMAP_BDG_LOOKUP_REG) {
 		/* register a lookup function to the given bridge.
 		 * nmr->nr_name must be just bridge's name
@@ -1516,19 +1544,18 @@ netmap_bdg_ctl(struct nmreq *nmr, BDG_LOOKUP_T func)
 		BDG_LOCK();
 		for (i = 0; i < NM_BRIDGES; i++) {
 			b = nm_bridges + i;
-			if (!b->namelen)
+			if (!b->namelen || (b->namelen != strlen(nmr->nr_name)))
 				continue;
 			else if (!strncmp(nmr->nr_name, b->basename,
 			    b->namelen))
 				break;
 		}
 		BDG_UNLOCK();
-		if (i < NM_BRIDGES) {
-			BDG_WLOCK(b);
-			b->nm_bdg_lookup = func;
-			BDG_WUNLOCK(b);
-		} else
+		if (i == NM_BRIDGES)
 			return EINVAL;
+		BDG_WLOCK(b);
+		b->nm_bdg_lookup = func;
+		BDG_WUNLOCK(b);
 	} else {
 		D("invalid cmd (nmr->nr_cmd) (0x%x)", cmd);
 		return EINVAL;
@@ -1609,11 +1636,16 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		nmr->nr_rx_slots = nmr->nr_tx_slots = 0;
 		if (nmr->nr_name[0] == '\0')	/* just get memory info */
 			break;
+		/* lock because get_ifp and update_config see na->refcount */
+		NMA_LOCK();
 		error = get_ifp(nmr, &ifp); /* get a refcount */
-		if (error)
+		if (error) {
+			NMA_UNLOCK();
 			break;
+		}
 		na = NA(ifp); /* retrieve netmap_adapter */
 		netmap_update_config(na);
+		NMA_UNLOCK();
 		nmr->nr_rx_rings = na->num_rx_rings;
 		nmr->nr_tx_rings = na->num_tx_rings;
 		nmr->nr_rx_slots = na->num_rx_desc;
@@ -1648,27 +1680,24 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		NMA_LOCK();
 		if (priv->np_ifp != NULL) {	/* thread already registered */
 			error = netmap_set_ringid(priv, nmr->nr_ringid);
+unlock_out:
 			NMA_UNLOCK();
 			break;
 		}
 		/* find the interface and a reference */
 		error = get_ifp(nmr, &ifp); /* keep reference */
-		if (error) {
-			NMA_UNLOCK();
-			break;
-		} else if (NETMAP_OWNED_BY_KERN(ifp)) {
-			error = EBUSY;
+		if (error)
+			goto unlock_out;
+		else if (NETMAP_OWNED_BY_KERN(ifp)) {
 			nm_if_rele(ifp);
-			NMA_UNLOCK();
-			break;
+			goto unlock_out;
 		}
 		nifp = netmap_do_regif(priv, ifp, nmr->nr_ringid, &error);
 		if (!nifp) {    /* reg. failed, release priv and ref */
 			nm_if_rele(ifp);        /* return the refcount */
 			priv->np_ifp = NULL;
 			priv->np_nifp = NULL;
-			NMA_UNLOCK();
-			break;
+			goto unlock_out;
 		}
 
 		/* the following assignment is a commitment.
