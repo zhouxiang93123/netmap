@@ -321,20 +321,20 @@ static int
 bdgconfig(const char *ifname, int cmd)
 {
 	int error = 0, fd = open("/dev/netmap", O_RDWR);
-	struct nmreq hwnmr;
+	struct nmreq nmr;
 
 	if (fd == -1)
 		D("Unable to open /dev/netmap");
 	else {
-		bzero(&hwnmr, sizeof(hwnmr));
-		hwnmr.nr_version = NETMAP_API;
-		strncpy(hwnmr.nr_name, ifname, sizeof(hwnmr.nr_name));
-		hwnmr.nr_cmd = cmd;
-		error = ioctl(fd, NIOCREGIF, &hwnmr);
+		bzero(&nmr, sizeof(nmr));
+		nmr.nr_version = NETMAP_API;
+		strncpy(nmr.nr_name, ifname, sizeof(nmr.nr_name));
+		nmr.nr_cmd = cmd;
+		error = ioctl(fd, NIOCREGIF, &nmr);
 		if (error == -1)
-			D("Unable to %s %s to the bridge", cmd == NETMAP_BDG_DETACH?"detach":"attach", ifname);
+			D("Unable to %s %s to the bridge", cmd & NETMAP_BDG_DETACH?"detach":"attach", ifname);
 		else
-			D("Success to %s %s to the bridge", cmd == NETMAP_BDG_DETACH?"detach":"attach", ifname);
+			D("Success to %s %s to the bridge", cmd & NETMAP_BDG_DETACH?"detach":"attach", ifname);
 	}
 	close(fd);
 	return error;
