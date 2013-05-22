@@ -272,7 +272,7 @@ td_body(void *data)
 #endif
 	{
 		/* main loop.*/
-		D("testing %ld cycles", t->g->m_cycles);
+		D("testing %"PRIu64" cycles", t->g->m_cycles);
 		gettimeofday(&t->tic, NULL);
 		t->g->fn(t);
 		gettimeofday(&t->toc, NULL);
