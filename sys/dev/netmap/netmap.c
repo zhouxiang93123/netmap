@@ -334,6 +334,8 @@ nm_find_bridge(const char *name)
 		b = nm_bridges + i;
 		if (b->namelen == 0)
 			e = i;	/* record empty slot */
+		else if (b->namelen != namelen)
+			continue;
 		else if (strncmp(name, b->basename, namelen) == 0) {
 			ND("found '%.*s' at %d", namelen, name, i);
 			break;
