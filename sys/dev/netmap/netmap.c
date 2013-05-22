@@ -119,6 +119,9 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, mitigate, CTLFLAG_RW, &netmap_mitigate, 0, "")
 int netmap_no_pendintr = 1;
 SYSCTL_INT(_dev_netmap, OID_AUTO, no_pendintr,
     CTLFLAG_RW, &netmap_no_pendintr, 0, "Always look for new received packets.");
+int netmap_txsync_retry = 2;
+SYSCTL_INT(_dev_netmap, OID_AUTO, txsync_retry, CTLFLAG_RW,
+    &netmap_txsync_retry, 0 , "Number of txsync loops in bridge's flush.");
 
 int netmap_drop = 0;	/* debugging */
 int netmap_flags = 0;	/* debug flags */
@@ -3099,7 +3102,7 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na,
 		struct netmap_kring *kring;
 		struct netmap_ring *ring;
 		u_int dst_nr, is_vp, lim, j, sent = 0, d_i, next, brd_next;
-		int howmany;
+		int howmany, retry = netmap_txsync_retry;
 		struct nm_bdg_q *d;
 
 		d_i = dsts[i];
@@ -3120,6 +3123,11 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na,
 		 */
 		if (unlikely(!(dst_ifp->if_capenable & IFCAP_NETMAP)))
 			continue;
+
+		/* there is at least one either unicast or broadcast packet */
+		brd_next = brddst->bq_head;
+		next = d->bq_head;
+
 		is_vp = nma_is_vp(dst_na);
 		dst_nr = d_i & (NM_BDG_MAXRINGS-1);
 		if (is_vp) { /* virtual port */
@@ -3140,14 +3148,12 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na,
 			ring = kring->ring;
 			lim = kring->nkr_num_slots - 1;
 			dst_na->nm_lock(dst_ifp, NETMAP_TX_LOCK, dst_nr);
+retry:
 			dst_na->nm_txsync(dst_ifp, dst_nr, 0);
 			/* see nm_bdg_flush() */
 			j = kring->nr_hwcur;
 			howmany = kring->nr_hwavail;
 		}
-		/* there is at least one either unicast or broadcast packet */
-		brd_next = brddst->bq_head;
-		next = d->bq_head;
 		while (howmany-- > 0) {
 			struct netmap_slot *slot;
 			struct nm_bdg_fwd *ft_p;
@@ -3182,6 +3188,9 @@ nm_bdg_flush2(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na,
 				ring->cur = j;
 				dst_na->nm_txsync(dst_ifp, dst_nr, 0);
 			}
+			/* retry to send more packets */
+			if (nma_is_hw(dst_na) && howmany < 0 && retry--)
+				goto retry;
 			dst_na->nm_lock(dst_ifp, NETMAP_TX_UNLOCK, dst_nr);
 		}
 		d->bq_head = d->bq_tail = NM_BDG_BATCH; /* cleanup */
