@@ -325,7 +325,7 @@ pkt_copy(void *_src, void *_dst, int l)
  * We assume that this is called with a name of at least NM_NAME chars.
  */
 static struct nm_bridge *
-nm_find_bridge(const char *name)
+nm_find_bridge(const char *name, int create)
 {
 	int i, l, namelen, e;
 	struct nm_bridge *b = NULL;
@@ -345,7 +345,7 @@ nm_find_bridge(const char *name)
 	BDG_LOCK();
 	for (e = -1, i = 0; i < NM_BRIDGES; i++) {
 		b = nm_bridges + i;
-		if (b->namelen == 0)
+		if (b->namelen == 0 && e == -1)
 			e = i;	/* record empty slot */
 		else if (b->namelen != namelen)
 			continue;
@@ -355,7 +355,7 @@ nm_find_bridge(const char *name)
 		}
 	}
 	if (i == NM_BRIDGES) { /* all full */
-		if (e == -1) { /* no empty slot */
+		if (!create || e == -1 /* no empty slot */) {
 			b = NULL;
 		} else {
 			b = nm_bridges + e;
@@ -1107,7 +1107,7 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp)
 			no_prefix = 1;
 			break;
 		}
-		b = nm_find_bridge(name);
+		b = nm_find_bridge(name, 1 /* create a new one if no exist */ );
 		if (b == NULL) {
 			D("no bridges available for '%s'", name);
 			return (ENXIO);
@@ -1194,7 +1194,7 @@ ifunit_rele:
 			}
 			// XXX b->act_ports |= (1<<cand);
 			/* bind the host stack to the bridge */
-			if (nmr->nr_cmd & NETMAP_BDG_HOST) {
+			if (nmr->nr_arg1 == NETMAP_BDG_HOST) {
 				BDG_SET_VAR(b->bdg_ports[cand2], SWNA(iter));
 				SWNA(iter)->bdg_port = cand2;
 				SWNA(iter)->na_bdg = b;
@@ -1451,7 +1451,7 @@ unref_exit:
 		goto free_exit;
 	}
 
-	if (nmr->nr_cmd & NETMAP_BDG_DETACH) {
+	if (nmr->nr_cmd == NETMAP_BDG_DETACH) {
 		if (NA(ifp)->refcount == 0) { /* not registered */
 			error = EINVAL;
 			goto unref_exit;
@@ -1531,39 +1531,107 @@ int
 netmap_bdg_ctl(struct nmreq *nmr, BDG_LOOKUP_T func)
 {
 	struct nm_bridge *b;
-	int cmd = nmr->nr_cmd;
-	int error = 0, i;
+	struct netmap_adapter *na;
+	struct ifnet *iter;
+	char *name = nmr->nr_name;
+	int cmd = nmr->nr_cmd, namelen = strlen(name);
+	int error = 0, i, j;
 
-	if (cmd & NETMAP_BDG_ATTACH || cmd & NETMAP_BDG_DETACH) {
+	switch (cmd) {
+	case NETMAP_BDG_ATTACH:
+	case NETMAP_BDG_DETACH:
 		error = kern_netmap_regif(nmr);
-		if (error)
-			return error;
-	} else if (cmd & NETMAP_BDG_LOOKUP_REG) {
-		/* register a lookup function to the given bridge.
-		 * nmr->nr_name must be just bridge's name
-		 */
-		if (!func)
-			return EINVAL;
-		BDG_LOCK();
-		for (i = 0; i < NM_BRIDGES; i++) {
-			b = nm_bridges + i;
-			if (!b->namelen || (b->namelen != strlen(nmr->nr_name)))
-				continue;
-			else if (!strncmp(nmr->nr_name, b->basename,
-			    b->namelen))
+		break;
+	case NETMAP_BDG_LIST:
+		if (namelen) { /* look up indexes of bridge and port */
+			if (strncmp(name, NM_NAME, strlen(NM_NAME))) {
+				error = EINVAL;
 				break;
+			}
+			b = nm_find_bridge(name, 0 /* don't create */);
+			if (!b) {
+				error = EINVAL;
+				break;
+			}
+
+			BDG_RLOCK(b);
+			error = EINVAL;
+			for (i = 0; error && i < NM_BDG_MAXPORTS; i++) {
+				na = BDG_GET_VAR(b->bdg_ports[i]);
+				if (na == NULL)
+					continue;
+				iter = na->ifp;
+				/* the former and the latter identify a
+				 * virtual port and a NIC, respectively
+				 */
+				if (!strcmp(iter->if_xname, name) ||
+				    (namelen > b->namelen &&
+				    !strcmp(iter->if_xname,
+				    name + b->namelen + 1))) {
+					nmr->nr_arg1 = ((u_int)b -
+					    (u_int)nm_bridges)/sizeof(*b);
+					nmr->nr_arg2 = i;
+					error = 0;
+				}
+			}
+			BDG_RUNLOCK(b);
+		} else {
+			/* search for an entry from nm_bridges[i]->bdg_ports[j]
+			 *
+			 * Users can detect the end of the same bridge by
+			 * seeing the new and old value of nr_arg1, and can
+			 * detect the end of all the bridge by error != 0
+			 */
+			i = nmr->nr_arg1;
+			j = nmr->nr_arg2;
+			if (j >= NM_BDG_MAXPORTS) {
+				i++; /* go to the next bridge */
+				j = 0;
+			}
+
+			for (error = EINVAL; error && i < NM_BRIDGES; i++) {
+				b = nm_bridges + i;
+				BDG_RLOCK(b);
+				for (; j < NM_BDG_MAXPORTS; j++) {
+					na = BDG_GET_VAR(b->bdg_ports[j]);
+					if (na == NULL)
+						continue;
+					iter = na->ifp;
+					nmr->nr_arg1 = i;
+					nmr->nr_arg2 = j;
+					strncpy(name, iter->if_xname, IFNAMSIZ);
+					error = 0;
+					break;
+				}
+				BDG_RUNLOCK(b);
+				j = 0; /* second bridge scans from 0 */
+			}
 		}
-		BDG_UNLOCK();
-		if (i == NM_BRIDGES)
-			return EINVAL;
+		break;
+	case NETMAP_BDG_LOOKUP_REG:
+		/* register a lookup function to the given bridge.
+		 * nmr->nr_name may be just bridge's name (including ':'
+		 * if it is not just NM_NAME).
+		 */
+		if (!func) {
+			error = EINVAL;
+			break;
+		}
+		b = nm_find_bridge(name, 0 /* don't create */);
+		if (!b) {
+			error = EINVAL;
+			break;
+		}
 		BDG_WLOCK(b);
 		b->nm_bdg_lookup = func;
 		BDG_WUNLOCK(b);
-	} else {
+		break;
+	default:
 		D("invalid cmd (nmr->nr_cmd) (0x%x)", cmd);
-		return EINVAL;
+		error = EINVAL;
+		break;
 	}
-	return 0;
+	return error;
 }
 
 /*
@@ -1628,6 +1696,10 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			error = EINVAL;
 			break;
 		}
+		if (nmr->nr_cmd == NETMAP_BDG_LIST) {
+			error = netmap_bdg_ctl(nmr, NULL);
+			break;
+		}
 		/* update configuration */
 		error = netmap_get_memory(priv);
 		ND("get_memory returned %d", error);
@@ -1664,7 +1736,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		}
 		/* possibly attach/detach NIC and VALE switch */
 		i = nmr->nr_cmd;
-		if (i & NETMAP_BDG_ATTACH || i & NETMAP_BDG_DETACH) {
+		if (i == NETMAP_BDG_ATTACH || i == NETMAP_BDG_DETACH) {
 			error = netmap_bdg_ctl(nmr, NULL);
 			break;
 		} else if (i != 0) {

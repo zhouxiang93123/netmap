@@ -10,36 +10,71 @@
 #include <net/netmap.h>
 #include <net/netmap_user.h>
 
+/* debug support */
+#define ND(format, ...)	do {} while(0)
+#define D(format, ...)					\
+	fprintf(stderr, "%s [%d] " format "\n",		\
+	__FUNCTION__, __LINE__, ##__VA_ARGS__)
+
 static int
-bdgconfig(const char *name, int cmd)
+bdg_ctl(const char *name, int nr_cmd, int nr_arg)
 {
 	int error = 0, fd = open("/dev/netmap", O_RDWR);
 	struct nmreq nmr;
 
 	if (fd == -1) {
-		fprintf(stderr, "Unable to open /dev/netmap");
+		D("Unable to open /dev/netmap");
 		return -1;
 	}
+
 	bzero(&nmr, sizeof(nmr));
 	nmr.nr_version = NETMAP_API;
-	strncpy(nmr.nr_name, name, sizeof(nmr.nr_name));
-	if (cmd == 0) { /* GINFO */
-		error = ioctl(fd, NIOCGINFO, &nmr);
-		if (error) {
-			fprintf(stdout, "Unable to get if info for %s\n", name);
-			close(fd);
-			return error;
-		} else
-			fprintf(stdout, "%s: %d queues.\n", name, nmr.nr_rx_rings);
-	} else {
-		nmr.nr_cmd = cmd;
+	if (name != NULL) /* might be NULL */
+		strncpy(nmr.nr_name, name, sizeof(nmr.nr_name));
+	nmr.nr_cmd = nr_cmd;
+
+	switch (nr_cmd) {
+	case NETMAP_BDG_ATTACH:
+	case NETMAP_BDG_DETACH:
+		if (nr_arg && nr_arg != NETMAP_BDG_HOST)
+			nr_arg = 0;
+		nmr.nr_arg1 = nr_arg;
 		error = ioctl(fd, NIOCREGIF, &nmr);
 		if (error == -1)
-			fprintf(stdout, "Unable to %s %s to the bridge\n",
-			    cmd & NETMAP_BDG_DETACH?"detach":"attach", name);
+			D("Unable to %s %s to the bridge", nr_cmd ==
+			    NETMAP_BDG_DETACH?"detach":"attach", name);
 		else
-			fprintf(stdout, "Success to %s %s to the bridge\n",
-			    cmd & NETMAP_BDG_DETACH?"detach":"attach", name);
+			D("Success to %s %s to the bridge\n", nr_cmd ==
+			    NETMAP_BDG_DETACH?"detach":"attach", name);
+		break;
+	case NETMAP_BDG_LIST:
+		if (strlen(nmr.nr_name)) { /* name to bridge/port info */
+			error = ioctl(fd, NIOCGINFO, &nmr);
+			if (error)
+				D("Unable to obtain info for %s", name);
+			else
+				D("%s at bridge:%d port:%d", name, nmr.nr_arg1,
+				    nmr.nr_arg2);
+			break;
+		}
+
+		/* scan all the bridges and ports */
+		nmr.nr_arg1 = nmr.nr_arg2 = 0;
+		for (; !ioctl(fd, NIOCGINFO, &nmr); nmr.nr_arg2++) {
+			D("bridge:%d port:%d %s", nmr.nr_arg1, nmr.nr_arg2,
+			    nmr.nr_name);
+			nmr.nr_name[0] = '\0';
+		}
+
+		break;
+	default: /* GINFO */
+		nmr.nr_cmd = nmr.nr_arg1 = nmr.nr_arg2 = 0;
+		error = ioctl(fd, NIOCGINFO, &nmr);
+		if (error)
+			D("Unable to get if info for %s", name);
+		else
+			D("%s: %d queues.", name, nmr.nr_rx_rings);
+		break;
 	}
 	close(fd);
 	return error;
@@ -48,10 +83,11 @@ bdgconfig(const char *name, int cmd)
 int
 main(int argc, char **argv)
 {
-	int ch;
-	const char *cmd = "nic2bridge";
+	int ch, nr_cmd = 0, nr_arg = 0;
+	const char *command = "nic2bridge";
+	char *name = NULL;
 
-	if (argc != 3) {
+	if (argc != 3 && argc != 1 /* list all */ ) {
 usage:
 		fprintf(stderr,
 			"Usage:\n"
@@ -60,29 +96,38 @@ usage:
 			"\t-d interface	interface name to be detached\n"
 			"\t-a interface	interface name to be attached\n"
 			"\t-h interface	interface name to be attached with the host stack\n"
-			"", cmd);
+			"\t-l list all or specified bridge's interfaces\n"
+			"", command);
 		return 0;
 	}
-	while ((ch = getopt(argc, argv, "d:a:h:g:")) != -1) {
+
+	while ((ch = getopt(argc, argv, "d:a:h:g:l:")) != -1) {
 		switch (ch) {
 		default:
 			fprintf(stderr, "bad option %c %s", ch, optarg);
 			goto usage;
-
 		case 'd':
-			bdgconfig(optarg, NETMAP_BDG_DETACH);
+			nr_cmd = NETMAP_BDG_DETACH;
 			break;
-
 		case 'a':
-			bdgconfig(optarg, NETMAP_BDG_ATTACH);
+			nr_cmd = NETMAP_BDG_ATTACH;
 			break;
 		case 'h':
-			bdgconfig(optarg, NETMAP_BDG_ATTACH | NETMAP_BDG_HOST);
+			nr_cmd = NETMAP_BDG_ATTACH;
+			nr_arg = NETMAP_BDG_HOST;
 			break;
 		case 'g':
-			bdgconfig(optarg, 0 /* GINFO */);
+			nr_cmd = 0;
+			break;
+		case 'l':
+			nr_cmd = NETMAP_BDG_LIST;
 			break;
 		}
 	}
+	if (argc == 3)
+		name = optarg;
+	else
+		nr_cmd = NETMAP_BDG_LIST;
+	bdg_ctl(name, nr_cmd, nr_arg);
 	return 0;
 }
