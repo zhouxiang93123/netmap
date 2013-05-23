@@ -69,7 +69,7 @@ options		DUMMYNET
 
 # Running with less than 1000 seems to give poor timing on
 # qemu, so we set HZ explicitly.
-options		HZ=1000
+options		HZ=4000	# XXX use 4000 for good polling
 
 device		random			# used by ssh
 device		pci
@@ -167,4 +167,5 @@ options         KBD_INSTALL_CDEV
 # Be aware of the administrative consequences of enabling this!
 device		bpf		# Berkeley packet filter
 device		netmap
+options	DEVICE_POLLING
 options	FLOWTABLE
