@@ -31,8 +31,8 @@ pkt-gen: pkt-gen.o nm_util.o
 
 bridge: bridge.o nm_util.o
 
-vale-ctl: vale-ctl.c
-	$(CC) $(CFLAGS) -o vale-ctl vale-ctl.c
+vale-ctl: vale-ctl.o
+	$(CC) $(CFLAGS) -o vale-ctl vale-ctl.o
 
 libnetmap.so:	pcap.c nm_util.c
 	$(CC) $(CFLAGS) -fpic -c pcap.c

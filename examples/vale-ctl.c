@@ -123,10 +123,9 @@ usage:
 			nr_cmd = NETMAP_BDG_LIST;
 			break;
 		}
-	}
-	if (argc == 3)
 		name = optarg;
-	else
+	}
+	if (argc == 1)
 		nr_cmd = NETMAP_BDG_LIST;
 	bdg_ctl(name, nr_cmd, nr_arg);
 	return 0;
