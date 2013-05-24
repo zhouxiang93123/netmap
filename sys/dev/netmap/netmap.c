@@ -1584,10 +1584,6 @@ netmap_bdg_ctl(struct nmreq *nmr, BDG_LOOKUP_T func)
 			 */
 			i = nmr->nr_arg1;
 			j = nmr->nr_arg2;
-			if (j >= NM_BDG_MAXPORTS) {
-				i++; /* go to the next bridge */
-				j = 0;
-			}
 
 			for (error = EINVAL; error && i < NM_BRIDGES; i++) {
 				b = nm_bridges + i;
