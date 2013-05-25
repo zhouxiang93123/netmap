@@ -363,6 +363,8 @@ nm_find_bridge(const char *name, int create)
 			b->namelen = namelen;
 			/* set the default function */
 			b->nm_bdg_lookup = netmap_bdg_learning;
+			/* reset the MAC address table */
+			bzero(b->ht, sizeof(struct nm_hash_ent) * NM_BDG_HASH);
 		}
 	}
 	BDG_UNLOCK();
@@ -3421,6 +3423,7 @@ netmap_init(void)
 	int i;
 	mtx_init(&netmap_bridge_mutex, "netmap_bridge_mutex",
 		MTX_NETWORK_LOCK, MTX_DEF);
+	bzero(nm_bridges, sizeof(struct nm_bridge) * NM_BRIDGES); /* safety */
 	for (i = 0; i < NM_BRIDGES; i++)
 		rw_init(&nm_bridges[i].bdg_lock, "bdg lock");
 	}
