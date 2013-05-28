@@ -1190,7 +1190,6 @@ ifunit_rele:
 				if_rele(iter); /* don't detach from bridge */
 				goto no_port;
 			}
-			// XXX b->act_ports |= (1<<cand);
 			/* bind the host stack to the bridge */
 			if (nmr->nr_arg1 == NETMAP_BDG_HOST) {
 				BDG_SET_VAR(b->bdg_ports[cand2], SWNA(iter));
@@ -1928,7 +1927,6 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	if (priv->np_qfirst == NETMAP_SW_RING) {
 		if (priv->np_txpoll || want_tx) {
 			/* push any packets up, then we are always ready */
-			kring = &na->tx_rings[lim_tx];
 			netmap_sync_to_host(na);
 			revents |= want_tx;
 		}
@@ -2447,8 +2445,8 @@ nm_bdg_preflush(struct netmap_adapter *na, u_int ring_nr,
 /*
  * Pass packets from nic to the bridge. Must be called with
  * proper locks on the source interface.
- * Note that the user process has no access to this NIC so
- * nobody should be touching the 'ring'. So we ignore it.
+ * Note, no user process can access this NIC so we can ignore
+ * the info in the 'ring'.
  */
 static void
 netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
@@ -2845,38 +2843,21 @@ nm_bridge_rthash(const uint8_t *addr)
 static int
 bdg_netmap_reg(struct ifnet *ifp, int onoff)
 {
-	int i, err = 0;
-	struct netmap_adapter *na = NA(ifp);
-	struct nm_bridge *b = na->na_bdg;
+	// struct nm_bridge *b = NA(ifp)->na_bdg;
 
-	BDG_WLOCK(b);
+	/* the interface is already attached to the bridge,
+	 * so we only need to toggle IFCAP_NETMAP.
+	 * Locking is not necessary (we are already under
+	 * NMA_LOCK, and the port is not in use during this call).
+	 */
+	/* BDG_WLOCK(b); */
 	if (onoff) {
-		/* the interface must be already in the list.
-		 * only need to mark the port as active by setting
-		 * the bit in b->act_ports
-		 */
-		ND("should attach %s to the bridge", ifp->if_xname);
-		for (i=0; i < NM_BDG_MAXPORTS; i++)
-			if (BDG_GET_VAR(b->bdg_ports[i]) == na)
-				break;
-		if (i == NM_BDG_MAXPORTS) {
-			D("no more ports available");
-			err = EINVAL;
-			goto done;
-		}
-		ND("setting %s in netmap mode", ifp->if_xname);
 		ifp->if_capenable |= IFCAP_NETMAP;
-		// b->act_ports |= (1<<i);
 	} else {
-		/* should be in the list, too -- remove from the mask */
-		ND("removing %s from netmap mode", ifp->if_xname);
 		ifp->if_capenable &= ~IFCAP_NETMAP;
-		i = NA(ifp)->bdg_port;
-		// b->act_ports &= ~(1<<i);
 	}
-done:
-	BDG_WUNLOCK(b);
-	return err;
+	/* BDG_WUNLOCK(b); */
+	return 0;
 }
 
 
