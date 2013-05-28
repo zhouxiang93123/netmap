@@ -679,9 +679,13 @@ netmap_dtor(void *data)
 	if (ifp) {
 		struct netmap_adapter *na = NA(ifp);
 
+		if (na->na_bdg)
+			BDG_WLOCK(na->na_bdg);
 		na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
 		netmap_dtor_locked(data);
 		na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
+		if (na->na_bdg)
+			BDG_WUNLOCK(na->na_bdg);
 
 		nm_if_rele(ifp); /* might also destroy *na */
 	}
@@ -1348,6 +1352,8 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 	struct netmap_if *nifp = NULL;
 	int i, error;
 
+	if (na->na_bdg)
+		BDG_WLOCK(na->na_bdg);
 	na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
 
 	/* ring configuration may have changed, fetch from the card */
@@ -1392,6 +1398,8 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 out:
 	*err = error;
 	na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
+	if (na->na_bdg)
+		BDG_WUNLOCK(na->na_bdg);
 	return nifp;
 }
 
