@@ -313,12 +313,9 @@ setaffinity(pthread_t me, int i)
 	return 0;
 }
 
-/* attach or detach the NIC to/from the bridge
- * XXX will be moved to different file in the future, but now it is here for
- * testing with pkt-gen
- */
+/* attach or detach the NIC to/from the bridge */
 static int
-bdgconfig(const char *ifname, int cmd)
+bdg_ctl(const char *ifname, int cmd)
 {
 	int error = 0, fd = open("/dev/netmap", O_RDWR);
 	struct nmreq nmr;
@@ -332,9 +329,11 @@ bdgconfig(const char *ifname, int cmd)
 		nmr.nr_cmd = cmd;
 		error = ioctl(fd, NIOCREGIF, &nmr);
 		if (error == -1)
-			D("Unable to %s %s to the bridge", cmd & NETMAP_BDG_DETACH?"detach":"attach", ifname);
+			D("Unable to %s %s to the bridge", cmd ==
+				NETMAP_BDG_DETACH?"detach":"attach", ifname);
 		else
-			D("Success to %s %s to the bridge", cmd & NETMAP_BDG_DETACH?"detach":"attach", ifname);
+			D("Success to %s %s to the bridge", cmd ==
+				NETMAP_BDG_DETACH?"detach":"attach", ifname);
 	}
 	close(fd);
 	return error;
@@ -1545,7 +1544,7 @@ main(int arc, char **argv)
 		devqueues = nmr.nr_rx_rings;
 	}
 	if (hwname) {
-		bdgconfig(hwname, NETMAP_BDG_ATTACH);
+		bdg_ctl(hwname, NETMAP_BDG_ATTACH);
 		// continue anyway
 	}
 
@@ -1652,7 +1651,7 @@ main(int arc, char **argv)
 	start_threads(&g);
 	main_thread(&g);
 	if (hwname)
-		bdgconfig(hwname, NETMAP_BDG_DETACH);
+		bdg_ctl(hwname, NETMAP_BDG_DETACH);
 	return 0;
 }
 

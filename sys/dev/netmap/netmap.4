@@ -99,7 +99,7 @@ any existing interface.
 .Pp
 The switch and the port are created if not existing.
 .It Dv valeXXX:ifname (ifname is an existing interface)
-The named interface and the corresponding host stack port are
+The named interface and (optionally) the corresponding host stack port are
 connected to the vale switch named XXX.
 Packet I/O is not possible on this file descriptor,
 and traffic between the NIC, the switch and the host stack
@@ -288,7 +288,9 @@ struct nmreq {
 #define NETMAP_NO_TX_POLL 0x1000  /* no gratuitous txsync on poll */
 #define NETMAP_RING_MASK 0xfff    /* the actual ring number */
         uint16_t        nr_cmd;
-        uint32_t        spare2[4];
+	uint16_t	nr_arg1;
+	uint16_t	nr_arg2;
+        uint32_t        spare2[3];
 };
 
 .Ed
@@ -358,6 +360,11 @@ or the send queue is full.
 .Pa NIOCREGIF
 can be used multiple times to change the association of a
 file descriptor to a ring pair, always within the same device.
+.Pp
+When registering a virtual interface that is dynamically created to a
+.Xr vale 4
+switch, we can specify the desired number of rings (1 by default,
+and currently up to 16) on it using nr_tx_rings and nr_rx_rings fields.
 .It Dv NIOCUNREGIF
 brings an interface back to normal mode.
 .It Dv NIOCTXSYNC

@@ -72,14 +72,134 @@ Bridge and ports names are arbitrary strings, the only
 constraint being that the full name must fit within 16
 characters.
 .Pp
+.Nm
+ports can be physical network interfaces that support
+.Xr netmap 4
+API
+by specifying the interface name for
+.Pa [port].
+See
+.Nm OPERATION
+section in
+.Xr netmap 4
+for details of the naming rule.
+.Pp
+Physical interfaces are attached using
+.Pa NIOCGREGIF
+command of
+.Pa ioctl(),
+and
+.Pa NETMAP_BDG_ATTACH
+at
+.Em nr_cmd
+field in
+.Em struct nmreq .
+The corresponding host stack can also be attached to the bridge, specifying
+.Pa NETMAP_BDG_HOST
+in
+.Em nr_arg1 .
+To detach the interface from the bridge,
+.Pa NETMAP_BDG_DETACH
+is used instead of NETMAP_BDG_ATTACH.
+The host stack is also detached from the bridge at the same
+time if it has been attached.
+.Pp
+Physical interfaces are treated as system configuration;
+they are kept being attached even after the configuring process dies,
+and detached by any process.
+.Pp
+Once a physical interface is attached, this interface is no longer
+available to be directly accessed by netmap clients (user processes) or to be
+attached by another bridge.
+On the other hand, when any netmap client holds the physical interface,
+this interface cannot be attached to a bridge.
+.Pp
+.Pa NETMAP_BDG_LIST
+subcommand in nr_cmd of
+.Em struct nmreq
+is used to obtain bridge and port
+information.  There are two modes of how it works;
+If any
+.Em nr_name
+starting from non '\\0' is provided,
+.Pa ioctl()
+returning
+indicates the position of
+the named interface.
+This position is represented by an index of the bridge and the port, and
+put in
+.Em nr_arg1
+and
+.Em nr_arg2
+fields, respectively.  If the named interface does not exist,
+.Pa ioctl()
+returns
+.Pa EINVAL .
+.Pp
+If
+.Em nr_name
+starting from '\\0' is provided,
+.Pa ioctl()
+returning indicates the
+first existing interface on and after the position specified in
+.Em nr_arg1
+and
+.Em nr_arg2.
+If the caller specified a port index greater than the highest
+index of the ports, it is recognized as port index 0 of the
+next bridge
+(
+.Em nr_arg1
++ 1,
+.Em nr_arg2
+= 0).
+.Pa ioctl()
+returns
+.Pa EINVAL
+if the given position is higher than that of
+any existing interface.
+On successful return of
+.Pa ioctl() ,
+the interface name is also stored in
+.Em nr_name .
+.Pa NETMAP_BDG_LIST
+is always used with
+.Pa NIOCGINFO
+command of
+.Pa ioctl()
+.Pp
+Below is an example of printing all the existing ports walking through
+all the bridges.
+
+.Bd -literal -compact
+struct nmreq nmr;
+int fd = open("/dev/netmap", O_RDWR);
+
+bzero(&nmr, sizeof(nmr));
+nmr.nr_version = NETMAP_API;
+nmr.nr_cmd = NETMAP_BDG_LIST;
+nmr.nr_arg1 = nmr.nr_arg2 = 0; /* start from bridge:0 port:0 */
+for (; !ioctl(fd, NIOCGINFO, &nmr); nmr.nr_arg2++) {
+	D("bridge:%d port:%d %s", nmr.nr_arg1, nmr.nr_arg2,
+	    nmr.nr_name);
+	nmr.nr_name[0] = '\\0';
+}
+.Ed
+.Pp
 See
 .Xr netmap 4
 for details on the API.
 .Ss LIMITS
 .Nm
-currently supports up to 4 switches, 16 ports per switch,
+currently supports up to 8 switches, 254 ports per switch,
 1024 buffers per port. These hard limits will be
 changed to sysctl variables in future releases.
+.Pp
+Attaching the host stack to the bridge imposes significant performance
+degradation when many packets are forwarded to the host stack by either
+unicast or broadcast.
+This is because every single packet going to the host stack causes mbuf
+allocation in the same thread context as one forwarding packets.
 .Pp
 .Sh SYSCTL VARIABLES
 .Nm
