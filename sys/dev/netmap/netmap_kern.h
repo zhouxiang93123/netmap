@@ -309,9 +309,9 @@ int netmap_ring_reinit(struct netmap_kring *);
  * NM_BDG_MAXPORTS for broadcast, NM_BDG_MAXPORTS+1 for unknown.
  * XXX in practice "unknown" might be handled same as broadcast.
  */
-typedef u_int (*BDG_LOOKUP_T)(char *buf, u_int len, uint8_t *ring_nr,
+typedef u_int (*bdg_lookup_fn_t)(char *buf, u_int len, uint8_t *ring_nr,
 		struct netmap_adapter *);
-int netmap_bdg_ctl(struct nmreq *nmr, BDG_LOOKUP_T func);
+int netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func);
 u_int netmap_bdg_learning(char *, u_int, uint8_t *, struct netmap_adapter *);
 #define	NM_NAME			"vale"	/* prefix for the bridge port name */
 #define	NM_BDG_MAXPORTS		254	/* up to 32 for bitmap, 254 ok otherwise */
