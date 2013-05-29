@@ -127,8 +127,15 @@
  *		transparent mode, buffers released with the flag set
  *		will be forwarded to the 'other' side (host stack
  *		or NIC, respectively) on the next select() or ioctl()
+ *
+ *		The following will be supported from NETMAP_API = 5
  * NS_NO_LEARN	on a VALE switch, do not 'learn' the source port for
  *		this packet.
+ * NS_INDIRECT	the netmap buffer contains a 64-bit pointer to
+ *		the actual userspace buffer. This may be useful
+ *		to reduce copies in a VM environment.
+ * NS_MOREFRAG	Part of a multi-segment frame. The last (or only)
+ *		segment must not have this flag.
  * NS_PORT_MASK	the high 8 bits of the flag, if not zero, indicate the
  *		destination port for the VALE switch, overriding
  *		the lookup table.
@@ -146,6 +153,8 @@ struct netmap_slot {
 				 * (host stack or device)
 				 */
 #define	NS_NO_LEARN	0x0008
+#define	NS_INDIRECT	0x0010
+#define	NS_MOREFRAG	0x0020
 #define	NS_PORT_SHIFT	8
 #define	NS_PORT_MASK	(0xff << NS_PORT_SHIFT)
 };
@@ -277,7 +286,7 @@ struct netmap_if {
  * NIOCREGIF takes an interface name within a struct ifreq,
  *	and activates netmap mode on the interface (if possible).
  *
- *	For vale ports, starting with NETMAP_API = 4,
+ *	For vale ports, starting with NETMAP_API = 5,
  *	nr_tx_rings and nr_rx_rings specify how many software rings
  *	are created (0 means 1).
  *
@@ -303,7 +312,7 @@ struct netmap_if {
 struct nmreq {
 	char		nr_name[IFNAMSIZ];
 	uint32_t	nr_version;	/* API version */
-#define	NETMAP_API	3		/* current version */
+#define	NETMAP_API	4		/* current version */
 	uint32_t	nr_offset;	/* nifp offset in the shared region */
 	uint32_t	nr_memsize;	/* size of the shared region */
 	uint32_t	nr_tx_slots;	/* slots in tx rings */
