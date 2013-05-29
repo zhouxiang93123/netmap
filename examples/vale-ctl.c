@@ -1,3 +1,28 @@
+/*
+ * Copyright (C) 2013 Michio Honda. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *   1. Redistributions of source code must retain the above copyright
+ *      notice, this list of conditions and the following disclaimer.
+ *   2. Redistributions in binary form must reproduce the above copyright
+ *      notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ */
+
 #include <errno.h>
 #include <stdio.h>
 #include <inttypes.h>	/* PRI* macros */
@@ -9,6 +34,7 @@
 #include <net/if.h>	/* ifreq */
 #include <net/netmap.h>
 #include <net/netmap_user.h>
+#include <libgen.h>	/* basename */
 
 /* debug support */
 #define ND(format, ...)	do {} while(0)
@@ -19,8 +45,9 @@
 static int
 bdg_ctl(const char *name, int nr_cmd, int nr_arg)
 {
-	int error = 0, fd = open("/dev/netmap", O_RDWR);
 	struct nmreq nmr;
+	int error = 0;
+	int fd = open("/dev/netmap", O_RDWR);
 
 	if (fd == -1) {
 		D("Unable to open /dev/netmap");
@@ -47,6 +74,7 @@ bdg_ctl(const char *name, int nr_cmd, int nr_arg)
 			D("Success to %s %s to the bridge\n", nr_cmd ==
 			    NETMAP_BDG_DETACH?"detach":"attach", name);
 		break;
+
 	case NETMAP_BDG_LIST:
 		if (strlen(nmr.nr_name)) { /* name to bridge/port info */
 			error = ioctl(fd, NIOCGINFO, &nmr);
@@ -67,6 +95,7 @@ bdg_ctl(const char *name, int nr_cmd, int nr_arg)
 		}
 
 		break;
+
 	default: /* GINFO */
 		nmr.nr_cmd = nmr.nr_arg1 = nmr.nr_arg2 = 0;
 		error = ioctl(fd, NIOCGINFO, &nmr);
@@ -81,10 +110,10 @@ bdg_ctl(const char *name, int nr_cmd, int nr_arg)
 }
 
 int
-main(int argc, char **argv)
+main(int argc, char *argv[])
 {
 	int ch, nr_cmd = 0, nr_arg = 0;
-	const char *command = "nic2bridge";
+	const char *command = basename(argv[0]);
 	char *name = NULL;
 
 	if (argc != 3 && argc != 1 /* list all */ ) {
