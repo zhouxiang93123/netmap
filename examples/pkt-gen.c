@@ -313,32 +313,6 @@ setaffinity(pthread_t me, int i)
 	return 0;
 }
 
-/* attach or detach the NIC to/from the bridge */
-static int
-bdg_ctl(const char *ifname, int cmd)
-{
-	int error = 0, fd = open("/dev/netmap", O_RDWR);
-	struct nmreq nmr;
-
-	if (fd == -1)
-		D("Unable to open /dev/netmap");
-	else {
-		bzero(&nmr, sizeof(nmr));
-		nmr.nr_version = NETMAP_API;
-		strncpy(nmr.nr_name, ifname, sizeof(nmr.nr_name));
-		nmr.nr_cmd = cmd;
-		error = ioctl(fd, NIOCREGIF, &nmr);
-		if (error == -1)
-			D("Unable to %s %s to the bridge", cmd ==
-				NETMAP_BDG_DETACH?"detach":"attach", ifname);
-		else
-			D("Success to %s %s to the bridge", cmd ==
-				NETMAP_BDG_DETACH?"detach":"attach", ifname);
-	}
-	close(fd);
-	return error;
-}
-
 /* Compute the checksum of the given ip header. */
 static uint16_t
 checksum(const void *data, uint16_t len, uint32_t sum)
@@ -1334,7 +1308,6 @@ main(int arc, char **argv)
 	int ch;
 	int wait_link = 2;
 	int devqueues = 1;	/* how many device queues */
-	char *hwname = NULL;
 
 	bzero(&g, sizeof(g));
 
@@ -1354,7 +1327,7 @@ main(int arc, char **argv)
 	g.tx_rate = 0;
 
 	while ( (ch = getopt(arc, argv,
-			"a:f:n:i:t:r:l:d:s:D:S:b:c:o:p:PT:w:I:WvR:")) != -1) {
+			"a:f:n:i:t:r:l:d:s:D:S:b:c:o:p:PT:w:WvR:")) != -1) {
 		struct sf *fn;
 
 		switch(ch) {
@@ -1451,9 +1424,6 @@ main(int arc, char **argv)
 		case 'S': /* source mac */
 			g.src_mac.name = optarg;
 			break;
-		case 'I': /* also attach the NIC to the bridge */
-			hwname = optarg;
-			break;
 		case 'v':
 			verbose++;
 			break;
@@ -1542,10 +1512,6 @@ main(int arc, char **argv)
 			D("Unable to get if info for %s", g.ifname);
 		}
 		devqueues = nmr.nr_rx_rings;
-	}
-	if (hwname) {
-		bdg_ctl(hwname, NETMAP_BDG_ATTACH);
-		// continue anyway
 	}
 
 	/* validate provided nthreads. */
@@ -1650,8 +1616,6 @@ main(int arc, char **argv)
 #endif // XXX
 	start_threads(&g);
 	main_thread(&g);
-	if (hwname)
-		bdg_ctl(hwname, NETMAP_BDG_DETACH);
 	return 0;
 }
 
