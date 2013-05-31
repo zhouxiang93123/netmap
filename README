@@ -14,7 +14,7 @@ In this directory you can find source code (BSD-Copyright)
 for FreeBSD and Linux. Note that recent FreeBSD distributions
 already include both NETMAP and VALE.
 
-Last update: 2012-08-13
+Last update: 2013-05-31
 
 Installation instructions 
 -------------------------
@@ -51,6 +51,7 @@ Applications
 The directory examples/ contains some programs that use the netmap API
 
     pkt-gen	a packet generator/receiver working at line rate at 10Gbit/s
+    vale-cfg	utility to configure ports of a VALE switch
     bridge	a utility that bridges two interfaces or one interface
 		with the host stack
     pcap.c	a simple libpcap-over-netmap library, and some test
@@ -115,6 +116,7 @@ and OPENLAB.
 Author:		Luigi Rizzo
 Contributors:
 		Giuseppe Lettieri
+		Michio Honda
 		Marta Carbone
 		Gaetano Catalli
 		Matteo Landi
@@ -138,4 +140,4 @@ You can find the papers at http://info.iet.unipi.it/~luigi/research.html
 
 + Luigi Rizzo, Giuseppe Lettieri,
 	VALE: a switched ethernet for virtual machines,
-	DEIT Tech report, June 2012
+	ACM Conext 2012, Nice, Dec. 2012
