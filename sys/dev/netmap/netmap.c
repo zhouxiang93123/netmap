@@ -2438,6 +2438,8 @@ nm_bdg_preflush(struct netmap_adapter *na, u_int ring_nr,
 		int len = ft[ft_i].ft_len = slot->len;
 		char *buf = ft[ft_i].buf = NMB(slot);
 
+		/* this slot goes into a list so initialize the link field */
+		ft[ft_i].ft_next = NM_BDG_BATCH; /* equivalent to NULL */
 		prefetch(buf);
 		if (unlikely(len < 14))
 			continue;
@@ -3043,6 +3045,11 @@ retry:
 			struct netmap_slot *slot;
 			struct nm_bdg_fwd *ft_p;
 
+			/* our 'NULL' is always higher than valid indexes
+			 * so we never dereference it if the other list
+			 * has packets (and if both are NULL we never
+			 * get here.
+			 */
 			if (next < brd_next) {
 				ft_p = ft + next;
 				next = ft_p->ft_next;
@@ -3056,7 +3063,8 @@ retry:
 			slot->len = ft_p->ft_len;
 			j = (j == lim) ? 0: j + 1; /* XXX to be macro-ed */
 			sent++;
-			if (next == d->bq_tail && brd_next == brddst->bq_tail)
+			/* are we done ? */
+			if (next == NM_BDG_BATCH && brd_next == NM_BDG_BATCH)
 				break;
 		}
 		if (netmap_verbose && (howmany < 0))
@@ -3078,6 +3086,7 @@ retry:
 				goto retry;
 			dst_na->nm_lock(dst_ifp, NETMAP_TX_UNLOCK, dst_nr);
 		}
+		/* NM_BDG_BATCH means 'no packet' */
 		d->bq_head = d->bq_tail = NM_BDG_BATCH; /* cleanup */
 	}
 	brddst->bq_head = brddst->bq_tail = NM_BDG_BATCH; /* cleanup */
