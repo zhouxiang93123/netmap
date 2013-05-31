@@ -2962,9 +2962,10 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na,
 			/* remember this position to be scanned later */
 			if (dst_port != NM_BDG_BROADCAST)
 				dsts[num_dsts++] = d_i;
+		} else {
+			ft[d->bq_tail].ft_next = i;
+			d->bq_tail = i;
 		}
-		ft[d->bq_tail].ft_next = i;
-		d->bq_tail = i;
 	}
 
 	/* if there is a broadcast, set ring 0 of all ports to be scanned
