@@ -2291,6 +2291,7 @@ bdg_netmap_start(struct ifnet *ifp, struct mbuf *m)
 	m_copydata(m, 0, len, buf);
 	ft->ft_len = len;
 	ft->buf = buf;
+	ft->ft_next = NM_BDG_BATCH;
 	nm_bdg_flush(ft, 1, na, 0);
 
 	/* release the mbuf in either cases of success or failure. As an
