@@ -112,6 +112,8 @@ struct net_device_ops {
 //#define m_copydata(m, o, l, b)	skb_copy_bits(m, o, b, l)
 #define m_copydata(m, o, l, b)	skb_copy_from_linear_data_offset(m, o, b, l)
 
+#define copyin(_from, _to, _len)	copy_from_user(_to, _from, _len)
+
 /*
  * struct ifnet is remapped into struct net_device on linux.
  * ifnet has an if_softc field pointing to the device-specific struct
