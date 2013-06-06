@@ -14,7 +14,7 @@ In this directory you can find source code (BSD-Copyright)
 for FreeBSD and Linux. Note that recent FreeBSD distributions
 already include both NETMAP and VALE.
 
-Last update: 2013-05-31
+Last update: 2013-06-06
 
 Installation instructions 
 -------------------------
@@ -76,6 +76,8 @@ CAVEATS
 Before reporting slow send or receive speed on a physical interface,
 check ALL of the following:
 
+  + check that your CPUs are running at the maximum clock
+    rate and are not throttled down by the governor/powerd
   + make sure the interface is up before invoking pkt-gen
   + make sure that the netmap module and drivers are correctly
     loaded and can allocate all the memory they need (check into
