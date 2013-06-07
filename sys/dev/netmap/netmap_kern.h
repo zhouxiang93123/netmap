@@ -128,22 +128,43 @@ struct netmap_priv_d;
  * 	the next empty buffer as known by the hardware (next_to_check or so).
  * TX rings: hwcur + hwofs coincides with next_to_send
  *
+ * Clients cannot issue concurrent syscall on a ring. The system
+ * detects this and reports an error using two flags,
+ * NKR_WBUSY and NKR_RBUSY
  * For received packets, slot->flags is set to nkr_slot_flags
  * so we can provide a proper initial value (e.g. set NS_FORWARD
  * when operating in 'transparent' mode).
+ *
+ * The following fields are used to implement lock-free copy of packets
+ * from input to output ports in VALE switch:
+ *	nkr_hwlease	buffer after the last one being copied.
+ *			A writer in nm_bdg_flush reserves N buffers
+ *			from nr_hwlease, advances it, then does the
+ *			copy outside the lock.
+ *	nkr_leases	array of nkr_num_slots where writers can report
+ *			completion of their block. NR_NOSLOT (~0) indicates
+ *			that the writer has not finished yet
+ *	nkr_lease_idx	index of next free slot in nr_leases, to be assigned 
  */
 struct netmap_kring {
 	struct netmap_ring *ring;
 	u_int nr_hwcur;
 	int nr_hwavail;
-	u_int nr_kflags;	/* private driver flags */
+	uint32_t nr_kflags;	/* private driver flags */
 #define NKR_PENDINTR	0x1	// Pending interrupt.
-	u_int nkr_num_slots;
+#define NKR_WBUSY	0x2	// write path is busy
+#define NKR_RBUSY	0x4	// read path is busy
+	uint32_t nkr_num_slots;
+	int32_t	nkr_hwofs;	/* offset between NIC and netmap ring */
 
 	uint16_t	nkr_slot_flags;	/* initial value for flags */
-	int	nkr_hwofs;	/* offset between NIC and netmap ring */
 	struct netmap_adapter *na;
 	struct nm_bdg_fwd *nkr_ft;
+	uint32_t *nkr_leases;
+#define NR_NOSLOT	((uint32_t)~0)
+	uint32_t nkr_hwlease;
+	uint32_t nkr_lease_idx;
+
 	NM_SELINFO_T si;	/* poll/select wait queue */
 	NM_LOCK_T q_lock;	/* used if no device lock available */
 } __attribute__((__aligned__(64)));

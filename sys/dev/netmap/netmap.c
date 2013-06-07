@@ -2054,10 +2054,17 @@ flush_tx:
 			}
 			if (na->separate_locks)
 				na->nm_lock(ifp, NETMAP_TX_LOCK, i);
+			if (kring->nr_kflags & NKR_WBUSY) {
+				D("ring %p write busy", kring);
+				// XXX should unlock
+			}
+			kring->nr_kflags |= NKR_WBUSY;
+
 			if (netmap_verbose & NM_VERB_TXSYNC)
 				D("send %d on %s %d",
 					kring->ring->cur,
 					ifp->if_xname, i);
+			/* txsync might drop and re-acquire the lock */
 			if (na->nm_txsync(ifp, i, 0 /* no lock */))
 				revents |= POLLERR;
 
@@ -2072,6 +2079,7 @@ flush_tx:
 				} else if (!check_all)
 					selrecord(td, &kring->si);
 			}
+			kring->nr_kflags &= ~NKR_WBUSY;
 			if (na->separate_locks)
 				na->nm_lock(ifp, NETMAP_TX_UNLOCK, i);
 		}
@@ -2090,6 +2098,11 @@ flush_tx:
 			}
 			if (na->separate_locks)
 				na->nm_lock(ifp, NETMAP_RX_LOCK, i);
+			if (kring->nr_kflags & NKR_RBUSY) {
+				D("ring %p read busy", kring);
+				// XXX should unlock
+			}
+			kring->nr_kflags |= NKR_RBUSY;
 			if (netmap_fwd ||kring->ring->flags & NR_FORWARD) {
 				ND(10, "forwarding some buffers up %d to %d",
 				    kring->nr_hwcur, kring->ring->cur);
@@ -2107,6 +2120,7 @@ flush_tx:
 				revents |= want_rx;
 			else if (!check_all)
 				selrecord(td, &kring->si);
+			kring->nr_kflags &= ~NKR_RBUSY;
 			if (na->separate_locks)
 				na->nm_lock(ifp, NETMAP_RX_UNLOCK, i);
 		}
