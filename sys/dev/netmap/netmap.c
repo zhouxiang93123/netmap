@@ -176,6 +176,7 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
 
 #endif /* !linux */
 
+
 /*
  * These are used to handle reference counters for bridge ports.
  */
@@ -304,7 +305,7 @@ pkt_copy(void *_src, void *_dst, int l)
         uint64_t *src = _src;
         uint64_t *dst = _dst;
         if (unlikely(l >= 1024)) {
-                bcopy(src, dst, l);
+                memcpy(dst, src, l);
                 return;
         }
         for (; likely(l > 0); l-=64) {
@@ -2450,7 +2451,7 @@ nm_bdg_preflush(struct netmap_adapter *na, u_int ring_nr,
 			continue;
 		buf = ft[ft_i].ft_buf = (slot->flags & NS_INDIRECT) ?
 			*((void **)buf) : buf;
-		prefetch(buf); // XXX or the indirect one ?
+		prefetch(buf);
 		if (unlikely(++ft_i == netmap_bridge))
 			ft_i = nm_bdg_flush(ft, ft_i, na, ring_nr);
 	}
@@ -3053,6 +3054,8 @@ retry:
 		while (howmany-- > 0) {
 			struct netmap_slot *slot;
 			struct nm_bdg_fwd *ft_p;
+			int len;
+			void *src, *dst;
 
 			/* our 'NULL' is always higher than valid indexes
 			 * so we never dereference it if the other list
@@ -3072,13 +3075,16 @@ retry:
 			}
 			slot = &ring->slot[j];
 			ND("send %d %d bytes at %s:%d", i, ft_p->ft_len, dst_ifp->if_xname, j);
-		    if (ft_p->ft_flags & NS_INDIRECT) {
-			ND("copying from INDIRECT source");
-			copyin(ft_p->ft_buf, NMB(slot),
-				(ft_p->ft_len + 63) & ~63);
-		    } else {
-			pkt_copy(ft_p->ft_buf, NMB(slot), ft_p->ft_len);
-		    }
+			/* round to a multiple of 64 */
+			len = (ft_p->ft_len + 63) & ~63;
+			src = ft_p->ft_buf;
+			dst = NMB(slot);
+			if (ft_p->ft_flags & NS_INDIRECT) {
+				copyin(src, dst, len);
+			} else {
+				//memcpy(dst, src, len);
+				pkt_copy(src, dst, len);
+			}
 			slot->len = ft_p->ft_len;
 			j = unlikely(j == lim) ? 0: j + 1; /* XXX to be macro-ed */
 			sent++;
