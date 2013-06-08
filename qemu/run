@@ -1,0 +1,90 @@
+#!/bin/sh
+# build or run a picobsd instance
+PLATFORM=amd64
+#QEMU_DIR=/usr/ports-luigi/qemu-netmap/work.1.1.1.1/qemu-1.1.1/x86_64-softmmu/
+QEMU_DIR=/usr/ports-luigi/qemu-netmap/work-head/qemu-1.2.2/x86_64-softmmu/
+QEMU_DIR=/usr/ports-luigi/qemu-netmap/work-head/qemu-6beb97b/x86_64-softmmu/
+QEMU_DIR=/usr/ports-luigi/qemu-netmap/work-head/qemu-1e1d71a/x86_64-softmmu/
+QEMU_DIR=/usr/ports-luigi/qemu-netmap/work-head/qemu-01bbd8b/x86_64-softmmu/
+QEMU_DIR=/usr/ports-luigi/qemu-netmap/work-head/qemu-c6e052f/x86_64-softmmu/
+QEMU_DIR=/usr/ports-luigi/qemu-netmap/work-head/qemu-d7a51db/x86_64-softmmu/
+QEMU_DIR=/usr/ports-luigi/qemu-netmap/work-head/qemu-1f32989/x86_64-softmmu/
+QEMU_DIR=/usr/ports-luigi/qemu-netmap/work-head/qemu-7527bd8/x86_64-softmmu/
+
+QEMU_DIR=/usr/home/luigi/work-qemu/git-head-20130131/x86_64-softmmu/
+QEMU_DIR=/usr/home/luigi/qemu-misc/qemu/x86_64-softmmu/
+[ "$QEMU_PORT" = ""  ] && QEMU_PORT=4444
+NET1=""
+QEMU_OPTS="-m 1024 -smp 2 -curses -monitor tcp::$QEMU_PORT,server,nowait"
+QEMU_OPTS="$QEMU_OPTS $NET1 $NET2"
+
+#QEMU_OPTS="-m 1024 -smp 1 -curses -monitor tcp::4444,server,nowait"
+
+arch=
+while [ x"$1" != x ] ; do
+    case "$1" in
+    -app)
+	APP=$2
+	shift
+	;;
+    -j)
+	PARALLEL="-j 4"
+	;;
+
+    -targ*|-arch*)
+	arch="--arch $2"
+	PLATFORM=$2
+	shift
+	;;
+    -kern*)
+	KERNCONF=$2
+	shift
+	;;
+    -nomod*)
+	export NO_MODULES=yes
+	;;
+
+    -hd*)
+	hda=$2
+	shift
+	;;
+
+    -q11) # qemu 11
+	QEMU_DIR=/usr/ports/emulators/qemu/work/qemu-0.11.1/x86_64-softmmu/
+	;;
+
+    -clean)
+	unset NO_CLEAN
+	;;
+    -depend)
+	unset NO_KERNELDEPEND
+	;;
+    *)
+	break
+	;;
+    esac
+    shift
+done
+# cmd image root
+
+cmd=$1
+pico=$2
+root=$3
+shift; shift; shift
+
+QEMU=${QEMU_DIR}qemu-system-x86_64
+[ -f "$hda" ] || hda=build_dir-$pico-$PLATFORM/picobsd.bin
+echo "--- $cmd $pico on tree $root"
+case "$cmd" in
+   init)
+	../$root/release/picobsd/build/picobsd --src ../$root -n -v \
+		$arch --init --par
+	;;
+   build|bld)
+	../$root/release/picobsd/build/picobsd --src ../$root -n -v $pico
+		#$arch $pico
+	;;
+   run)
+	$QEMU $QEMU_OPTS -hda $hda $*
+	;;
+esac
