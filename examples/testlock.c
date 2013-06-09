@@ -478,6 +478,30 @@ fast_bcopy(void *_src, void *_dst, int l)
 	}
 }
 
+static inline void
+asmcopy(void *dst, void *src, uint64_t l)
+{
+	(void)dst;
+	(void)src;
+	asm(
+	"\n\t"
+	"movq %0, %%rcx\n\t"
+	"addq $7, %%rcx\n\t"
+	"shrq $03, %%rcx\n\t"
+	"cld\n\t"
+	"movq %1, %%rdi\n\t"
+	"movq %2, %%rsi\n\t"
+	"repe movsq\n\t"
+/*	"movq %0, %%rcx\n\t"
+	"andq $0x7, %%rcx\n\t"
+	"repe movsb\n\t"
+*/
+	: /* out */
+	: "r" (l), "r" (dst), "r" (src) /* in */
+	: "%rcx", "%rsi", "%rdi" /* clobbered */
+	);
+
+}
 // XXX if you want to make sure there is no inlining...
 // static void (*fp)(void *_src, void *_dst, int l) = fast_bcopy;
 
@@ -495,6 +519,21 @@ test_fastcopy(struct targ *t)
 	D("fast copying %d bytes", len);
         for (m = 0; m < t->g->m_cycles; m++) {
 		fast_bcopy(t->g, (void *)&huge[m & HU], len);
+		t->count+=1;
+        }
+}
+
+void
+test_asmcopy(struct targ *t)
+{
+        int64_t m;
+	int len = t->g->arg;
+
+	if (len > (int)sizeof(struct glob_arg))
+		len = sizeof(struct glob_arg);
+	D("fast copying %d bytes", len);
+        for (m = 0; m < t->g->m_cycles; m++) {
+		asmcopy((void *)&huge[m & HU], t->g, len);
 		t->count+=1;
         }
 }
@@ -561,6 +600,7 @@ struct entry tests[] = {
 	{ test_builtin_memcpy, "__builtin_memcpy", 1000, 100000000 },
 	{ test_memcpy, "memcpy", 1000, 100000000 },
 	{ test_fastcopy, "fastcopy", 1000, 100000000 },
+	{ test_asmcopy, "asmcopy", 1000, 100000000 },
 	{ test_add, "add", ONE_MILLION, 100000000 },
 	{ test_nop, "nop", ONE_MILLION, 100000000 },
 	{ test_atomic_add, "atomic-add", ONE_MILLION, 100000000 },

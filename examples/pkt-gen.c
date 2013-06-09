@@ -80,6 +80,7 @@ struct glob_arg {
 	int burst;
 	int forever;
 	int npackets;	/* total packets to send */
+	int frags;	/* fragments per packet */
 	int nthreads;
 	int cpus;
 	int options;	/* testing */
@@ -461,9 +462,10 @@ initialize_packet(struct targ *targ)
  */
 static int
 send_packets(struct netmap_ring *ring, struct pkt *pkt, 
-		int size, u_int count, int options)
+		int size, u_int count, int options, int nfrags)
 {
 	u_int sent, cur = ring->cur;
+	int fcnt;
 
 	if (ring->avail < count)
 		count = ring->avail;
@@ -480,7 +482,7 @@ send_packets(struct netmap_ring *ring, struct pkt *pkt,
 		cur = ring->cur;
 	}
 #endif
-	for (sent = 0; sent < count; sent++) {
+	for (fcnt = nfrags, sent = 0; sent < count; sent++) {
 		struct netmap_slot *slot = &ring->slot[cur];
 		char *p = NETMAP_BUF(ring, slot->buf_idx);
 
@@ -499,6 +501,10 @@ send_packets(struct netmap_ring *ring, struct pkt *pkt,
 		slot->len = size;
 		if (sent == count - 1)
 			slot->flags |= NS_REPORT;
+		if (--fcnt > 0)
+			slot->flags |= NS_MOREFRAG;
+		else
+			fcnt = nfrags;
 		cur = NETMAP_RING_NEXT(ring, cur);
 	}
 	ring->avail -= sent;
@@ -855,8 +861,10 @@ sender_body(void *data)
 			txring = NETMAP_TXRING(nifp, i);
 			if (txring->avail == 0)
 				continue;
+			if (targ->g->frags > 1)
+				limit -= limit % targ->g->frags;
 			m = send_packets(txring, &targ->pkt, targ->g->pkt_size,
-					 limit, options);
+					 limit, options, targ->g->frags);
 			sent += m;
 			tosend -= m;
 			targ->count = sent;
@@ -1343,9 +1351,10 @@ main(int arc, char **argv)
 	g.cpus = 1;
 	g.forever = 1;
 	g.tx_rate = 0;
+	g.frags = 1;
 
 	while ( (ch = getopt(arc, argv,
-			"a:f:n:i:It:r:l:d:s:D:S:b:c:o:p:PT:w:WvR:X")) != -1) {
+			"a:f:F:n:i:It:r:l:d:s:D:S:b:c:o:p:PT:w:WvR:X")) != -1) {
 		struct sf *fn;
 
 		switch(ch) {
@@ -1356,6 +1365,10 @@ main(int arc, char **argv)
 
 		case 'n':
 			g.npackets = atoi(optarg);
+			break;
+
+		case 'F':
+			g.frags = atoi(optarg);
 			break;
 
 		case 'f':
