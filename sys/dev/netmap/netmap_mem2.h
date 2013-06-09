@@ -142,6 +142,10 @@ struct netmap_obj_pool {
 #define NMA_LOCK_T		struct mtx
 #endif /* linux */
 
+typedef int (*netmap_mem_finalize_t)(struct netmap_mem_d*);
+typedef void (*netmap_mem_deref_t)(struct netmap_mem_d*);
+
+
 struct netmap_mem_d {
 	NMA_LOCK_T nm_mtx;  /* protect the allocator */
 	u_int nm_totalsize; /* shorthand */
@@ -151,19 +155,23 @@ struct netmap_mem_d {
 	int refcount;		/* existing priv structures */
 	/* the three allocators */
 	struct netmap_obj_pool pools[NETMAP_POOLS_NR];
+
+	netmap_mem_finalize_t finalize;
+	netmap_mem_deref_t    deref;
 };
 
 extern struct netmap_mem_d nm_mem;
 
-vm_paddr_t netmap_mem_ofstophys(vm_ooffset_t offset);
-int	   netmap_mem_finalize(void);
+vm_paddr_t netmap_mem_ofstophys(struct netmap_mem_d *nm_mem, vm_ooffset_t offset);
+int	   netmap_mem_finalize(struct netmap_mem_d *nm_mem);
 int 	   netmap_mem_init(void);
 void 	   netmap_mem_fini(void);
 void* 	   netmap_mem_if_new(const char *ifname, struct netmap_adapter *na);
 void 	   netmap_mem_if_delete(struct netmap_adapter *na, struct netmap_if *nifp);
-void 	   netmap_mem_deref(void);
-u_int	   netmap_mem_get_totalsize(void);
-ssize_t    netmap_mem_if_offset(const void *vaddr);
+void 	   netmap_mem_deref(struct netmap_mem_d *nm_mem);
+u_int	   netmap_mem_get_totalsize(struct netmap_mem_d *nm_mem);
+ssize_t    netmap_mem_if_offset(struct netmap_mem_d *nm_mem, const void *vaddr);
+struct netmap_mem_d * netmap_mem_new(const struct netmap_obj_params *p);
 
 
 

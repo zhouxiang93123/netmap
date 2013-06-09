@@ -290,6 +290,8 @@ struct netmap_adapter {
 				 * useful during initialization
 				 */
 #define NAF_SW_ONLY	2	/* forward packets only to sw adapter */
+#define NAF_MEM_PRIV	4	/* the interface uses a private memory
+				 * allocator */
 	int refcount; /* number of user-space descriptors using this
 			 interface, which is equal to the number of
 			 struct netmap_if objs in the mapped region. */
@@ -359,6 +361,9 @@ struct netmap_adapter {
 	 * This is only done when physical interfaces are attached to a bridge.
 	 */
 	struct netmap_priv_d *na_kpriv;
+
+	/* memory allocator */
+ 	struct netmap_mem_d *nm_mem;
 #ifdef linux
 	struct net_device_ops nm_ndo;
 #endif /* linux */

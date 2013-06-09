@@ -336,6 +336,15 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, bridge_batch, CTLFLAG_RW, &bridge_batch, 0 , "
 #define	ADD_BDG_REF(ifp)	refcount_acquire(&NA(ifp)->na_bdg_refcount)
 #define	DROP_BDG_REF(ifp)	refcount_release(&NA(ifp)->na_bdg_refcount)
 
+/* The bridge references the buffers using the device specific look up table */
+static inline void *
+BDG_NMB(struct netmap_mem_d *nmd, struct netmap_slot *slot)
+{
+	struct lut_entry *lut = nmd->pools[NETMAP_BUF_POOL].lut;
+	uint32_t i = slot->buf_idx;
+	return (unlikely(i >= nmd->pools[NETMAP_BUF_POOL].objtotal)) ?  lut[0].vaddr : lut[i].vaddr;
+}
+
 static void bdg_netmap_attach(struct netmap_adapter *);
 static int bdg_netmap_reg(struct ifnet *ifp, int onoff);
 static int kern_netmap_regif(struct nmreq *nmr);
@@ -805,7 +814,7 @@ struct netmap_priv_d {
 	u_int		np_qfirst, np_qlast;	/* range of rings to scan */
 	uint16_t	np_txpoll;
 
-	unsigned long	ref_done;	/* use with NMG_LOCK held */
+	struct netmap_mem_d *np_mref;	/* use with NMG_LOCK held */
 };
 
 
@@ -813,11 +822,19 @@ static int
 netmap_get_memory(struct netmap_priv_d* p)
 {
 	int error = 0;
+	struct netmap_adapter *na;
+	struct netmap_mem_d *nmd;
 	NMG_LOCK();
-	if (!p->ref_done) {
-		error = netmap_mem_finalize();
+	na = p->np_ifp ? NA(p->np_ifp) : NULL;
+	nmd = na ? na->nm_mem : &nm_mem;
+	if (!p->np_mref || nmd != p->np_mref) {
+		if (p->np_mref) {
+			netmap_mem_deref(p->np_mref);
+			p->np_mref = NULL;
+		}
+		error = netmap_mem_finalize(nmd);
 		if (!error)
-			p->ref_done = 1;
+			p->np_mref = nmd;
 	}
 	NMG_UNLOCK();
 	return error;
@@ -964,8 +981,8 @@ netmap_dtor(void *data)
 
 		nm_if_rele(ifp); /* might also destroy *na */
 	}
-	if (priv->ref_done) {
-		netmap_mem_deref();
+	if (priv->np_mref) {
+		netmap_mem_deref(priv->np_mref);
 	}
 	NMG_UNLOCK();
 	bzero(priv, sizeof(*priv));	/* XXX for safety */
@@ -1790,6 +1807,12 @@ netmap_attach_sw(struct ifnet *ifp)
 	na->num_tx_desc = hw_na->num_tx_desc;
 	na->num_rx_desc = hw_na->num_rx_desc;
 	na->nm_txsync = netmap_bdg_to_host;
+	/* we use the same memory allocator as the
+	 * the hw adapter */
+	na->nm_mem = hw_na->nm_mem;
+	/* make sure we do not try do destroy
+	 * the allocator on release */
+	na->na_flags &= ~NAF_MEM_PRIV;
 }
 
 
@@ -1984,7 +2007,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		if (error)
 			break;
 		/* memsize is always valid */
-		nmr->nr_memsize = netmap_mem_get_totalsize();
+		nmr->nr_memsize = netmap_mem_get_totalsize(priv->np_mref);
 		nmr->nr_offset = 0;
 		nmr->nr_rx_slots = nmr->nr_tx_slots = 0;
 		if (nmr->nr_name[0] == '\0')	/* just get memory info */
@@ -2067,8 +2090,8 @@ unlock_out:
 		nmr->nr_tx_rings = na->num_tx_rings;
 		nmr->nr_rx_slots = na->num_rx_desc;
 		nmr->nr_tx_slots = na->num_tx_desc;
-		nmr->nr_memsize = netmap_mem_get_totalsize();
-		nmr->nr_offset = netmap_mem_if_offset(nifp);
+		nmr->nr_memsize = netmap_mem_get_totalsize(na->nm_mem);
+		nmr->nr_offset = netmap_mem_if_offset(na->nm_mem, nifp);
 		break;
 
 	case NIOCUNREGIF:
@@ -2535,6 +2558,7 @@ netmap_attach(struct netmap_adapter *arg, u_int num_queues)
 	}
 	na->nm_ndo.ndo_start_xmit = linux_netmap_start;
 #endif /* linux */
+	na->nm_mem = arg->nm_mem ? arg->nm_mem : &nm_mem;
 	if (!nma_is_vp(arg))
 		netmap_attach_sw(ifp);
 	D("success for %s", ifp->if_xname);
@@ -2973,6 +2997,7 @@ linux_netmap_mmap(struct file *f, struct vm_area_struct *vma)
 	int error = 0;
 	unsigned long off, va;
 	vm_offset_t pa;
+	struct netmap_priv_d *priv = f->private_data;
 	/*
 	 * vma->vm_start: start of mapping user address space
 	 * vma->vm_end: end of the mapping user address space
@@ -2981,7 +3006,7 @@ linux_netmap_mmap(struct file *f, struct vm_area_struct *vma)
 
 	// XXX security checks
 
-	error = netmap_get_memory(f->private_data);
+	error = netmap_get_memory(priv);
 	ND("get_memory returned %d", error);
 	if (error)
 	    return -error;
@@ -2995,7 +3020,7 @@ linux_netmap_mmap(struct file *f, struct vm_area_struct *vma)
 	     va < vma->vm_end;
 	     va += PAGE_SIZE, off++)
 	{
-		pa = netmap_mem_ofstophys(off << PAGE_SHIFT);
+		pa = netmap_mem_ofstophys(priv->np_mref, off << PAGE_SHIFT);
 		if (pa == 0) 
 			return -EINVAL;
 	
