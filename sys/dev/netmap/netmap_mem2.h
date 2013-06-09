@@ -171,7 +171,9 @@ void 	   netmap_mem_if_delete(struct netmap_adapter *na, struct netmap_if *nifp)
 void 	   netmap_mem_deref(struct netmap_mem_d *nm_mem);
 u_int	   netmap_mem_get_totalsize(struct netmap_mem_d *nm_mem);
 ssize_t    netmap_mem_if_offset(struct netmap_mem_d *nm_mem, const void *vaddr);
-struct netmap_mem_d * netmap_mem_new(const struct netmap_obj_params *p);
+struct netmap_mem_d * netmap_mem_private_new(const struct netmap_obj_params *p);
+
+#define NETMAP_BDG_BUF_SIZE(n)	((n)->pools[NETMAP_BUF_POOL]._objsize)
 
 
 

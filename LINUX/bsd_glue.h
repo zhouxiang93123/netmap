@@ -303,4 +303,7 @@ extern struct kernel_param_ops generic_sysctl_ops;
 int sysctl_handle_int(SYSCTL_HANDLER_ARGS);
 int sysctl_handle_long(SYSCTL_HANDLER_ARGS);
 
+#define MALLOC_DECLARE(a)
+#define MALLOC_DEFINE(a, b, c)
+
 #endif /* _BSD_GLUE_H */

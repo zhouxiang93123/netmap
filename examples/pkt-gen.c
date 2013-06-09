@@ -1556,20 +1556,32 @@ main(int arc, char **argv)
 	if (g.main_fd == -1) {
 		D("Unable to open /dev/netmap");
 		// fail later
-	} else {
-		if ((ioctl(g.main_fd, NIOCGINFO, &nmr)) == -1) {
-			D("Unable to get if info without name");
-		} else {
-			D("map size is %d Kb", nmr.nr_memsize >> 10);
-		}
-		bzero(&nmr, sizeof(nmr));
-		nmr.nr_version = NETMAP_API;
-		strncpy(nmr.nr_name, g.ifname, sizeof(nmr.nr_name));
-		if ((ioctl(g.main_fd, NIOCGINFO, &nmr)) == -1) {
-			D("Unable to get if info for %s", g.ifname);
-		}
-		devqueues = nmr.nr_rx_rings;
 	}
+	/*
+	 * Register the interface on the netmap device: from now on,
+	 * we can operate on the network interface without any
+	 * interference from the legacy network stack.
+	 *
+	 * We decide to put the first interface registration here to
+	 * give time to cards that take a long time to reset the PHY.
+	 */
+	bzero(&nmr, sizeof(nmr));
+	nmr.nr_version = NETMAP_API;
+	strncpy(nmr.nr_name, g.ifname, sizeof(nmr.nr_name));
+	nmr.nr_version = NETMAP_API;
+	if (ioctl(g.main_fd, NIOCREGIF, &nmr) == -1) {
+		D("Unable to register interface %s", g.ifname);
+		//continue, fail later
+	}
+	//if ((ioctl(g.main_fd, NIOCGINFO, &nmr)) == -1) {
+	//	D("Unable to get if info without name");
+	//} else {
+	//	D("map size is %d Kb", nmr.nr_memsize >> 10);
+	//}
+	if ((ioctl(g.main_fd, NIOCGINFO, &nmr)) == -1) {
+		D("Unable to get if info for %s", g.ifname);
+	}
+	devqueues = nmr.nr_rx_rings;
 
 	/* validate provided nthreads. */
 	if (g.nthreads < 1 || g.nthreads > devqueues) {
@@ -1592,19 +1604,6 @@ main(int arc, char **argv)
 		// continue, fail later
 	}
 
-	/*
-	 * Register the interface on the netmap device: from now on,
-	 * we can operate on the network interface without any
-	 * interference from the legacy network stack.
-	 *
-	 * We decide to put the first interface registration here to
-	 * give time to cards that take a long time to reset the PHY.
-	 */
-	nmr.nr_version = NETMAP_API;
-	if (ioctl(g.main_fd, NIOCREGIF, &nmr) == -1) {
-		D("Unable to register interface %s", g.ifname);
-		//continue, fail later
-	}
 
 
 	/* Print some debug information. */

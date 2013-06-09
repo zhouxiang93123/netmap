@@ -146,9 +146,6 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 241723 2012-10-19 09:41:45Z gle
 #include <net/bpf.h>		/* BIOCIMMEDIATE */
 #include <net/vnet.h>
 #include <machine/bus.h>	/* bus_dmamap_* */
-
-MALLOC_DEFINE(M_NETMAP, "netmap", "Network memory map");
-
 #include <sys/endian.h>
 #include <sys/refcount.h>
 
@@ -256,6 +253,7 @@ if_rele(struct net_device *ifp)
 #include <dev/netmap/netmap_kern.h>
 #include <dev/netmap/netmap_mem2.h>
 
+MALLOC_DEFINE(M_NETMAP, "netmap", "Network memory map");
 
 /* XXX the following variables must be deprecated and included in nm_mem */
 u_int netmap_total_buffers;
@@ -815,16 +813,18 @@ struct netmap_priv_d {
 	uint16_t	np_txpoll;
 
 	struct netmap_mem_d *np_mref;	/* use with NMG_LOCK held */
+#ifdef __FreeBSD__
+	int		np_mmaps;	/* use with NMG_LOCK held */
+#endif /* __FreeBSD__ */
 };
 
-
 static int
-netmap_get_memory(struct netmap_priv_d* p)
+netmap_get_memory_locked(struct netmap_priv_d* p)
 {
-	int error = 0;
 	struct netmap_adapter *na;
 	struct netmap_mem_d *nmd;
-	NMG_LOCK();
+	int error = 0;
+
 	na = p->np_ifp ? NA(p->np_ifp) : NULL;
 	nmd = na ? na->nm_mem : &nm_mem;
 	if (!p->np_mref || nmd != p->np_mref) {
@@ -836,6 +836,15 @@ netmap_get_memory(struct netmap_priv_d* p)
 		if (!error)
 			p->np_mref = nmd;
 	}
+	return error;
+}
+
+static int
+netmap_get_memory(struct netmap_priv_d* p)
+{
+	int error;
+	NMG_LOCK();
+	error = netmap_get_memory_locked(p);
 	NMG_UNLOCK();
 	return error;
 }
@@ -999,61 +1008,133 @@ netmap_dtor(void *data)
  * XXX but then ? Do we really use the information ?
  * Need to investigate.
  */
-static struct cdev_pager_ops saved_cdev_pager_ops;
 
+struct netmap_vm_handle_t {
+	struct cdev 		*dev;
+	struct netmap_priv_d	*priv;
+};
 
 static int
 netmap_dev_pager_ctor(void *handle, vm_ooffset_t size, vm_prot_t prot,
     vm_ooffset_t foff, struct ucred *cred, u_short *color)
 {
-	if (netmap_verbose)
-		D("first mmap for %p", handle);
-	return saved_cdev_pager_ops.cdev_pg_ctor(handle,
-			size, prot, foff, cred, color);
+	struct netmap_vm_handle_t *vmh = handle;
+	D("handle %p size %jd prot %d foff %jd",
+		handle, (intmax_t)size, prot, (intmax_t)foff);
+	dev_ref(vmh->dev);	
+	return 0;	
 }
 
 
 static void
 netmap_dev_pager_dtor(void *handle)
 {
-	saved_cdev_pager_ops.cdev_pg_dtor(handle);
-	ND("ready to release memory for %p", handle);
+	struct netmap_vm_handle_t *vmh = handle;
+	struct cdev *dev = vmh->dev;
+	D("handle %p", handle);
+	free(vmh, M_DEVBUF);
+	dev_rel(dev);
+}
+
+static int
+netmap_dev_pager_fault(vm_object_t object, vm_ooffset_t offset,
+	int prot, vm_page_t *mres)
+{
+	struct netmap_vm_handle_t *vmh = object->handle;
+	struct netmap_priv_d *priv = vmh->priv;
+	vm_paddr_t paddr;
+	vm_page_t page;
+	vm_memattr_t memattr;
+	vm_pindex_t pidx;
+
+	ND("object %p offset %jd prot %d mres %p",
+			object, (intmax_t)offset, prot, mres);
+	memattr = object->memattr;
+	pidx = OFF_TO_IDX(offset);
+	paddr = netmap_mem_ofstophys(priv->np_mref, offset);
+	if (paddr == 0)
+		return VM_PAGER_FAIL;
+
+	if (((*mres)->flags & PG_FICTITIOUS) != 0) {
+		/*
+		 * If the passed in result page is a fake page, update it with
+		 * the new physical address.
+		 */
+		page = *mres;
+		vm_page_updatefake(page, paddr, memattr);
+	} else {
+		/*
+		 * Replace the passed in reqpage page with our own fake page and
+		 * free up the all of the original pages.
+		 */
+		VM_OBJECT_UNLOCK(object);
+		page = vm_page_getfake(paddr, memattr);
+		VM_OBJECT_LOCK(object);
+		vm_page_lock(*mres);
+		vm_page_free(*mres);
+		vm_page_unlock(*mres);
+		*mres = page;
+		vm_page_insert(page, object, pidx);
+	}
+	page->valid = VM_PAGE_BITS_ALL;
+	return (VM_PAGER_OK);
+
 }
 
 
 static struct cdev_pager_ops netmap_cdev_pager_ops = {
         .cdev_pg_ctor = netmap_dev_pager_ctor,
         .cdev_pg_dtor = netmap_dev_pager_dtor,
-        .cdev_pg_fault = NULL,
+        .cdev_pg_fault = netmap_dev_pager_fault,
 };
 
 
-// XXX check whether we need netmap_mmap_single _and_ netmap_mmap
 static int
 netmap_mmap_single(struct cdev *cdev, vm_ooffset_t *foff,
 	vm_size_t objsize,  vm_object_t *objp, int prot)
 {
+	int error;
+	struct netmap_vm_handle_t *vmh;
+	struct netmap_priv_d *priv;
 	vm_object_t obj;
 
-	ND("cdev %p foff %jd size %jd objp %p prot %d", cdev,
+	D("cdev %p foff %jd size %jd objp %p prot %d", cdev,
 	    (intmax_t )*foff, (intmax_t )objsize, objp, prot);
-	obj = vm_pager_allocate(OBJT_DEVICE, cdev, objsize, prot, *foff,
-            curthread->td_ucred);
-	ND("returns obj %p", obj);
-	if (obj == NULL)
-		return EINVAL;
-	if (saved_cdev_pager_ops.cdev_pg_fault == NULL) {
-		ND("initialize cdev_pager_ops");
-		saved_cdev_pager_ops = *(obj->un_pager.devp.ops);
-		netmap_cdev_pager_ops.cdev_pg_fault =
-			saved_cdev_pager_ops.cdev_pg_fault;
-	};
-	obj->un_pager.devp.ops = &netmap_cdev_pager_ops;
+	
+	vmh = malloc(sizeof(struct netmap_vm_handle_t), M_DEVBUF,
+			      M_NOWAIT | M_ZERO);
+	if (vmh == NULL)
+		return ENOMEM;
+	vmh->dev = cdev;
+
+	error = devfs_get_cdevpriv((void**)&priv);
+	if (error)
+		goto err;
+	vmh->priv = priv;
+
+	error = netmap_get_memory(priv);
+	if (error)
+		goto err;
+
+	obj = cdev_pager_allocate(vmh, OBJT_DEVICE, 
+		&netmap_cdev_pager_ops, objsize, prot,
+		*foff, NULL);
+	if (obj == NULL) {
+		D("cdev_pager_allocate failed");
+		error = EINVAL;
+		goto err;
+	}
+		
 	*objp = obj;
 	return 0;
+
+err:
+	free(vmh, M_DEVBUF);
+	return error;
 }
 
 
+#if 0
 /*
  * mmap(2) support for the "netmap" device.
  *
@@ -1078,7 +1159,7 @@ netmap_mmap(struct cdev *dev,
 
 	error = devfs_get_cdevpriv((void **)&priv);
 	if (error == EBADF) {	/* called on fault, memory is initialized */
-		ND(5, "handling fault at ofs 0x%x", offset);
+		D("handling fault at ofs 0x%x", offset);
 		error = 0;
 	} else if (error == 0)	/* make sure memory is set */
 		error = netmap_get_memory(priv);
@@ -1086,11 +1167,11 @@ netmap_mmap(struct cdev *dev,
 		return (error);
 
 	ND("request for offset 0x%x", (uint32_t)offset);
-	*paddr = netmap_mem_ofstophys(offset);
+	*paddr = netmap_mem_ofstophys(priv->np_mref, offset);
 
 	return (*paddr ? 0 : ENOMEM);
 }
-
+#endif
 
 static int
 netmap_close(struct cdev *dev, int fflag, int devtype, struct thread *td)
@@ -1185,6 +1266,7 @@ netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
 	u_int lim = kring->nkr_num_slots - 1;
 	struct mbuf *m, *tail = q->tail;
 	u_int k = kring->ring->cur, n = kring->ring->reserved;
+	struct netmap_mem_d *nmd = kring->na->nm_mem;
 
 	/* compute the final position, ring->cur - ring->reserved */
 	if (n > 0) {
@@ -1198,13 +1280,13 @@ netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
 		n = nm_next(n, lim);
 		if ((slot->flags & NS_FORWARD) == 0 && !force)
 			continue;
-		if (slot->len < 14 || slot->len > NETMAP_BUF_SIZE) {
+		if (slot->len < 14 || slot->len > NETMAP_BDG_BUF_SIZE(nmd)) {
 			D("bad pkt at %d len %d", n, slot->len);
 			continue;
 		}
 		slot->flags &= ~NS_FORWARD; // XXX needed ?
 		/* XXX adapt to the case of a multisegment packet */
-		m = m_devget(NMB(slot), slot->len, 0, kring->na->ifp, NULL);
+		m = m_devget(BDG_NMB(nmd, slot), slot->len, 0, kring->na->ifp, NULL);
 
 		if (m == NULL)
 			break;
@@ -1552,7 +1634,7 @@ netmap_ring_reinit(struct netmap_kring *kring)
 				D("bad buffer at slot %d idx %d len %d ", i, idx, len);
 			ring->slot[i].buf_idx = 0;
 			ring->slot[i].len = 0;
-		} else if (len > NETMAP_BUF_SIZE) {
+		} else if (len > NETMAP_BDG_BUF_SIZE(kring->na->nm_mem)) {
 			ring->slot[i].len = 0;
 			if (!errors++)
 				D("bad len %d at slot %d idx %d",
@@ -1639,14 +1721,17 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 	struct netmap_if *nifp = NULL;
 	int error;
 
-	if (na->na_bdg)
-		BDG_WLOCK(na->na_bdg);
 	na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
 
 	/* ring configuration may have changed, fetch from the card */
 	netmap_update_config(na);
 	priv->np_ifp = ifp;     /* store the reference */
 	error = netmap_set_ringid(priv, ringid);
+	if (error)
+		goto out;
+	/* ensure allocators are ready */
+	error = netmap_get_memory_locked(priv);
+	ND("get_memory returned %d", error);
 	if (error)
 		goto out;
 	nifp = netmap_if_new(ifp->if_xname, na);
@@ -1673,7 +1758,11 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 			SWNA(ifp)->tx_rings = &na->tx_rings[na->num_tx_rings];
 			SWNA(ifp)->rx_rings = &na->rx_rings[na->num_rx_rings];
 		}
+		if (na->na_bdg)
+			BDG_WLOCK(na->na_bdg);
 		error = na->nm_register(ifp, 1); /* mode on */
+		if (na->na_bdg)
+			BDG_WUNLOCK(na->na_bdg);
 		if (!error)
 			error = nm_alloc_bdgfwd(na);
 		if (error) {
@@ -1687,8 +1776,6 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 out:
 	*err = error;
 	na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
-	if (na->na_bdg)
-		BDG_WUNLOCK(na->na_bdg);
 	return nifp;
 }
 
@@ -1705,22 +1792,16 @@ kern_netmap_regif(struct nmreq *nmr)
 	npriv = malloc(sizeof(*npriv), M_DEVBUF, M_NOWAIT|M_ZERO);
 	if (npriv == NULL)
 		return ENOMEM;
-	error = netmap_get_memory(npriv);
-	if (error)
-		goto free_exit;
-
 	NMG_LOCK();
 	error = get_ifp(nmr, &ifp);
 	if (error) { /* no device, or another bridge or user owns the device */
-		NMG_UNLOCK();
-		goto free_exit;
-	}
-	if (!NETMAP_OWNED_BY_KERN(ifp)) {
+		goto unlock_exit;
+	} else if (!NETMAP_OWNED_BY_KERN(ifp)) {
 		/* got reference to a virtual port or direct access to a NIC.
 		 * perhaps specified no bridge's prefix or wrong NIC's name
 		 */
 		error = EINVAL;
-		goto unref_exit;
+		goto unlock_exit;
 	}
 
 	if (nmr->nr_cmd == NETMAP_BDG_DETACH) {
@@ -1752,6 +1833,7 @@ kern_netmap_regif(struct nmreq *nmr)
 
 unref_exit:
 	nm_if_rele(ifp);
+unlock_exit:
 	NMG_UNLOCK();
 free_exit:
 	bzero(npriv, sizeof(*npriv));
@@ -2045,12 +2127,6 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			error = EINVAL;
 			break;
 		}
-
-		/* ensure allocators are ready */
-		error = netmap_get_memory(priv);
-		ND("get_memory returned %d", error);
-		if (error)
-			break;
 
 		/* protect access to priv from concurrent NIOCREGIF */
 		NMG_LOCK();
@@ -2612,7 +2688,7 @@ bdg_netmap_start(struct ifnet *ifp, struct mbuf *m)
 	struct netmap_adapter *na = SWNA(ifp);
 	struct nm_bdg_fwd *ft = na->rx_rings[0].nkr_ft;
 	u_int len = MBUF_LEN(m);
-	char *buf = NMB(&na->rx_rings[0].ring->slot[0]);
+	char *buf = BDG_NMB(na->nm_mem, &na->rx_rings[0].ring->slot[0]);
 
 	/* use slot 0, there is nothing queued here */
 	if (!na->na_bdg) /* SWNA is not configured to be attached */
@@ -2657,9 +2733,9 @@ netmap_start(struct ifnet *ifp, struct mbuf *m)
 		D("%s packet %d len %d from the stack", ifp->if_xname,
 			kring->nr_hwcur + kring->nr_hwavail, len);
 	// XXX reconsider long packets if we handle fragments
-	if (len > NETMAP_BUF_SIZE) { /* too long for us */
+	if (len > NETMAP_BDG_BUF_SIZE(na->nm_mem)) { /* too long for us */
 		D("%s from_host, drop packet size %d > %d", ifp->if_xname,
-			len, NETMAP_BUF_SIZE);
+			len, NETMAP_BDG_BUF_SIZE(na->nm_mem));
 		m_freem(m);
 		return EINVAL;
 	}
@@ -2677,7 +2753,7 @@ netmap_start(struct ifnet *ifp, struct mbuf *m)
 	/* compute the insert position */
 	i = nm_kr_rxpos(kring);
 	slot = &kring->ring->slot[i];
-	m_copydata(m, 0, (int)len, NMB(slot));
+	m_copydata(m, 0, (int)len, BDG_NMB(na->nm_mem, slot));
 	slot->len = len;
 	slot->flags = kring->nkr_slot_flags;
 	kring->nr_hwavail++;
@@ -2777,7 +2853,7 @@ nm_bdg_preflush(struct netmap_adapter *na, u_int ring_nr,
 
 	for (; likely(j != end); j = nm_next(j, lim)) {
 		struct netmap_slot *slot = &ring->slot[j];
-		char *buf = NMB(slot);
+		char *buf = BDG_NMB(na->nm_mem, slot);
 
 		ft[ft_i].ft_len = slot->len;
 		ft[ft_i].ft_flags = slot->flags;
@@ -3012,7 +3088,7 @@ linux_netmap_mmap(struct file *f, struct vm_area_struct *vma)
 	    return -error;
 
 	if ((vma->vm_start & ~PAGE_MASK) || (vma->vm_end & ~PAGE_MASK)) {
-		D("vm_start = %lx vm_end = %lx", vma->vm_start, vma->vm_end);
+		ND("vm_start = %lx vm_end = %lx", vma->vm_start, vma->vm_end);
 		return -EINVAL;
 	}
 
@@ -3144,7 +3220,6 @@ static struct cdevsw netmap_cdevsw = {
 	.d_version = D_VERSION,
 	.d_name = "netmap",
 	.d_open = netmap_open,
-	.d_mmap = netmap_mmap,
 	.d_mmap_single = netmap_mmap_single,
 	.d_ioctl = netmap_ioctl,
 	.d_poll = netmap_poll,
@@ -3296,16 +3371,15 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		ND("slot %d frags %d", i, ft[i].ft_frags);
 		dst_port = b->nm_bdg_lookup(ft[i].ft_buf, ft[i].ft_len,
 			&dst_ring, na);
-		if (dst_port == NM_BDG_NOPORT) {
+		if (dst_port == NM_BDG_NOPORT)
 			continue; /* this packet is identified to be dropped */
-		} else if (unlikely(dst_port > NM_BDG_MAXPORTS)) {
+		else if (unlikely(dst_port > NM_BDG_MAXPORTS))
 			continue;
-		} else if (dst_port == NM_BDG_BROADCAST) {
+		else if (dst_port == NM_BDG_BROADCAST)
 			dst_ring = 0; /* broadcasts always go to ring 0 */
-		} else if (unlikely(dst_port == me ||
-		    !BDG_GET_VAR(b->bdg_ports[dst_port]))) {
+		else if (unlikely(dst_port == me ||
+		    !BDG_GET_VAR(b->bdg_ports[dst_port])))
 			continue;
-		}
 
 		/* get a position in the scratch pad */
 		d_i = dst_port * NM_BDG_MAXRINGS + dst_ring;
@@ -3455,7 +3529,7 @@ retry:
 			    size_t len = (ft_p->ft_len + 63) & ~63;
 
 			    slot = &ring->slot[j];
-			    dst = NMB(slot);
+			    dst = BDG_NMB(dst_na->nm_mem, slot);
 			    /* round to a multiple of 64 */
 
 			    ND("send %d %d bytes at %s:%d",
@@ -3651,7 +3725,7 @@ bdg_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		ND("userspace releases %d packets", n);
                 for (n = 0; likely(j != k); n++) {
                         struct netmap_slot *slot = &ring->slot[j];
-                        void *addr = NMB(slot);
+                        void *addr = BDG_NMB(na->nm_mem, slot);
 
                         if (addr == netmap_buffer_base) { /* bad buf */
                                 if (do_lock)
@@ -3679,6 +3753,7 @@ static void
 bdg_netmap_attach(struct netmap_adapter *arg)
 {
 	struct netmap_adapter na;
+	struct netmap_obj_params op[NETMAP_POOLS_NR];
 
 	ND("attaching virtual bridge");
 	bzero(&na, sizeof(na));
@@ -3692,6 +3767,18 @@ bdg_netmap_attach(struct netmap_adapter *arg)
 	na.nm_txsync = bdg_netmap_txsync;
 	na.nm_rxsync = bdg_netmap_rxsync;
 	na.nm_register = bdg_netmap_reg;
+	na.na_flags |= NAF_MEM_PRIV;
+	/* XXX the user should be able to set all of these 
+	 * (except perhaps RING_POOL.size)
+	 */
+	op[NETMAP_IF_POOL].size = 1024;
+	op[NETMAP_IF_POOL].num = 10;
+	op[NETMAP_RING_POOL].size = 9*PAGE_SIZE;
+	op[NETMAP_RING_POOL].num = 2 + 2*(na.num_tx_rings + na.num_rx_rings);
+	op[NETMAP_BUF_POOL].size = 2048;
+	op[NETMAP_BUF_POOL].num = 2 + 2*(na.num_tx_desc * na.num_tx_rings +
+		na.num_rx_desc * na.num_rx_rings);
+	na.nm_mem = netmap_mem_private_new(op);
 	netmap_attach(&na, na.num_tx_rings);
 }
 
