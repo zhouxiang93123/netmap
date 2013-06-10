@@ -15,9 +15,10 @@ QEMU_DIR=/usr/home/luigi/work-qemu/git-head-20130131/x86_64-softmmu/
 QEMU_DIR=/usr/home/luigi/qemu-misc/qemu/x86_64-softmmu/
 [ "$QEMU_PORT" = ""  ] && QEMU_PORT=4444
 NET1=""
-QEMU_OPTS="-m 1024 -smp 2 -curses -monitor tcp::$QEMU_PORT,server,nowait"
+QEMU_OPTS="-m 1024 -smp 2 "
 QEMU_OPTS="$QEMU_OPTS $NET1 $NET2"
 
+VIDEO="-curses -monitor tcp::$QEMU_PORT,server,nowait"
 #QEMU_OPTS="-m 1024 -smp 1 -curses -monitor tcp::4444,server,nowait"
 
 arch=
@@ -42,6 +43,10 @@ while [ x"$1" != x ] ; do
 	;;
     -nomod*)
 	export NO_MODULES=yes
+	;;
+
+    -sdl)
+	VIDEO=""
 	;;
 
     -hd*)
@@ -85,6 +90,6 @@ case "$cmd" in
 		#$arch $pico
 	;;
    run)
-	$QEMU $QEMU_OPTS -hda $hda $*
+	$QEMU $QEMU_OPTS $VIDEO -hda $hda $*
 	;;
 esac
