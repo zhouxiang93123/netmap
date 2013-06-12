@@ -373,7 +373,7 @@ nm_find_bridge(const char *name, int create)
 	namelen = strlen(NM_NAME);	/* base length */
 	l = strlen(name);		/* actual length */
 	if (name == NULL || l < namelen) {
-		D("invalid bridge name %s", name ? NULL : name);
+		D("invalid bridge name %s", name ? name : NULL);
 		return NULL;
 	}
 	for (i = namelen + 1; i < l; i++) {
