@@ -199,8 +199,8 @@ static int kern_netmap_regif(struct nmreq *nmr);
  * ft_frags and ft_next are valid only on the first fragment.
  */
 struct nm_bdg_fwd {	/* forwarding entry for a bridge */
-	void *ft_buf;
-	uint8_t _ft_frags;	/* how many fragments (only on 1st frag) */
+	void *ft_buf;		/* netmap or indirect buffer */
+	uint8_t ft_frags;	/* how many fragments (only on 1st frag) */
 	uint8_t _ft_port;	/* dst port (unused) */
 	uint16_t ft_flags;	/* flags, e.g. indirect */
 	uint16_t ft_len;	/* src fragment len */
@@ -1473,7 +1473,8 @@ free_exit:
 	if (error) { /* no device, or another bridge or user owns the device */
 		NMA_UNLOCK();
 		goto free_exit;
-	} else if (!NETMAP_OWNED_BY_KERN(ifp)) {
+	}
+	if (!NETMAP_OWNED_BY_KERN(ifp)) {
 		/* got reference to a virtual port or direct access to a NIC.
 		 * perhaps specified no bridge's prefix or wrong NIC's name
 		 */
@@ -1495,7 +1496,8 @@ unref_exit:
 		NA(ifp)->na_kpriv = NULL;
 		nm_if_rele(ifp); /* detach from the bridge */
 		goto free_exit;
-	} else if (NA(ifp)->refcount > 0) { /* already registered */
+	}
+	if (NA(ifp)->refcount > 0) { /* already registered */
 		error = EINVAL;
 		goto unref_exit;
 	}
@@ -1802,7 +1804,7 @@ unlock_out:
 		error = get_ifp(nmr, &ifp); /* keep reference */
 		if (error)
 			goto unlock_out;
-		else if (NETMAP_OWNED_BY_KERN(ifp)) {
+		if (NETMAP_OWNED_BY_KERN(ifp)) {
 			nm_if_rele(ifp);
 			goto unlock_out;
 		}
@@ -2356,7 +2358,7 @@ bdg_netmap_start(struct ifnet *ifp, struct mbuf *m)
 	if (!na->na_bdg) /* SWNA is not configured to be attached */
 		return EBUSY;
 	/* XXX we can save the copy calling m_copydata in nm_bdg_flush,
-	 * later, need a special flag for this.
+	 * need a special flag for this.
 	 */
 	m_copydata(m, 0, len, buf);
 	ft->ft_flags = 0;	// XXX could be indirect ?
@@ -3019,10 +3021,10 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na,
 
 	BDG_RLOCK(b);
 
-	/* first pass: find a destination */
+	/* first pass: find a destination for each packet in the batch */
 	for (i = 0; likely(i < n); i++) {
 		uint8_t *buf = ft[i].ft_buf;
-		uint8_t dst_ring = ring_nr;
+		uint8_t dst_ring = ring_nr; /* default, same ring as origin */
 		uint16_t dst_port, d_i;
 		struct nm_bdg_q *d;
 
@@ -3126,6 +3128,7 @@ retry:
 			j = kring->nr_hwcur;
 			howmany = kring->nr_hwavail;
 		}
+		/* copy to the destination queue */
 		while (howmany-- > 0) {
 			struct netmap_slot *slot;
 			struct nm_bdg_fwd *ft_p;
@@ -3133,7 +3136,7 @@ retry:
 			void *src, *dst;
 
 			/* find the queue from which we pick next packet.
-			/* NM_FT_NULL is always higher than valid indexes
+			 * NM_FT_NULL is always higher than valid indexes
 			 * so we never dereference it if the other list
 			 * has packets (and if both are empty we never
 			 * get here).
