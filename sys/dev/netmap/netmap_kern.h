@@ -169,6 +169,110 @@ struct netmap_kring {
 	NM_LOCK_T q_lock;	/* used if no device lock available */
 } __attribute__((__aligned__(64)));
 
+
+/* return the next index, with wraparound */
+static inline int
+nm_next(int i, int lim)
+{
+	return unlikely (i == lim) ? 0 : i + 1;
+}
+
+
+/* some macros to access interesting points in the rings
+ * All numbers are modulo nkr_num_slots
+ * TX rings:
+ *
+ * RX rings:
+ *	kring->nr_hwcur   =:= ring->cur - ring->reserved;
+ *	kring->nr_hwavail =:= ring->avail + ring->reserved
+ *
+ *	busy = [nr_hwcur .. nkr_hwlease-1]
+ *	nkr_num_slots - 1 - busy are available
+ *   The write position is nkr_hwlease (which is incremented
+ *   upon reservations).
+ *   The update position (where new data are made available)
+ *   is nr_hwcur+nr_hwavail, and causes nr_hwavail to advance.
+ */
+
+
+/*
+ * space in the receive ring. Make sure there is always at least
+ * one empty slot.
+ */
+static inline int
+nm_kr_rxspace(struct netmap_kring *k)
+{
+	int busy = k->nkr_hwlease - k->nr_hwcur;
+	if (busy < 0)
+		busy += k->nkr_num_slots;
+#if 0
+	// sanity check
+	if (k->nkr_hwlease >= k->nkr_num_slots ||
+		k->nr_hwcur >= k->nkr_num_slots ||
+		k->nr_hwavail >= k->nkr_num_slots ||
+		busy < 0 ||
+		busy >= k->nkr_num_slots) {
+		D("invalid kring, cur %d avail %d lease %d lease_idx %d lim %d",			k->nr_hwcur, k->nr_hwavail, k->nkr_hwlease,
+			k->nkr_lease_idx, k->nkr_num_slots);
+	}
+#endif
+	return k->nkr_num_slots - 1 - busy;
+}
+
+
+/* return update position */
+static inline int
+nm_kr_rxpos(struct netmap_kring *k)
+{
+	int pos = k->nr_hwcur + k->nr_hwavail;
+	if (pos >= k->nkr_num_slots)
+		pos -= k->nkr_num_slots;
+#if 0
+	if (pos >= k->nkr_num_slots ||
+		k->nkr_hwlease >= k->nkr_num_slots ||
+		k->nr_hwcur >= k->nkr_num_slots ||
+		k->nr_hwavail >= k->nkr_num_slots ||
+		k->nkr_lease_idx >= k->nkr_num_slots) {
+		D("invalid kring, cur %d avail %d lease %d lease_idx %d lim %d",			k->nr_hwcur, k->nr_hwavail, k->nkr_hwlease,
+			k->nkr_lease_idx, k->nkr_num_slots);
+	}
+#endif
+	return pos;
+}
+
+
+/* make a lease on the kring for N positions. return the
+ * lease index
+ */
+static inline int
+nm_kr_rxlease(struct netmap_kring *k, u_int n)
+{
+	int lim = k->nkr_num_slots - 1;
+	int lease_idx = k->nkr_lease_idx;
+
+	k->nkr_leases[lease_idx] = NR_NOSLOT;
+	k->nkr_lease_idx = nm_next(lease_idx, lim);
+
+	if (n > nm_kr_rxspace(k)) {
+		D("invalid request for %d slots", n);
+		panic("x");
+	}
+	/* XXX verify that there are n slots */
+	k->nkr_hwlease += n;
+	if (k->nkr_hwlease > lim)
+		k->nkr_hwlease -= lim + 1;
+
+	if (k->nkr_hwlease >= k->nkr_num_slots ||
+		k->nr_hwcur >= k->nkr_num_slots ||
+		k->nr_hwavail >= k->nkr_num_slots ||
+		k->nkr_lease_idx >= k->nkr_num_slots) {
+		D("invalid kring, cur %d avail %d lease %d lease_idx %d lim %d",			k->nr_hwcur, k->nr_hwavail, k->nkr_hwlease,
+			k->nkr_lease_idx, k->nkr_num_slots);
+	}
+	return lease_idx;
+}
+
+
 /*
  * This struct extends the 'struct adapter' (or
  * equivalent) device descriptor. It contains all fields needed to
@@ -263,6 +367,8 @@ struct netmap_adapter {
 };
 
 /*
+ * XXX NETMAP_DELETING() is unused
+ *
  * The combination of "enable" (ifp->if_capenable & IFCAP_NETMAP)
  * and refcount gives the status of the interface, namely:
  *
@@ -471,6 +577,7 @@ netmap_reload_map(bus_dma_tag_t tag, bus_dmamap_t map, void *buf)
 #define bus_dmamap_sync(_a, _b, _c)
 
 #endif /* linux */
+
 
 /*
  * functions to map NIC to KRING indexes (n2k) and vice versa (k2n)
