@@ -148,7 +148,7 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, fwd, CTLFLAG_RW, &netmap_fwd, 0 , "");
  * for rings and buffers.
  * The virtual interfaces use per-queue lock instead of core lock.
  * In the tx loop, we aggregate traffic in batches to make all operations
- * faster. The batch size is NM_BDG_BATCH
+ * faster. The batch size is bridge_batch.
  */
 #define NM_BDG_MAXRINGS		16	/* XXX unclear how many. */
 #define NM_BRIDGE_RINGSIZE	1024	/* in the device */
@@ -157,8 +157,13 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, fwd, CTLFLAG_RW, &netmap_fwd, 0 , "");
 #define	NM_BRIDGES		8	/* number of bridges */
 
 
-int netmap_bridge = NM_BDG_BATCH; /* bridge batch size */
-SYSCTL_INT(_dev_netmap, OID_AUTO, bridge, CTLFLAG_RW, &netmap_bridge, 0 , "");
+/*
+ * bridge_batch is set via sysctl to the max batch size to be
+ * used in the bridge. The actual value may be larger as the
+ * last packet in the block may overflow the size.
+ */
+int bridge_batch = NM_BDG_BATCH; /* bridge batch size */
+SYSCTL_INT(_dev_netmap, OID_AUTO, bridge_batch, CTLFLAG_RW, &bridge_batch, 0 , "");
 
 #ifdef linux
 
@@ -187,38 +192,47 @@ static void bdg_netmap_attach(struct netmap_adapter *);
 static int bdg_netmap_reg(struct ifnet *ifp, int onoff);
 static int kern_netmap_regif(struct nmreq *nmr);
 
-/* per-tx-queue entry */
+/*
+ * Each transmit queue accumulates a batch of packets into
+ * a structure before forwarding. Packets to the same
+ * destination are put in a list using ft_next as a link field.
+ * ft_frags and ft_next are valid only on the first fragment.
+ */
 struct nm_bdg_fwd {	/* forwarding entry for a bridge */
 	void *ft_buf;
-	uint16_t _ft_dst;	/* dst port, unused */
+	uint8_t _ft_frags;	/* how many fragments (only on 1st frag) */
+	uint8_t _ft_port;	/* dst port (unused) */
 	uint16_t ft_flags;	/* flags, e.g. indirect */
-	uint16_t ft_len;	/* src len */
+	uint16_t ft_len;	/* src fragment len */
 	uint16_t ft_next;	/* next packet to same destination */
 };
 
-/* We need to build a list of buffers going to each destination.
- * Each buffer is in one entry of struct nm_bdg_fwd, we use ft_next
- * to build the list, and struct nm_bdg_q below for the queue.
- * The structure should compact because potentially we have a lot
- * of destinations.
+/*
+ * For each output interface, nm_bdg_q is used to construct a list.
+ * bq_len is the number of output buffers (we can have coalescing
+ * during the copy).
  */
 struct nm_bdg_q {
 	uint16_t bq_head;
 	uint16_t bq_tail;
+	uint32_t bq_len;	/* number of buffers */
 };
 
+/* XXX revise this */
 struct nm_hash_ent {
 	uint64_t	mac;	/* the top 2 bytes are the epoch */
 	uint64_t	ports;
 };
 
 /*
+ * nm_bridge is a descriptor for a VALE switch.
  * Interfaces for a bridge are all in bdg_ports[].
  * The array has fixed size, an empty entry does not terminate
- * the search. But lookups only occur on attach/detach so we
+ * the search, but lookups only occur on attach/detach so we
  * don't mind if they are slow.
  *
- * The bridge is non blocking on the transmit ports.
+ * The bridge is non blocking on the transmit ports: excess
+ * packets are dropped if there is no room on the output port.
  *
  * bdg_lock protects accesses to the bdg_ports array.
  * This is a rw lock (or equivalent).
@@ -242,10 +256,17 @@ struct nm_bridge {
 	 */
 	bdg_lookup_fn_t nm_bdg_lookup;
 
-	/* the forwarding table, MAC+ports */
+	/* the forwarding table, MAC+ports.
+	 * XXX should be changed to an argument to be passed to
+	 * the lookup function, and allocated on attach
+	 */
 	struct nm_hash_ent ht[NM_BDG_HASH];
 };
 
+
+/*
+ * XXX in principle nm_bridges could be created dynamically
+ */
 struct nm_bridge nm_bridges[NM_BRIDGES];
 NM_LOCK_T	netmap_bridge_mutex;
 
@@ -267,22 +288,31 @@ NM_LOCK_T	netmap_bridge_mutex;
 #define BDG_FREE(p)		free(p, M_DEVBUF)
 #endif /* __FreeBSD__ */
 
+/*
+ * A few function to tell which kind of port are we using.
+ * nma_is_vp()		virtual port
+ * nma_is_host()	port connected to the host stack
+ * nma_is_hw()		port connected to a NIC
+ */
 static __inline int
 nma_is_vp(struct netmap_adapter *na)
 {
 	return na->nm_register == bdg_netmap_reg;
 }
+
 static __inline int
 nma_is_host(struct netmap_adapter *na)
 {
 	return na->nm_register == NULL;
 }
+
 static __inline int
 nma_is_hw(struct netmap_adapter *na)
 {
 	/* In case of sw adapter, nm_register is NULL */
 	return !nma_is_vp(na) && !nma_is_host(na);
 }
+
 
 /*
  * Regarding holding a NIC, if the NIC is owned by the kernel
@@ -298,7 +328,15 @@ nma_is_hw(struct netmap_adapter *na)
  * NA(ifp)->bdg_port	port index
  */
 
-// XXX only for multiples of 64 bytes, non overlapped.
+
+/*
+ * this is a slightly optimized copy routine which rounds
+ * to multiple of 64 bytes and is often faster than dealing
+ * with other odd sizes. We assume there is enough room
+ * in the source and destination buffers.
+ *
+ * XXX only for multiples of 64 bytes, non overlapped.
+ */
 static inline void
 pkt_copy(void *_src, void *_dst, int l)
 {
@@ -334,6 +372,10 @@ nm_find_bridge(const char *name, int create)
 
 	namelen = strlen(NM_NAME);	/* base length */
 	l = strlen(name);		/* actual length */
+	if (name == NULL || l < namelen) {
+		D("invalid bridge name %s", name ? NULL : name);
+		return NULL;
+	}
 	for (i = namelen + 1; i < l; i++) {
 		if (name[i] == ':') {
 			namelen = i;
@@ -507,7 +549,7 @@ netmap_update_config(struct netmap_adapter *na)
  * private structure is destroyed.
  */
 struct netmap_priv_d {
-	struct netmap_if * volatile np_nifp;	/* netmap interface descriptor. */
+	struct netmap_if * volatile np_nifp;	/* netmap if descriptor. */
 
 	struct ifnet	*np_ifp;	/* device for which we hold a reference */
 	int		np_ringid;	/* from the ioctl */
@@ -1621,6 +1663,7 @@ netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func)
 		b->nm_bdg_lookup = func;
 		BDG_WUNLOCK(b);
 		break;
+
 	default:
 		D("invalid cmd (nmr->nr_cmd) (0x%x)", cmd);
 		error = EINVAL;
@@ -2064,7 +2107,6 @@ flush_tx:
 				D("send %d on %s %d",
 					kring->ring->cur,
 					ifp->if_xname, i);
-			/* txsync might drop and re-acquire the lock */
 			if (na->nm_txsync(ifp, i, 0 /* no lock */))
 				revents |= POLLERR;
 
@@ -2169,7 +2211,7 @@ netmap_lock_wrapper(struct ifnet *dev, int what, u_int queueid)
 	struct netmap_adapter *na = NA(dev);
 
 	switch (what) {
-#ifdef linux	/* some system do not need lock on register */
+#ifdef linux	/* some systems do not need lock on register */
 	case NETMAP_REG_LOCK:
 	case NETMAP_REG_UNLOCK:
 		break;
@@ -2225,6 +2267,7 @@ netmap_attach(struct netmap_adapter *arg, int num_queues)
 
 	if (arg == NULL || ifp == NULL)
 		goto fail;
+	/* a VALE port uses two endpoints */
 	len = nma_is_vp(arg) ? sizeof(*na) : sizeof(*na) * 2;
 	na = malloc(len, M_DEVBUF, M_NOWAIT | M_ZERO);
 	if (na == NULL)
@@ -2253,7 +2296,7 @@ netmap_attach(struct netmap_adapter *arg, int num_queues)
 #endif
 	}
 	na->nm_ndo.ndo_start_xmit = linux_netmap_start;
-#endif
+#endif /* linux */
 	if (!nma_is_vp(arg))
 		netmap_attach_sw(ifp);
 	D("success for %s", ifp->if_xname);
@@ -2291,19 +2334,30 @@ netmap_detach(struct ifnet *ifp)
 
 
 int
-nm_bdg_flush(struct nm_bdg_fwd *ft, int n, struct netmap_adapter *na, u_int ring_nr);
+nm_bdg_flush(struct nm_bdg_fwd *ft, int n,
+	struct netmap_adapter *na, u_int ring_nr);
 
-/* we don't need to lock myself */
+/*
+ * XXX this handles a packet from the host stack that goes
+ * to the bridge. It might be possible to make it inline.
+ * Also, if we support indirect buffers we can avoid the copy.
+ */
+
+/* XXX do we need locking ? is if_start() protected ? */
 static int
 bdg_netmap_start(struct ifnet *ifp, struct mbuf *m)
 {
 	struct netmap_adapter *na = SWNA(ifp);
 	struct nm_bdg_fwd *ft = na->rx_rings[0].nkr_ft;
-	char *buf = NMB(&na->rx_rings[0].ring->slot[0]);
 	u_int len = MBUF_LEN(m);
+	char *buf = NMB(&na->rx_rings[0].ring->slot[0]);
 
+	/* use slot 0, there is nothing queued here */
 	if (!na->na_bdg) /* SWNA is not configured to be attached */
 		return EBUSY;
+	/* XXX we can save the copy calling m_copydata in nm_bdg_flush,
+	 * later, need a special flag for this.
+	 */
 	m_copydata(m, 0, len, buf);
 	ft->ft_flags = 0;	// XXX could be indirect ?
 	ft->ft_len = len;
@@ -2338,6 +2392,7 @@ netmap_start(struct ifnet *ifp, struct mbuf *m)
 	if (netmap_verbose & NM_VERB_HOST)
 		D("%s packet %d len %d from the stack", ifp->if_xname,
 			kring->nr_hwcur + kring->nr_hwavail, len);
+	// XXX reconsider long packets if we handle fragments
 	if (len > NETMAP_BUF_SIZE) { /* too long for us */
 		D("%s from_host, drop packet size %d > %d", ifp->if_xname,
 			len, NETMAP_BUF_SIZE);
@@ -2347,6 +2402,7 @@ netmap_start(struct ifnet *ifp, struct mbuf *m)
 	if (na->na_bdg)
 		return bdg_netmap_start(ifp, m);
 
+	/* XXX should use a separate lock for the host ring */
 	na->nm_lock(ifp, NETMAP_CORE_LOCK, 0);
 	if (kring->nr_hwavail >= lim) {
 		if (netmap_verbose)
@@ -2412,7 +2468,7 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, int n,
 	if (new_hwofs > lim)
 		new_hwofs -= lim + 1;
 
-	/* Alwayws set the new offset value and realign the ring. */
+	/* Always set the new offset value and realign the ring. */
 	kring->nkr_hwofs = new_hwofs;
 	if (tx == NR_TX)
 		kring->nr_hwavail = kring->nkr_num_slots - 1;
@@ -2441,7 +2497,12 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, int n,
 }
 
 
-/* returns the next position in the ring */
+/*
+ * Grab packets from a kring, move them into the ft structure
+ * associated to the tx (input) port. Max one instance per port,
+ * filtered on input (ioctl, poll or XXX).
+ * Returns the next position in the ring.
+ */
 static int
 nm_bdg_preflush(struct netmap_adapter *na, u_int ring_nr,
 	struct netmap_kring *kring, u_int end)
@@ -2466,7 +2527,7 @@ nm_bdg_preflush(struct netmap_adapter *na, u_int ring_nr,
 		buf = ft[ft_i].ft_buf = (slot->flags & NS_INDIRECT) ?
 			*((void **)buf) : buf;
 		prefetch(buf);
-		if (unlikely(++ft_i == netmap_bridge))
+		if (unlikely(++ft_i == bridge_batch))
 			ft_i = nm_bdg_flush(ft, ft_i, na, ring_nr);
 	}
 	if (ft_i)
@@ -3071,21 +3132,18 @@ retry:
 			int len;
 			void *src, *dst;
 
-			/* our 'NULL' is always higher than valid indexes
+			/* find the queue from which we pick next packet.
+			/* NM_FT_NULL is always higher than valid indexes
 			 * so we never dereference it if the other list
-			 * has packets (and if both are NULL we never
+			 * has packets (and if both are empty we never
 			 * get here).
 			 */
 			if (next < brd_next) {
 				ft_p = ft + next;
 				next = ft_p->ft_next;
-				ND("j %d uni %d next %d %d",
-					j, ft_p - ft, next, brd_next);
 			} else { /* insert broadcast */
 				ft_p = ft + brd_next;
 				brd_next = ft_p->ft_next;
-				ND("j %d brd %d next %d %d",
-					j, ft_p - ft, next, brd_next);
 			}
 			slot = &ring->slot[j];
 			ND("send %d %d bytes at %s:%d", i, ft_p->ft_len, dst_ifp->if_xname, j);
@@ -3127,8 +3185,10 @@ retry:
 		}
 		/* NM_BDG_BATCH means 'no packet' */
 		d->bq_head = d->bq_tail = NM_BDG_BATCH; /* cleanup */
+		d->bq_len = 0;
 	}
 	brddst->bq_head = brddst->bq_tail = NM_BDG_BATCH; /* cleanup */
+	brddst->bq_len = 0;
 	BDG_RUNLOCK(b);
 	return 0;
 }
@@ -3151,20 +3211,20 @@ bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	if (do_lock)
 		na->nm_lock(ifp, NETMAP_TX_LOCK, ring_nr);
 
-	if (netmap_bridge <= 0) { /* testing only */
+	if (bridge_batch <= 0) { /* testing only */
 		j = k; // used all
 		goto done;
 	}
-	if (netmap_bridge > NM_BDG_BATCH)
-		netmap_bridge = NM_BDG_BATCH;
+	if (bridge_batch > NM_BDG_BATCH)
+		bridge_batch = NM_BDG_BATCH;
 
 	j = nm_bdg_preflush(na, ring_nr, kring, k);
+	if (j != k)
+		D("early break at %d/ %d, avail %d", j, k, kring->nr_hwavail);
 	i = k - j;
 	if (i < 0)
 		i += kring->nkr_num_slots;
-	kring->nr_hwavail = kring->nkr_num_slots - 1 - i;
-	if (j != k)
-		D("early break at %d/ %d, avail %d", j, k, kring->nr_hwavail);
+	kring->nr_hwavail = lim - i;
 
 done:
 	kring->nr_hwcur = j;
