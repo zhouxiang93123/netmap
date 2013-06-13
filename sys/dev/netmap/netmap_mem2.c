@@ -318,7 +318,7 @@ netmap_obj_free_va(struct netmap_obj_pool *p, void *vaddr)
 			continue;
 
 		j = j + relofs / p->_objsize;
-		KASSERT(j != 0, ("Cannot free object 0"));
+		/* KASSERT(j != 0, ("Cannot free object 0")); */
 		netmap_obj_free(p, j);
 		return;
 	}
@@ -510,7 +510,7 @@ netmap_config_obj_allocator(struct netmap_obj_pool *p, u_int objtotal, u_int obj
 	n = (objtotal + clustentries - 1) / clustentries;
 	p->_numclusters = n;
 	p->objtotal = n * clustentries;
-	p->objfree = p->objtotal - 2; /* obj 0 and 1 are reserved */
+	p->objfree = p->objtotal;
 	p->_memtotal = p->_numclusters * p->_clustsize;
 	p->_objsize = objsize;
 
@@ -578,7 +578,7 @@ netmap_finalize_obj_allocator(struct netmap_obj_pool *p)
 						n, M_NETMAP);
 			}
 			p->objtotal = i;
-			p->objfree = p->objtotal - 2;
+			p->objfree = p->objtotal;
 			p->_numclusters = i / p->clustentries;
 			p->_memtotal = p->_numclusters * p->_clustsize;
 			break;
@@ -589,7 +589,6 @@ netmap_finalize_obj_allocator(struct netmap_obj_pool *p)
 			p->lut[i].paddr = vtophys(clust);
 		}
 	}
-	p->bitmap[0] = (uint32_t)(~3); /* objs 0 and 1 is always busy */
 	if (netmap_verbose)
 		D("Pre-allocated %d clusters (%d/%dKB) for '%s'",
 		    p->_numclusters, p->_clustsize >> 10,
@@ -632,11 +631,15 @@ netmap_mem_finalize_all(struct netmap_mem_d *nmd)
 	int i;
 	if (nmd->finalized)
 		return 0;
+	nmd->lasterr = 0;
 	for (i = 0; i < NETMAP_POOLS_NR; i++) {
 		if (netmap_finalize_obj_allocator(&nmd->pools[i]))
 			goto error;
 		nmd->nm_totalsize += nmd->pools[i]._memtotal;
 	}
+	/* buffers 0 and 1 are reserved */
+	nmd->pools[NETMAP_BUF_POOL].objfree -= 2;
+	nmd->pools[NETMAP_BUF_POOL].bitmap[0] = ~3;
 	nmd->finalized = 1;
 	return 0;
 error:

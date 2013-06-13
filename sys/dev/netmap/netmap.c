@@ -3770,10 +3770,11 @@ bdg_netmap_attach(struct netmap_adapter *arg)
 	op[NETMAP_IF_POOL].size = 1024;
 	op[NETMAP_IF_POOL].num = 10;
 	op[NETMAP_RING_POOL].size = 9*PAGE_SIZE;
-	op[NETMAP_RING_POOL].num = 2 + 2*(na.num_tx_rings + na.num_rx_rings);
+	op[NETMAP_RING_POOL].num = 2 + na.num_tx_rings + na.num_rx_rings;
 	op[NETMAP_BUF_POOL].size = 2048;
-	op[NETMAP_BUF_POOL].num = 2 + 2*(na.num_tx_desc * na.num_tx_rings +
-		na.num_rx_desc * na.num_rx_rings);
+	op[NETMAP_BUF_POOL].num =
+	    2 * (na.num_tx_desc * (na.num_tx_rings + 1) +
+		 na.num_rx_desc * (na.num_rx_rings + 1));
 	na.nm_mem = netmap_mem_private_new(op);
 	netmap_attach(&na, na.num_tx_rings);
 }
