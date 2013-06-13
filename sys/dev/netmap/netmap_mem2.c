@@ -617,13 +617,34 @@ netmap_memory_config_changed(struct netmap_mem_d *nmd)
 }
 
 static void
-netmap_mem_private_reset(struct netmap_mem_d *nmd)
+netmap_mem_reset_all(struct netmap_mem_d *nmd)
 {
 	int i;
 	for (i = 0; i < NETMAP_POOLS_NR; i++) {
 		netmap_reset_obj_allocator(&nmd->pools[i]);
 	}
+	nmd->finalized = 0;
 }
+
+static int
+netmap_mem_finalize_all(struct netmap_mem_d *nmd)
+{
+	int i;
+	if (nmd->finalized)
+		return 0;
+	for (i = 0; i < NETMAP_POOLS_NR; i++) {
+		if (netmap_finalize_obj_allocator(&nmd->pools[i]))
+			goto error;
+		nmd->nm_totalsize += nmd->pools[i]._memtotal;
+	}
+	nmd->finalized = 1;
+	return 0;
+error:
+	netmap_mem_reset_all(nmd);
+	return nmd->lasterr;
+}
+
+
 
 static void
 netmap_mem_private_delete(struct netmap_mem_d *nmd)
@@ -631,7 +652,7 @@ netmap_mem_private_delete(struct netmap_mem_d *nmd)
 	if (nmd == NULL)
 		return;
 	D("deleting %p", nmd);
-	netmap_mem_private_reset(nmd);
+	netmap_mem_reset_all(nmd);
 	NMA_LOCK_DESTROY(nmd);
 	free(nmd, M_DEVBUF);
 }
@@ -639,25 +660,13 @@ netmap_mem_private_delete(struct netmap_mem_d *nmd)
 static int
 netmap_mem_private_finalize(struct netmap_mem_d *nmd)
 {
-	int i;
+	int err;
 	NMA_LOCK(nmd);
 	nmd->refcount++;
-	if (!nmd->finalized) {
-		D("finalizing %p", nmd);
-		for (i = 0; i < NETMAP_POOLS_NR; i++) {
-			if (netmap_finalize_obj_allocator(&nmd->pools[i]))
-				goto error;
-			nmd->nm_totalsize += nmd->pools[i]._memtotal;
-		}
-	}
-	nmd->finalized = 1;
+	err = netmap_mem_finalize_all(nmd);
 	NMA_UNLOCK(nmd);
-	return 0;
+	return err;
 
-error:
-	netmap_mem_private_reset(nmd);
-	NMA_UNLOCK(nmd);
-	return ENOMEM;
 }
 
 static void netmap_mem_private_deref(struct netmap_mem_d *nmd)
@@ -749,7 +758,6 @@ static int
 netmap_mem_global_finalize(struct netmap_mem_d *nmd)
 {
 	int i, err;
-	u_int totalsize = 0;
 
 	NMA_LOCK(nmd);
 
@@ -769,13 +777,8 @@ netmap_mem_global_finalize(struct netmap_mem_d *nmd)
 		goto out;
 	}
 
-	for (i = 0; i < NETMAP_POOLS_NR; i++) {
-		nmd->lasterr = netmap_finalize_obj_allocator(&nmd->pools[i]);
-		if (nmd->lasterr)
-			goto cleanup;
-		totalsize += nmd->pools[i]._memtotal;
-	}
-	nmd->nm_totalsize = totalsize;
+	if (netmap_mem_finalize_all(nmd))
+		goto out;
 
 	/* backward compatibility */
 	netmap_buf_size = nmd->pools[NETMAP_BUF_POOL]._objsize;
@@ -784,7 +787,6 @@ netmap_mem_global_finalize(struct netmap_mem_d *nmd)
 	netmap_buffer_lut = nmd->pools[NETMAP_BUF_POOL].lut;
 	netmap_buffer_base = nmd->pools[NETMAP_BUF_POOL].lut[0].vaddr;
 
-	nmd->finalized = 1;
 	nmd->lasterr = 0;
 
 	/* make sysctl values match actual values in the pools */
@@ -802,16 +804,6 @@ out:
 
 	return err;
 
-cleanup:
-	for (i = 0; i < NETMAP_POOLS_NR; i++) {
-		netmap_reset_obj_allocator(&nmd->pools[i]);
-	}
-	nmd->refcount--;
-	err = nmd->lasterr;
-
-	NMA_UNLOCK(nmd);
-
-	return err;
 }
 
 int
