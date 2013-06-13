@@ -59,7 +59,7 @@
  	u16 cleaned_count = igb_desc_unused(rx_ring);
  
 +#ifdef DEV_NETMAP
-+	if (netmap_rx_irq(rx_ring->netdev, rx_ring->queue_index, &budget))
++	if (netmap_rx_irq(rx_ring->netdev, rx_ring->queue_index, &total_packets))
 +		return true;
 +#endif /* DEV_NETMAP */
  	do {
