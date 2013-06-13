@@ -1892,9 +1892,6 @@ netmap_attach_sw(struct ifnet *ifp)
 	/* we use the same memory allocator as the
 	 * the hw adapter */
 	na->nm_mem = hw_na->nm_mem;
-	/* make sure we do not try do destroy
-	 * the allocator on release */
-	na->na_flags &= ~NAF_MEM_PRIV;
 }
 
 
@@ -3767,7 +3764,6 @@ bdg_netmap_attach(struct netmap_adapter *arg)
 	na.nm_txsync = bdg_netmap_txsync;
 	na.nm_rxsync = bdg_netmap_rxsync;
 	na.nm_register = bdg_netmap_reg;
-	na.na_flags |= NAF_MEM_PRIV;
 	/* XXX the user should be able to set all of these 
 	 * (except perhaps RING_POOL.size)
 	 */
