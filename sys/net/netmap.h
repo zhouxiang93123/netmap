@@ -31,7 +31,7 @@
  */
 
 /*
- * $FreeBSD: head/sys/net/netmap.h 234227 2012-04-13 16:03:07Z luigi $
+ * $FreeBSD: head/sys/net/netmap.h 251139 2013-05-30 14:07:14Z luigi $
  *
  * Definitions of constants and the structures used by the netmap
  * framework, for the part visible to both kernel and userspace.
@@ -157,6 +157,10 @@ struct netmap_slot {
 #define	NS_MOREFRAG	0x0020
 #define	NS_PORT_SHIFT	8
 #define	NS_PORT_MASK	(0xff << NS_PORT_SHIFT)
+				/*
+				 * on receive rings, the high 8 bits are the number of fragments.
+				 */
+#define	NS_RFRAGS(_slot)	( ((_slot)->flags >> 8) & 0xff)
 };
 
 /*
