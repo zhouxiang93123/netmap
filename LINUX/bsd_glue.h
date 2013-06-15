@@ -63,6 +63,7 @@ typedef void *			bus_addr_t;
 #define vm_paddr_t		phys_addr_t
 /* XXX the 'off_t' on Linux corresponds to a 'long' */
 #define vm_offset_t		uint32_t
+#define vm_ooffset_t		unsigned long
 struct thread;
 
 /* endianness macros/functions */
