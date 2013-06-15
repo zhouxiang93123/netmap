@@ -25,7 +25,7 @@
 
 /*
  * $FreeBSD: head/tools/tools/netmap/pkt-gen.c 231198 2012-02-08 11:43:29Z luigi $
- * $Id$
+ * $Id: pkt-gen.c 12346 2013-06-12 17:36:25Z luigi $
  *
  * Example program to show how to build a multithreaded packet
  * source/sink using the netmap device.
@@ -362,7 +362,9 @@ dump_payload(char *p, int len, struct netmap_ring *ring, int cur)
 
 	/* get the length in ASCII of the length of the packet. */
 	
-	printf("ring %p cur %5d len %5d buf %p\n", ring, cur, len, p);
+	printf("ring %p cur %5d [buf %6d flags 0x%04x len %5d]\n",
+		ring, cur, ring->slot[cur].buf_idx,
+		ring->slot[cur].flags, len);
 	/* hexdump routine */
 	for (i = 0; i < len; ) {
 		memset(buf, sizeof(buf), ' ');
@@ -462,14 +464,17 @@ initialize_packet(struct targ *targ)
  */
 static int
 send_packets(struct netmap_ring *ring, struct pkt *pkt, 
-		int size, u_int count, int options, int nfrags)
+		int size, u_int count, int options, u_int nfrags)
 {
 	u_int sent, cur = ring->cur;
 	int fcnt;
 
 	if (ring->avail < count)
 		count = ring->avail;
-
+	if (count < nfrags) {
+		D("truncating packet, no room for frags %d %d",
+			count, nfrags);
+	}
 #if 0
 	if (options & (OPT_COPY | OPT_PREFETCH) ) {
 		for (sent = 0; sent < count; sent++) {
@@ -499,12 +504,14 @@ send_packets(struct netmap_ring *ring, struct pkt *pkt,
 		else if (options & OPT_PREFETCH)
 			prefetch(p);
 		slot->len = size;
-		if (sent == count - 1)
-			slot->flags |= NS_REPORT;
 		if (--fcnt > 0)
 			slot->flags |= NS_MOREFRAG;
 		else
 			fcnt = nfrags;
+		if (sent == count - 1) {
+			slot->flags &= NS_MOREFRAG;
+			slot->flags |= NS_REPORT;
+		}
 		cur = NETMAP_RING_NEXT(ring, cur);
 	}
 	ring->avail -= sent;
@@ -827,6 +834,8 @@ sender_body(void *data)
 	    }
     } else {
 	int tosend = 0;
+	int frags = targ->g->frags;
+
 	while (!targ->cancel && (n == 0 || sent < n)) {
 
 		if (rate_limit && tosend <= 0) {
@@ -861,10 +870,11 @@ sender_body(void *data)
 			txring = NETMAP_TXRING(nifp, i);
 			if (txring->avail == 0)
 				continue;
-			if (targ->g->frags > 1)
-				limit -= limit % targ->g->frags;
+			if (frags > 1)
+				limit = ((limit + frags - 1) / frags) * frags;
+				
 			m = send_packets(txring, &targ->pkt, targ->g->pkt_size,
-					 limit, options, targ->g->frags);
+					 limit, options, frags);
 			sent += m;
 			tosend -= m;
 			targ->count = sent;
@@ -917,7 +927,6 @@ receive_packets(struct netmap_ring *ring, u_int limit, int dump)
 		struct netmap_slot *slot = &ring->slot[cur];
 		char *p = NETMAP_BUF(ring, slot->buf_idx);
 
-		slot->flags = OPT_INDIRECT; // XXX
 		if (dump)
 			dump_payload(p, slot->len, ring, cur);
 
@@ -1368,7 +1377,12 @@ main(int arc, char **argv)
 			break;
 
 		case 'F':
-			g.frags = atoi(optarg);
+			i = atoi(optarg);
+			if (i < 1 || i > 63) {
+				D("invalid frags %d [1..63], ignore", i);
+				break;
+			}
+			g.frags = i;
 			break;
 
 		case 'f':
@@ -1608,6 +1622,7 @@ main(int arc, char **argv)
 	}
     }
 
+		
 	if (g.options) {
 		D("--- SPECIAL OPTIONS:%s%s%s%s%s\n",
 			g.options & OPT_PREFETCH ? " prefetch" : "",
@@ -1616,22 +1631,22 @@ main(int arc, char **argv)
 			g.options & OPT_INDIRECT ? " indirect" : "",
 			g.options & OPT_COPY ? " copy" : "");
 	}
-	
-	if (g.tx_rate == 0) {
-		g.tx_period.tv_sec = 0;
-		g.tx_period.tv_nsec = 0;
-	} else if (g.tx_rate == 1) {
-		g.tx_period.tv_sec = 1;
-		g.tx_period.tv_nsec = 0;
-	} else {
-		g.tx_period.tv_sec = 0;
-		g.tx_period.tv_nsec = (1e9 / g.tx_rate) * g.burst;
-		if (g.tx_period.tv_nsec > 1000000000) {
-			g.tx_period.tv_sec = g.tx_period.tv_nsec / 1000000000;
-			g.tx_period.tv_nsec = g.tx_period.tv_nsec % 1000000000;
-		}
+
+	if (g.tx_rate > 0) {
+		/* try to have at least something every second,
+		 * reducing the burst size to 0.5s worth of data
+		 * (but no less than one full set of fragments)
+	 	 */
+		if (g.burst > g.tx_rate/2)
+			g.burst = g.tx_rate/2;
+		if (g.burst < g.frags)
+			g.burst = g.frags;
 	}
-	D("Sending %d packets every  %d.%09d ns",
+	g.tx_period.tv_nsec = (1e9 / g.tx_rate) * g.burst;
+	g.tx_period.tv_sec = g.tx_period.tv_nsec / 1000000000;
+	g.tx_period.tv_nsec = g.tx_period.tv_nsec % 1000000000;
+	if (g.td_body == sender_body)
+	    D("Sending %d packets every  %d.%09d s",
 			g.burst, (int)g.tx_period.tv_sec, (int)g.tx_period.tv_nsec);
 	/* Wait for PHY reset. */
 	D("Wait %d secs for phy reset", wait_link);
