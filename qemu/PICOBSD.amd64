@@ -23,7 +23,7 @@ options	NO_SWAPPING
 makeoptions    COPTFLAGS="-O2 " # -Wall" 	# -Werror
 makeoptions    CWARNFLAGS="-Wunused -Wuninitialized -Wredundant-decls"
 #makeoptions    WARNS=5
-#options	SMP
+options	SMP
 device	acpi	# more frequencies ?
 # device	apic	# kern_et ?
 device	cpufreq
