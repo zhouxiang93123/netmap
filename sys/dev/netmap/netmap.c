@@ -723,13 +723,13 @@ netmap_dtor(void *data)
 	if (ifp) {
 		struct netmap_adapter *na = NA(ifp);
 
+		na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
 		if (na->na_bdg)
 			BDG_WLOCK(na->na_bdg);
-		na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
 		netmap_dtor_locked(data);
-		na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
 		if (na->na_bdg)
 			BDG_WUNLOCK(na->na_bdg);
+		na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
 
 		nm_if_rele(ifp); /* might also destroy *na */
 	}
