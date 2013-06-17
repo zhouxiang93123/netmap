@@ -105,7 +105,8 @@ void chan_clear_all(struct chan *c[], int max)
 
 int last_fd = -1;
 size_t last_memsize = 0;
-void * last_mmap_addr = NULL;
+void* last_mmap_addr = NULL;
+char* last_access_addr = NULL;
 
 
 void do_open()
@@ -182,10 +183,15 @@ void do_access()
 	char *arg = nextarg();
 	char *p;
 	if (!arg) {
-		output("missing address");
-		return;
+		if (!last_access_addr) {
+			output("missing address");
+			return;
+		}
+		p = last_access_addr;
+	} else {
+		p = (char *)strtoul((void *)arg, NULL, 0);
 	}
-	p = (char *)strtoul((void *)arg, NULL, 0);
+	last_access_addr = p + 4096;
 	tmp1 = *p;
 }
 
@@ -217,6 +223,8 @@ doit:
 	last_mmap_addr = mmap(0, memsize,
 			PROT_WRITE | PROT_READ,
 			MAP_SHARED, fd, off);
+	if (last_access_addr == NULL)
+		last_access_addr = last_mmap_addr;
 	output_err(last_mmap_addr == MAP_FAILED ? -1 : 0,
 		"mmap(0, %zu, PROT_WRITE|PROT_READ, MAP_SHARED, %d, %jd)=%p",
 		memsize, fd, (intmax_t)off, last_mmap_addr);
