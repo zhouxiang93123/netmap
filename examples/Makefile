@@ -14,7 +14,7 @@ CFLAGS += -DNO_PCAP
 
 LDFLAGS += -lpthread
 #LDFLAGS += -lpcap
-#LDFLAGS += -lrt	# on linux
+LDFLAGS += -lrt	# needed on linux, does not harm on BSD
 #SRCS = pkt-gen.c
 
 all: $(PROGS)

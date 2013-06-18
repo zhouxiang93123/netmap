@@ -1632,6 +1632,7 @@ main(int arc, char **argv)
 			g.options & OPT_COPY ? " copy" : "");
 	}
 
+	g.tx_period.tv_sec = g.tx_period.tv_nsec = 0;
 	if (g.tx_rate > 0) {
 		/* try to have at least something every second,
 		 * reducing the burst size to 0.5s worth of data
@@ -1641,13 +1642,13 @@ main(int arc, char **argv)
 			g.burst = g.tx_rate/2;
 		if (g.burst < g.frags)
 			g.burst = g.frags;
+		g.tx_period.tv_nsec = (1e9 / g.tx_rate) * g.burst;
+		g.tx_period.tv_sec = g.tx_period.tv_nsec / 1000000000;
+		g.tx_period.tv_nsec = g.tx_period.tv_nsec % 1000000000;
 	}
-	g.tx_period.tv_nsec = (1e9 / g.tx_rate) * g.burst;
-	g.tx_period.tv_sec = g.tx_period.tv_nsec / 1000000000;
-	g.tx_period.tv_nsec = g.tx_period.tv_nsec % 1000000000;
 	if (g.td_body == sender_body)
-	    D("Sending %d packets every  %d.%09d s",
-			g.burst, (int)g.tx_period.tv_sec, (int)g.tx_period.tv_nsec);
+	    D("Sending %d packets every  %ld.%09ld s",
+			g.burst, g.tx_period.tv_sec, g.tx_period.tv_nsec);
 	/* Wait for PHY reset. */
 	D("Wait %d secs for phy reset", wait_link);
 	sleep(wait_link);
