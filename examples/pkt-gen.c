@@ -875,9 +875,15 @@ sender_body(void *data)
 				
 			m = send_packets(txring, &targ->pkt, targ->g->pkt_size,
 					 limit, options, frags);
+			ND("limit %d avail %d frags %d m %d", 
+				limit, txring->avail, frags, m);
 			sent += m;
-			tosend -= m;
 			targ->count = sent;
+			if (rate_limit) {
+				tosend -= m;
+				if (tosend <= 0)
+					break;
+			}
 		}
 	}
 	/* flush any remaining packets */
