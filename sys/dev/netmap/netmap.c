@@ -2362,11 +2362,11 @@ bdg_netmap_start(struct ifnet *ifp, struct mbuf *m)
 	/* XXX we can save the copy calling m_copydata in nm_bdg_flush,
 	 * need a special flag for this.
 	 */
-	m_copydata(m, 0, len, buf);
-	ft->ft_flags = 0;	// XXX could be indirect ?
+	m_copydata(m, 0, (int)len, buf);
+	ft->ft_flags = 0;
 	ft->ft_len = len;
 	ft->ft_buf = buf;
-	ft->ft_next = NM_FT_NULL; // XXX is it needed ?
+	ft->ft_next = NM_FT_NULL;
 	nm_bdg_flush(ft, 1, na, 0);
 
 	/* release the mbuf in either cases of success or failure. As an
@@ -2419,7 +2419,7 @@ netmap_start(struct ifnet *ifp, struct mbuf *m)
 	if (i > lim)
 		i -= lim + 1;
 	slot = &kring->ring->slot[i];
-	m_copydata(m, 0, len, NMB(slot));
+	m_copydata(m, 0, (int)len, NMB(slot));
 	slot->len = len;
 	slot->flags = kring->nkr_slot_flags;
 	kring->nr_hwavail++;
