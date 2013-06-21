@@ -1,8 +1,8 @@
---- /usr/src/linux-3.3.8-gentoo/drivers/net/ethernet/intel/igb/igb_main.c	2012-03-19 00:15:34.000000000 +0100
-+++ net/igb/igb_main.c	2012-07-30 16:43:35.000000000 +0200
-@@ -236,6 +236,10 @@ MODULE_DESCRIPTION("Intel(R) Gigabit Eth
- MODULE_LICENSE("GPL");
- MODULE_VERSION(DRV_VERSION);
+--- a/igb/igb_main.c	2013-03-18 17:43:04.000000000 +0100
++++ b/igb/igb_main.c	2013-06-21 10:40:35.000000000 +0200
+@@ -246,6 +246,10 @@ static int debug = -1;
+ module_param(debug, int, 0);
+ MODULE_PARM_DESC(debug, "Debug level (0=none,...,16=all)");
  
 +#if defined(CONFIG_NETMAP) || defined(CONFIG_NETMAP_MODULE)
 +#include <if_igb_netmap.h>
@@ -11,7 +11,7 @@
  struct igb_reg_info {
  	u32 ofs;
  	char *name;
-@@ -2081,6 +2085,10 @@ static int __devinit igb_probe(struct pc
+@@ -2142,6 +2146,10 @@ static int __devinit igb_probe(struct pc
  	/* carrier off reporting is important to ethtool even BEFORE open */
  	netif_carrier_off(netdev);
  
@@ -22,7 +22,7 @@
  #ifdef CONFIG_IGB_DCA
  	if (dca_add_requester(&pdev->dev) == 0) {
  		adapter->flags |= IGB_FLAG_DCA_ENABLED;
-@@ -2211,6 +2219,10 @@ static void __devexit igb_remove(struct
+@@ -2280,6 +2288,10 @@ static void __devexit igb_remove(struct
  		dev_info(&pdev->dev, "IOV Disabled\n");
  	}
  #endif
@@ -33,7 +33,7 @@
  
  	iounmap(hw->hw_addr);
  	if (hw->flash_address)
-@@ -2750,6 +2762,9 @@ void igb_configure_tx_ring(struct igb_ad
+@@ -2754,6 +2766,9 @@ void igb_configure_tx_ring(struct igb_ad
  
  	txdctl |= E1000_TXDCTL_QUEUE_ENABLE;
  	wr32(E1000_TXDCTL(reg_idx), txdctl);
@@ -43,7 +43,27 @@
  }
  
  /**
-@@ -5753,6 +5768,10 @@ static bool igb_clean_tx_irq(struct igb_
+@@ -3129,6 +3144,19 @@ void igb_configure_rx_ring(struct igb_ad
+ 	/* Only set Drop Enable if we are supporting multiple queues */
+ 	if (adapter->vfs_allocated_count || adapter->num_rx_queues > 1)
+ 		srrctl |= E1000_SRRCTL_DROP_EN;
++#ifdef DEV_NETMAP
++	{
++		/* The driver uses split buffers, which are not
++		 * supported in netmap mode */
++		struct ifnet *ifp = adapter->netdev;
++		struct netmap_adapter *na = NA(ifp);
++		if (na && ifp->if_capenable & IFCAP_NETMAP) {
++			srrctl &= ~(7 << 25); /* clear descriptor type */
++			srrctl |= E1000_SRRCTL_DESCTYPE_ADV_ONEBUF;
++			/* XXX we should set tail here */
++		}
++	}
++#endif
+ 
+ 	wr32(E1000_SRRCTL(reg_idx), srrctl);
+ 
+@@ -5699,6 +5727,10 @@ static bool igb_clean_tx_irq(struct igb_
  
  	if (test_bit(__IGB_DOWN, &adapter->state))
  		return true;
@@ -54,7 +74,7 @@
  
  	tx_buffer = &tx_ring->tx_buffer_info[i];
  	tx_desc = IGB_TX_DESC(tx_ring, i);
-@@ -6030,6 +6049,12 @@ static bool igb_clean_rx_irq(struct igb_
+@@ -5937,6 +5969,12 @@ static bool igb_clean_rx_irq(struct igb_
  	u16 cleaned_count = igb_desc_unused(rx_ring);
  	u16 i = rx_ring->next_to_clean;
  
@@ -67,7 +87,7 @@
  	rx_desc = IGB_RX_DESC(rx_ring, i);
  
  	while (igb_test_staterr(rx_desc, E1000_RXD_STAT_DD)) {
-@@ -6220,6 +6245,11 @@ void igb_alloc_rx_buffers(struct igb_rin
+@@ -6130,6 +6168,11 @@ void igb_alloc_rx_buffers(struct igb_rin
  	struct igb_rx_buffer *bi;
  	u16 i = rx_ring->next_to_use;
  

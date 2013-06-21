@@ -282,7 +282,7 @@ igb_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
 			curr->read.pkt_addr = htole64(paddr);
-			curr->wb.upper.status_error = 0;
+			curr->read.hdr_addr = 0;
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
 		}
@@ -341,10 +341,11 @@ igb_netmap_configure_rx_ring(struct igb_ring *rxr)
 	u_int i;
 
 	/*
-	 * XXX watch out, rxr->rx_buffer_len should be written
+	 * XXX watch out, the main driver must not use
+	 * split headers. The buffer len should be written
 	 * into wr32(E1000_SRRCTL(reg_idx), srrctl) with options
 	 * something like
-	 *	srrctl = ALIGN(ring->rx_buffer_len, 1024) >>
+	 *	srrctl = ALIGN(buffer_len, 1024) >>
 	 *		E1000_SRRCTL_BSIZEPKT_SHIFT;
 	 *	srrctl |= E1000_SRRCTL_DESCTYPE_ADV_ONEBUF;
 	 *	srrctl |= E1000_SRRCTL_DROP_EN;
