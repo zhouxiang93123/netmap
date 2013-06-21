@@ -25,7 +25,7 @@ makeoptions    CWARNFLAGS="-Wunused -Wuninitialized -Wredundant-decls"
 #makeoptions    WARNS=5
 options	SMP
 device	acpi	# more frequencies ?
-# device	apic	# kern_et ?
+# device	apic	# not for amd64
 device	cpufreq
 
 #option	INVARIANTS
@@ -52,6 +52,9 @@ options 	MD_ROOT			#MD is a potential root device
 #options	DEVFS			#Device Filesystem
 #options 	PROCFS			#Process filesystem
 options		COMPAT_43		#Compatible with BSD 4.3 [KEEP THIS!]
+
+options HWPMC_HOOKS
+device	hwpmc
 
 options		KDB
 options		DDB
