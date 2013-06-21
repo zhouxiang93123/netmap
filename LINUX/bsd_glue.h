@@ -78,7 +78,6 @@ struct thread;
 #define	time_second	(jiffies_to_msecs(jiffies) / 1000U )
 
 #define bzero(a, len)		memset(a, 0, len)
-#define bcopy(_s, _d, len) 	memcpy(_d, _s, len)
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 28)
 #define	netdev_tx_t	int
@@ -128,8 +127,6 @@ struct net_device_ops {
  *		we would use "features" but it is all taken.
  *		XXX check for conflict in flags use.
  *
- *	if_bridge	atalk_ptr	struct nm_bridge (only for VALE ports)
- *
  * In netmap we use if_pspare[0] to point to the netmap_adapter,
  * in linux we have no spares so we overload ax25_ptr, and the detection
  * for netmap-capable is some magic in the area pointed by that.
@@ -139,7 +136,7 @@ struct net_device_ops {
 #define ifnet           	net_device      /* remap */
 #define	if_xname		name		/* field ifnet-> net_device */
 #define	if_capenable		priv_flags	/* IFCAP_NETMAP */
-// #define	if_bridge		atalk_ptr	/* remap, only for VALE ports */
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 27)
 typedef unsigned long phys_addr_t;
 extern struct net init_net;
