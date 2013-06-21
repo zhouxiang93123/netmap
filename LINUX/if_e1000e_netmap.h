@@ -43,7 +43,7 @@
 #include <netmap/netmap_kern.h>
 #define SOFTC_T	e1000_adapter
 
-#if LINUX_VERSION_CODE > KERNEL_VERSION(3, 2, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 2, 0)
 #warning this driver uses extended descriptors
 #define NM_E1K_RX_DESC_T	union e1000_rx_desc_extended
 #define	NM_E1R_RX_STATUS	wb.upper.status_error
