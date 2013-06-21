@@ -139,6 +139,10 @@ REVISION HISTORY
 
 DETAILS
 --------
++ igb: on linux 3.2 and above the igb driver moved to split buffers,
+  and netmap was not updated until end of june 2013.
+  Symptoms were inability to receive short packets.
+
 + there are reports of ixgbe and igb unable to read packets.
   We are unable to reproduce the problem.
   - Ubuntu 12.04 LTS 3.5.0-25-generic. igb read problems ?

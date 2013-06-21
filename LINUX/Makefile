@@ -92,7 +92,9 @@ test:
 
 clean:
 	-@ $(MAKE) -C $(KSRC) M=$(PWD) clean
-	-@ (rm -rf $(DRIVER_SRCS) *.orig *.rej *.ko *.o get-drivers )
+	-@ (rm -rf $(DRIVER_SRCS) *.orig *.rej *.ko *.o .*.d \
+		.tmp_versions *.mod.c modules.order	\
+		Module.symvers .*.cmd get-drivers )
 
 # the source is not here so we need to specify a dependency
 $(obj)/netmap.o: $(M)/../sys/dev/netmap/netmap.c
@@ -122,6 +124,12 @@ get-drivers:
 #	$(call cmd,shipped)
 #	(cd $(obj); patch < net-r8169.diff )
 #
+
+# compute the diffs for the original files
+diffs:
+	@for i in `find . -name \*.orig`; do 	\
+		diff -urp $$i $${i%.orig} ;	\
+	done
 
 apps:
 	(cd ../examples; $(MAKE))
