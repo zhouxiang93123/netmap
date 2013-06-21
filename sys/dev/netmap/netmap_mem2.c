@@ -238,7 +238,7 @@ DECLARE_SYSCTLS(NETMAP_BUF_POOL, buf);
  * then locate the cluster through a lookup table.
  */
 static inline vm_paddr_t
-netmap_ofstophys(vm_offset_t offset)
+netmap_ofstophys(vm_ooffset_t offset)
 {
 	int i;
 	vm_offset_t o = offset;
