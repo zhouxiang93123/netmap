@@ -583,6 +583,33 @@ test_memcpy(struct targ *t)
         }
 }
 
+#include <sys/ioctl.h>
+#include <net/if.h>
+#include <net/netmap.h>
+void
+test_netmap(struct targ *t)
+{
+	struct nmreq nmr;
+	int fd;
+        int64_t m, scale;
+
+	scale = t->g->m_cycles / 100;
+	fd = open("/dev/netmap", O_RDWR);
+	if (fd < 0) {
+		D("fail to open netmap, exit");
+		return;
+	}
+	bzero(&nmr, sizeof(nmr));
+        for (m = 0; m < t->g->m_cycles; m += scale) {
+		nmr.nr_version = 666;
+		nmr.nr_cmd = t->g->arg;
+		nmr.nr_offset = (uint32_t)scale;
+		ioctl(fd, NIOCGINFO, &nmr);
+		t->count += scale;
+        }
+	return;
+}
+
 struct entry {
 	void (*fn)(struct targ *);
 	char *name;
@@ -608,6 +635,7 @@ struct entry tests[] = {
 	{ test_rdtsc, "rdtsc", ONE_MILLION, 100000000 },	// unserialized
 	{ test_rdtsc1, "rdtsc1", ONE_MILLION, 100000000 },	// serialized
 	{ test_atomic_cmpset, "cmpset", ONE_MILLION, 100000000 },
+	{ test_netmap, "netmap", 1000, 100000000 },
 	{ NULL, NULL, 0, 0 }
 };
 
