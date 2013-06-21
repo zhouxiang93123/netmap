@@ -97,7 +97,7 @@ MALLOC_DEFINE(M_NETMAP, "netmap", "Network memory map");
 
 #define prefetch(x)	__builtin_prefetch(x)
 
-#define NM_RWLOCK_		struct rwlock
+#define NM_RWLOCK_T		struct rwlock
 
 #define BDG_WLOCK(b)		rw_wlock(&(b)->bdg_lock)
 #define BDG_WUNLOCK(b)		rw_wunlock(&(b)->bdg_lock)
