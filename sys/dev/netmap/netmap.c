@@ -190,6 +190,11 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, fwd, CTLFLAG_RW, &netmap_fwd, 0 , "");
 #define NM_BRIDGE_RINGSIZE	1024	/* in the device */
 #define NM_BDG_HASH		1024	/* forwarding table entries */
 #define NM_BDG_BATCH		1024	/* entries in the forwarding buffer */
+#define NM_MULTISEG		64	/* max size of a chain of bufs */
+/* actual size of the tables */
+#define NM_BDG_BATCH_MAX	(NM_BDG_BATCH + NM_MULTISEG)
+/* NM_FT_NULL terminates a list of slots in the ft */
+#define NM_FT_NULL		NM_BDG_BATCH_MAX
 #define	NM_BRIDGES		8	/* number of bridges */
 
 
@@ -464,9 +469,9 @@ nm_alloc_bdgfwd(struct netmap_adapter *na)
 
 	/* all port:rings + broadcast */
 	num_dstq = NM_BDG_MAXPORTS * NM_BDG_MAXRINGS + 1;
-	l = sizeof(struct nm_bdg_fwd) * NM_BDG_BATCH;
+	l = sizeof(struct nm_bdg_fwd) * NM_BDG_BATCH_MAX;
 	l += sizeof(struct nm_bdg_q) * num_dstq;
-	l += sizeof(uint16_t) * NM_BDG_BATCH;
+	l += sizeof(uint16_t) * NM_BDG_BATCH_MAX;
 
 	nrings = nma_is_vp(na) ? na->num_tx_rings : na->num_rx_rings;
 	kring = nma_is_vp(na) ? na->tx_rings : na->rx_rings;
@@ -480,9 +485,11 @@ nm_alloc_bdgfwd(struct netmap_adapter *na)
 			nm_free_bdgfwd(na);
 			return ENOMEM;
 		}
-		dstq = (struct nm_bdg_q *)(ft + NM_BDG_BATCH);
-		for (j = 0; j < num_dstq; j++)
-			dstq[j].bq_head = dstq[j].bq_tail = NM_BDG_BATCH;
+		dstq = (struct nm_bdg_q *)(ft + NM_BDG_BATCH_MAX);
+		for (j = 0; j < num_dstq; j++) {
+			dstq[j].bq_head = dstq[j].bq_tail = NM_FT_NULL;
+			dstq[j].bq_len = 0;
+		}
 		kring[i].nkr_ft = ft;
 	}
 	if (nma_is_hw(na))
@@ -812,7 +819,6 @@ netmap_mmap_single(struct cdev *cdev, vm_ooffset_t *foff,
 	*objp = obj;
 	return 0;
 }
-#endif /* __FreeBSD__ */
 
 
 /*
@@ -825,9 +831,8 @@ netmap_mmap_single(struct cdev *cdev, vm_ooffset_t *foff,
  * Return 0 on success, -1 otherwise.
  */
 
-#ifdef __FreeBSD__
 static int
-netmap_mmap(__unused struct cdev *dev,
+netmap_mmap(struct cdev *dev,
     vm_ooffset_t offset, vm_paddr_t *paddr, int nprot, vm_memattr_t *memattr)
 {
 	int error = 0;
@@ -870,6 +875,10 @@ netmap_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
 	struct netmap_priv_d *priv;
 	int error;
 
+	(void)dev;
+	(void)oflags;
+	(void)devtype;
+	(void)td;
 	priv = malloc(sizeof(struct netmap_priv_d), M_DEVBUF,
 			      M_NOWAIT | M_ZERO);
 	if (priv == NULL)
@@ -1035,7 +1044,7 @@ netmap_sync_to_host(struct netmap_adapter *na)
 	struct netmap_kring *kring = &na->tx_rings[na->num_tx_rings];
 	struct netmap_ring *ring = kring->ring;
 	u_int k, lim = kring->nkr_num_slots - 1;
-	struct mbq q = { NULL, NULL };
+	struct mbq q = { NULL, NULL, 0 };
 
 	k = ring->cur;
 	if (k > lim) {
@@ -2357,7 +2366,7 @@ bdg_netmap_start(struct ifnet *ifp, struct mbuf *m)
 	ft->ft_flags = 0;	// XXX could be indirect ?
 	ft->ft_len = len;
 	ft->ft_buf = buf;
-	ft->ft_next = NM_BDG_BATCH; // XXX is it needed ?
+	ft->ft_next = NM_FT_NULL; // XXX is it needed ?
 	nm_bdg_flush(ft, 1, na, 0);
 
 	/* release the mbuf in either cases of success or failure. As an
@@ -2510,19 +2519,17 @@ nm_bdg_preflush(struct netmap_adapter *na, u_int ring_nr,
 	for (; likely(j != end); j = unlikely(j == lim) ? 0 : j+1) {
 		struct netmap_slot *slot = &ring->slot[j];
 		char *buf = NMB(slot);
-		int len = ft[ft_i].ft_len = slot->len;
 
+		ft[ft_i].ft_len = slot->len;
 		ft[ft_i].ft_flags = slot->flags;
 
 		ND("flags is 0x%x", slot->flags);
 		/* this slot goes into a list so initialize the link field */
-		ft[ft_i].ft_next = NM_BDG_BATCH; /* equivalent to NULL */
-		if (unlikely(len < 14))
-			continue;
+		ft[ft_i].ft_next = NM_FT_NULL;
 		buf = ft[ft_i].ft_buf = (slot->flags & NS_INDIRECT) ?
 			*((void **)buf) : buf;
 		prefetch(buf);
-		if (unlikely(++ft_i == bridge_batch))
+		if (unlikely(++ft_i >= bridge_batch))
 			ft_i = nm_bdg_flush(ft, ft_i, na, ring_nr);
 	}
 	if (ft_i)
@@ -2956,7 +2963,7 @@ bdg_netmap_reg(struct ifnet *ifp, int onoff)
  * ring in *dst_ring (at the moment, always use ring 0)
  */
 u_int
-netmap_bdg_learning(char *buf, u_int len, uint8_t *dst_ring,
+netmap_bdg_learning(char *buf, u_int buf_len, uint8_t *dst_ring,
 		struct netmap_adapter *na)
 {
 	struct nm_hash_ent *ht = na->na_bdg->ht;
@@ -2964,6 +2971,10 @@ netmap_bdg_learning(char *buf, u_int len, uint8_t *dst_ring,
 	u_int dst, mysrc = na->bdg_port;
 	uint64_t smac, dmac;
 
+	if (buf_len < 14) {
+		D("invalid buf length %d", buf_len);
+		return NM_BDG_NOPORT;
+	}
 	dmac = le64toh(*(uint64_t *)(buf)) & 0xffffffffffff;
 	smac = le64toh(*(uint64_t *)(buf + 4));
 	smac >>= 16;
@@ -3008,7 +3019,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 	struct nm_bridge *b = na->na_bdg;
 	u_int i, me = na->bdg_port;
 
-	dst_ents = (struct nm_bdg_q *)(ft + NM_BDG_BATCH);
+	dst_ents = (struct nm_bdg_q *)(ft + NM_BDG_BATCH_MAX);
 	dsts = (uint16_t *)(dst_ents + NM_BDG_MAXPORTS * NM_BDG_MAXRINGS + 1);
 
 	BDG_RLOCK(b);
@@ -3035,7 +3046,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		/* get a position in the scratch pad */
 		d_i = dst_port * NM_BDG_MAXRINGS + dst_ring;
 		d = dst_ents + d_i;
-		if (d->bq_head == NM_BDG_BATCH) { /* new destination */
+		if (d->bq_head == NM_FT_NULL) { /* new destination */
 			d->bq_head = d->bq_tail = i;
 			/* remember this position to be scanned later */
 			if (dst_port != NM_BDG_BROADCAST)
@@ -3044,6 +3055,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 			ft[d->bq_tail].ft_next = i;
 			d->bq_tail = i;
 		}
+		d->bq_len += 1;
 	}
 
 	/* if there is a broadcast, set ring 0 of all ports to be scanned
@@ -3051,12 +3063,12 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 	 * ports.
 	 */
 	brddst = dst_ents + NM_BDG_BROADCAST * NM_BDG_MAXRINGS;
-	if (brddst->bq_head != NM_BDG_BATCH) {
+	if (brddst->bq_head != NM_FT_NULL) {
 		for (i = 0; likely(i < NM_BDG_MAXPORTS); i++) {
 			uint16_t d_i = i * NM_BDG_MAXRINGS;
 			if (unlikely(i == me) || !BDG_GET_VAR(b->bdg_ports[i]))
 				continue;
-			else if (dst_ents[d_i].bq_head == NM_BDG_BATCH)
+			else if (dst_ents[d_i].bq_head == NM_FT_NULL)
 				dsts[num_dsts++] = d_i;
 		}
 	}
@@ -3079,7 +3091,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		 */
 		if (unlikely(dst_na == NULL))
 			continue;
-		else if (dst_na->na_flags & NAF_SW_ONLY)
+		if (dst_na->na_flags & NAF_SW_ONLY)
 			continue;
 		dst_ifp = dst_na->ifp;
 		/*
@@ -3156,7 +3168,7 @@ retry:
 			j = unlikely(j == lim) ? 0: j + 1; /* XXX to be macro-ed */
 			sent++;
 			/* are we done ? */
-			if (next == NM_BDG_BATCH && brd_next == NM_BDG_BATCH)
+			if (next == NM_FT_NULL && brd_next == NM_FT_NULL)
 				break;
 		}
 		if (netmap_verbose && (howmany < 0))
@@ -3178,11 +3190,10 @@ retry:
 				goto retry;
 			dst_na->nm_lock(dst_ifp, NETMAP_TX_UNLOCK, dst_nr);
 		}
-		/* NM_BDG_BATCH means 'no packet' */
-		d->bq_head = d->bq_tail = NM_BDG_BATCH; /* cleanup */
+		d->bq_head = d->bq_tail = NM_FT_NULL; /* cleanup */
 		d->bq_len = 0;
 	}
-	brddst->bq_head = brddst->bq_tail = NM_BDG_BATCH; /* cleanup */
+	brddst->bq_head = brddst->bq_tail = NM_FT_NULL; /* cleanup */
 	brddst->bq_len = 0;
 	BDG_RUNLOCK(b);
 	return 0;
