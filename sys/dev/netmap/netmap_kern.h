@@ -35,11 +35,10 @@
 
 #if defined(__FreeBSD__)
 
-#define likely(x)	__builtin_expect(!!(x), 1)
-#define unlikely(x)	__builtin_expect(!!(x), 0)
+#define likely(x)	__builtin_expect((long)!!(x), 1L)
+#define unlikely(x)	__builtin_expect((long)!!(x), 0L)
 
 #define	NM_LOCK_T	struct mtx
-#define	NM_RWLOCK_T	struct rwlock
 #define	NM_SELINFO_T	struct selinfo
 #define	MBUF_LEN(m)	((m)->m_pkthdr.len)
 #define	NM_SEND_UP(ifp, m)	((ifp)->if_input)(ifp, m)
@@ -47,14 +46,13 @@
 #elif defined (linux)
 
 #define	NM_LOCK_T	safe_spinlock_t	// see bsd_glue.h
-#define	NM_RWLOCK_T	safe_spinlock_t	// see bsd_glue.h
 #define	NM_SELINFO_T	wait_queue_head_t
 #define	MBUF_LEN(m)	((m)->len)
 #define	NM_SEND_UP(ifp, m)	netif_rx(m)
 
 #ifndef DEV_NETMAP
 #define DEV_NETMAP
-#endif
+#endif /* DEV_NETMAP */
 
 /*
  * IFCAP_NETMAP goes into net_device's priv_flags (if_capenable).
@@ -148,8 +146,8 @@ struct netmap_priv_d;
  */
 struct netmap_kring {
 	struct netmap_ring *ring;
-	u_int nr_hwcur;
-	int nr_hwavail;
+	uint32_t nr_hwcur;
+	uint32_t nr_hwavail;
 	uint32_t nr_kflags;	/* private driver flags */
 #define NKR_PENDINTR	0x1	// Pending interrupt.
 #define NKR_WBUSY	0x2	// write path is busy
@@ -171,8 +169,8 @@ struct netmap_kring {
 
 
 /* return the next index, with wraparound */
-static inline int
-nm_next(int i, int lim)
+static inline uint32_t
+nm_next(uint32_t i, uint32_t lim)
 {
 	return unlikely (i == lim) ? 0 : i + 1;
 }
@@ -199,7 +197,7 @@ nm_next(int i, int lim)
  * space in the receive ring. Make sure there is always at least
  * one empty slot.
  */
-static inline int
+static inline uint32_t
 nm_kr_rxspace(struct netmap_kring *k)
 {
 	int busy = k->nkr_hwlease - k->nr_hwcur;
@@ -221,10 +219,10 @@ nm_kr_rxspace(struct netmap_kring *k)
 
 
 /* return update position */
-static inline int
+static inline uint32_t
 nm_kr_rxpos(struct netmap_kring *k)
 {
-	int pos = k->nr_hwcur + k->nr_hwavail;
+	uint32_t pos = k->nr_hwcur + k->nr_hwavail;
 	if (pos >= k->nkr_num_slots)
 		pos -= k->nkr_num_slots;
 #if 0
@@ -244,11 +242,11 @@ nm_kr_rxpos(struct netmap_kring *k)
 /* make a lease on the kring for N positions. return the
  * lease index
  */
-static inline int
+static inline uint32_t
 nm_kr_rxlease(struct netmap_kring *k, u_int n)
 {
-	int lim = k->nkr_num_slots - 1;
-	int lease_idx = k->nkr_lease_idx;
+	uint32_t lim = k->nkr_num_slots - 1;
+	uint32_t lease_idx = k->nkr_lease_idx;
 
 	k->nkr_leases[lease_idx] = NR_NOSLOT;
 	k->nkr_lease_idx = nm_next(lease_idx, lim);
@@ -421,12 +419,12 @@ enum {
  * netmap_reset() is a helper routine to be called in the driver
  *	when reinitializing a ring.
  */
-int netmap_attach(struct netmap_adapter *, int);
+int netmap_attach(struct netmap_adapter *, u_int);
 void netmap_detach(struct ifnet *);
 int netmap_start(struct ifnet *, struct mbuf *);
 enum txrx { NR_RX = 0, NR_TX = 1 };
 struct netmap_slot *netmap_reset(struct netmap_adapter *na,
-	enum txrx tx, int n, u_int new_cur);
+	enum txrx tx, u_int n, u_int new_cur);
 int netmap_ring_reinit(struct netmap_kring *);
 
 /*
@@ -643,7 +641,7 @@ PNMB(struct netmap_slot *slot, uint64_t *pp)
 }
 
 /* default functions to handle rx/tx interrupts */
-int netmap_rx_irq(struct ifnet *, int, int *);
+int netmap_rx_irq(struct ifnet *, u_int, u_int *);
 #define netmap_tx_irq(_n, _q) netmap_rx_irq(_n, _q, NULL)
 
 #endif /* _NET_NETMAP_KERN_H_ */
