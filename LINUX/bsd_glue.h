@@ -141,8 +141,7 @@ struct net_device_ops {
 typedef unsigned long phys_addr_t;
 extern struct net init_net;
 #endif
-#define ifunit_ref(_x)		dev_get_by_name(&init_net, _x);
-#define if_rele(ifp)		dev_put(ifp)
+
 #define CURVNET_SET(x)
 #define CURVNET_RESTORE(x)
 
