@@ -376,6 +376,9 @@ netmap_obj_free_va(struct netmap_obj_pool *p, void *vaddr)
 {
 	int i, j, n = p->_memtotal / p->_clustsize;
 
+	if (vaddr == NULL)
+		return;
+
 	for (i = 0, j = 0; i < n; i++, j += p->clustentries) {
 		void *base = p->lut[i * p->clustentries].vaddr;
 		ssize_t relofs = (ssize_t) vaddr - (ssize_t) base;
