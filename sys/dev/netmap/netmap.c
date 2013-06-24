@@ -814,7 +814,7 @@ struct netmap_priv_d {
 
 	struct netmap_mem_d *np_mref;	/* use with NMG_LOCK held */
 #ifdef __FreeBSD__
-	int		np_mmaps;	/* use with NMG_LOCK held */
+	int		np_refcount;	/* use with NMG_LOCK held */
 #endif /* __FreeBSD__ */
 };
 
@@ -977,6 +977,12 @@ netmap_dtor(void *data)
 	struct ifnet *ifp = priv->np_ifp;
 
 	NMG_LOCK();
+#ifdef __FreeBSD__
+	if (--priv->np_refcount > 0) {
+		NMG_UNLOCK();
+		return;
+	}
+#endif /* __FreeBSD__ */
 	if (ifp) {
 		struct netmap_adapter *na = NA(ifp);
 
@@ -1031,7 +1037,9 @@ netmap_dev_pager_dtor(void *handle)
 {
 	struct netmap_vm_handle_t *vmh = handle;
 	struct cdev *dev = vmh->dev;
+	struct netmap_priv_d *priv = vmh->priv;
 	D("handle %p", handle);
+	netmap_dtor(priv);
 	free(vmh, M_DEVBUF);
 	dev_rel(dev);
 }
@@ -1107,14 +1115,17 @@ netmap_mmap_single(struct cdev *cdev, vm_ooffset_t *foff,
 		return ENOMEM;
 	vmh->dev = cdev;
 
+	NMG_LOCK();
 	error = devfs_get_cdevpriv((void**)&priv);
 	if (error)
-		goto err;
+		goto err_unlock;
 	vmh->priv = priv;
+	priv->np_refcount++;
+	NMG_UNLOCK();
 
 	error = netmap_get_memory(priv);
 	if (error)
-		goto err;
+		goto err_deref;
 
 	obj = cdev_pager_allocate(vmh, OBJT_DEVICE, 
 		&netmap_cdev_pager_ops, objsize, prot,
@@ -1122,12 +1133,17 @@ netmap_mmap_single(struct cdev *cdev, vm_ooffset_t *foff,
 	if (obj == NULL) {
 		D("cdev_pager_allocate failed");
 		error = EINVAL;
-		goto err;
+		goto err_deref;
 	}
 		
 	*objp = obj;
 	return 0;
 
+err_deref:
+	NMG_LOCK();
+	priv->np_refcount--;
+err_unlock:
+	NMG_UNLOCK();
 err:
 	free(vmh, M_DEVBUF);
 	return error;
@@ -1201,6 +1217,8 @@ netmap_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
 	error = devfs_set_cdevpriv(priv, netmap_dtor);
 	if (error)
 	        return error;
+
+	priv->np_refcount = 1;
 
 	return 0;
 }
