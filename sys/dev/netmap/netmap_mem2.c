@@ -55,7 +55,7 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 241723 2012-10-19 09:41:45Z gle
 
 #ifdef linux
 #define NMA_LOCK_INIT(n)	sema_init(&(n)->nm_mtx, 1)
-#define NMA_LOCK_DESTROY(n)	
+#define NMA_LOCK_DESTROY(n)
 #define NMA_LOCK(n)		down(&(n)->nm_mtx)
 #define NMA_UNLOCK(n)		up(&(n)->nm_mtx)
 #else /* !linux */
@@ -116,8 +116,40 @@ struct netmap_mem_d nm_mem = {	/* Our memory allocator. */
 	.deref    = netmap_mem_global_deref,
 };
 
+
 // XXX logically belongs to nm_mem
 struct lut_entry *netmap_buffer_lut;	/* exported */
+
+/* blueprint for the private memory allocators */
+static int netmap_mem_private_finalize(struct netmap_mem_d *nmd);
+static void netmap_mem_private_deref(struct netmap_mem_d *nmd);
+const struct netmap_mem_d nm_blueprint = {
+	.pools = {
+		[NETMAP_IF_POOL] = {
+			.name 	= "%s_if",
+			.objminsize = sizeof(struct netmap_if),
+			.objmaxsize = 4096,
+			.nummin     = 1,
+			.nummax	    = 10,
+		},
+		[NETMAP_RING_POOL] = {
+			.name 	= "%s_ring",
+			.objminsize = sizeof(struct netmap_ring),
+			.objmaxsize = 32*PAGE_SIZE,
+			.nummin     = 2,
+			.nummax	    = 1024,
+		},
+		[NETMAP_BUF_POOL] = {
+			.name	= "%s_buf",
+			.objminsize = 64,
+			.objmaxsize = 65536,
+			.nummin     = 4,
+			.nummax	    = 1000000, /* one million! */
+		},
+	},
+	.finalize = netmap_mem_private_finalize,
+	.deref    = netmap_mem_private_deref,
+};
 
 /* memory allocator related sysctls */
 
@@ -684,7 +716,7 @@ static void netmap_mem_private_deref(struct netmap_mem_d *nmd)
 }
 
 struct netmap_mem_d *
-netmap_mem_private_new(const struct netmap_obj_params *p)
+netmap_mem_private_new(const char *name, const struct netmap_obj_params *p)
 {
 	struct netmap_mem_d *d = NULL;
 	int i;
@@ -694,12 +726,12 @@ netmap_mem_private_new(const struct netmap_obj_params *p)
 	if (d == NULL)
 		return NULL;
 
+	*d = nm_blueprint;
+
 	for (i = 0; i < NETMAP_POOLS_NR; i++) {
-		strcpy(d->pools[i].name, nm_mem.pools[i].name);
-		d->pools[i].objminsize = nm_mem.pools[i].objminsize;
-		d->pools[i].objmaxsize = nm_mem.pools[i].objmaxsize;
-		d->pools[i].nummin = nm_mem.pools[i].nummin; 
-		d->pools[i].nummax = nm_mem.pools[i].nummax;
+		snprintf(d->pools[i].name, NETMAP_POOL_MAX_NAMSZ,
+				nm_blueprint.pools[i].name,
+				name);
 		if (netmap_config_obj_allocator(&d->pools[i],
 				p[i].num, p[i].size))
 			goto error;
@@ -707,12 +739,8 @@ netmap_mem_private_new(const struct netmap_obj_params *p)
 
 	d->finalized = 0;
 
-
-	d->finalize = netmap_mem_private_finalize;
-	d->deref = netmap_mem_private_deref;
-
 	NMA_LOCK_INIT(d);
-	
+
 	return d;
 error:
 	netmap_mem_private_delete(d);
@@ -1050,7 +1078,7 @@ netmap_mem_if_delete(struct netmap_adapter *na, struct netmap_if *nifp)
 			for (j = 0; j < lim; j++)
 				netmap_free_buf(na->nm_mem, nifp, ring->slot[j].buf_idx);
 		}
-		netmap_free_rings(na);	
+		netmap_free_rings(na);
 	}
 	netmap_if_free(na->nm_mem, nifp);
 

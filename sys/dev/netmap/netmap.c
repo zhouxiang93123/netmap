@@ -3793,7 +3793,7 @@ bdg_netmap_attach(struct netmap_adapter *arg)
 	op[NETMAP_BUF_POOL].num =
 	    2 * (na.num_tx_desc * (na.num_tx_rings + 1) +
 		 na.num_rx_desc * (na.num_rx_rings + 1));
-	na.nm_mem = netmap_mem_private_new(op);
+	na.nm_mem = netmap_mem_private_new(arg->ifp->if_xname, op);
 	netmap_attach(&na, na.num_tx_rings);
 }
 

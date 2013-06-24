@@ -99,6 +99,8 @@
 
 #define NETMAP_BUF_MAX_NUM	20*4096*2	/* large machine */
 
+#define NETMAP_POOL_MAX_NAMSZ	32
+
 
 enum {
 	NETMAP_IF_POOL   = 0,
@@ -113,7 +115,7 @@ struct netmap_obj_params {
 	u_int num;
 };
 struct netmap_obj_pool {
-	char name[16];		/* name of the allocator */
+	char name[NETMAP_POOL_MAX_NAMSZ];	/* name of the allocator */
 	u_int objtotal;         /* actual total number of objects. */
 	u_int objfree;          /* number of free objects. */
 	u_int clustentries;	/* actual objects per cluster */
@@ -171,7 +173,8 @@ void 	   netmap_mem_if_delete(struct netmap_adapter *na, struct netmap_if *nifp)
 void 	   netmap_mem_deref(struct netmap_mem_d *nm_mem);
 u_int	   netmap_mem_get_totalsize(struct netmap_mem_d *nm_mem);
 ssize_t    netmap_mem_if_offset(struct netmap_mem_d *nm_mem, const void *vaddr);
-struct netmap_mem_d * netmap_mem_private_new(const struct netmap_obj_params *p);
+struct netmap_mem_d*
+	   netmap_mem_private_new(const char *name, const struct netmap_obj_params *p);
 
 #define NETMAP_BDG_BUF_SIZE(n)	((n)->pools[NETMAP_BUF_POOL]._objsize)
 
