@@ -716,10 +716,12 @@ static void netmap_mem_private_deref(struct netmap_mem_d *nmd)
 }
 
 struct netmap_mem_d *
-netmap_mem_private_new(const char *name, const struct netmap_obj_params *p)
+netmap_mem_private_new(const char *name, u_int txr, u_int txd, u_int rxr, u_int rxd)
 {
 	struct netmap_mem_d *d = NULL;
+	struct netmap_obj_params p[NETMAP_POOLS_NR];
 	int i;
+	u_int maxd;
 
 	d = malloc(sizeof(struct netmap_mem_d),
 			M_DEVBUF, M_NOWAIT | M_ZERO);
@@ -727,6 +729,27 @@ netmap_mem_private_new(const char *name, const struct netmap_obj_params *p)
 		return NULL;
 
 	*d = nm_blueprint;
+
+	/* XXX the rest of the code assumes the stack rings are alwasy present */
+	txr++;
+	rxr++;
+	p[NETMAP_IF_POOL].size = sizeof(struct netmap_if) +
+		sizeof(ssize_t) * (txr + rxr);
+	p[NETMAP_IF_POOL].num = 2;
+	maxd = (txd > rxd) ? txd : rxd;
+	p[NETMAP_RING_POOL].size = sizeof(struct netmap_ring) +
+		sizeof(struct netmap_slot) * maxd;
+	p[NETMAP_RING_POOL].num = txr + rxr;
+	p[NETMAP_BUF_POOL].size = 2048; /* XXX find a way to let the user choose this */
+	p[NETMAP_BUF_POOL].num = rxr * (rxd + 2) + txr * (txd + 2);
+
+	D("req if %d*%d ring %d*%d buf %d*%d",
+			p[NETMAP_IF_POOL].num,
+			p[NETMAP_IF_POOL].size,
+			p[NETMAP_RING_POOL].num,
+			p[NETMAP_RING_POOL].size,
+			p[NETMAP_BUF_POOL].num,
+			p[NETMAP_BUF_POOL].size);
 
 	for (i = 0; i < NETMAP_POOLS_NR; i++) {
 		snprintf(d->pools[i].name, NETMAP_POOL_MAX_NAMSZ,

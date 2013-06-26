@@ -308,6 +308,7 @@ NMG_LOCK_T	netmap_global_lock;
  * faster. The batch size is bridge_batch.
  */
 #define NM_BDG_MAXRINGS		16	/* XXX unclear how many. */
+#define NM_BDG_MAXSLOTS		4096	/* XXX same as above */
 #define NM_BRIDGE_RINGSIZE	1024	/* in the device */
 #define NM_BDG_HASH		1024	/* forwarding table entries */
 #define NM_BDG_BATCH		1024	/* entries in the forwarding buffer */
@@ -1567,6 +1568,16 @@ no_port:
 			if (nmr->nr_rx_rings > NM_BDG_MAXRINGS)
 				nmr->nr_rx_rings = NM_BDG_MAXRINGS;
 			tmp_na.num_rx_rings = nmr->nr_rx_rings;
+			if (nmr->nr_tx_slots < 1)
+				nmr->nr_tx_slots = NM_BRIDGE_RINGSIZE;
+			if (nmr->nr_tx_slots > NM_BDG_MAXSLOTS)
+				nmr->nr_tx_slots = NM_BDG_MAXSLOTS;
+			tmp_na.num_tx_desc = nmr->nr_tx_slots;
+			if (nmr->nr_rx_slots < 1)
+				nmr->nr_rx_slots = NM_BRIDGE_RINGSIZE;
+			if (nmr->nr_rx_slots > NM_BDG_MAXSLOTS)
+				nmr->nr_rx_slots = NM_BDG_MAXSLOTS;
+			tmp_na.num_rx_desc = nmr->nr_rx_slots;
 
 			iter = malloc(sizeof(*iter), M_DEVBUF, M_NOWAIT | M_ZERO);
 			if (!iter)
@@ -3768,7 +3779,6 @@ static void
 bdg_netmap_attach(struct netmap_adapter *arg)
 {
 	struct netmap_adapter na;
-	struct netmap_obj_params op[NETMAP_POOLS_NR];
 
 	ND("attaching virtual bridge");
 	bzero(&na, sizeof(na));
@@ -3777,23 +3787,14 @@ bdg_netmap_attach(struct netmap_adapter *arg)
 	na.separate_locks = 1;
 	na.num_tx_rings = arg->num_tx_rings;
 	na.num_rx_rings = arg->num_rx_rings;
-	na.num_tx_desc = NM_BRIDGE_RINGSIZE;
-	na.num_rx_desc = NM_BRIDGE_RINGSIZE;
+	na.num_tx_desc = arg->num_tx_desc;
+	na.num_rx_desc = arg->num_rx_desc;
 	na.nm_txsync = bdg_netmap_txsync;
 	na.nm_rxsync = bdg_netmap_rxsync;
 	na.nm_register = bdg_netmap_reg;
-	/* XXX the user should be able to set all of these 
-	 * (except perhaps RING_POOL.size)
-	 */
-	op[NETMAP_IF_POOL].size = 1024;
-	op[NETMAP_IF_POOL].num = 10;
-	op[NETMAP_RING_POOL].size = 9*PAGE_SIZE;
-	op[NETMAP_RING_POOL].num = 2 + na.num_tx_rings + na.num_rx_rings;
-	op[NETMAP_BUF_POOL].size = 2048;
-	op[NETMAP_BUF_POOL].num =
-	    2 * (na.num_tx_desc * (na.num_tx_rings + 1) +
-		 na.num_rx_desc * (na.num_rx_rings + 1));
-	na.nm_mem = netmap_mem_private_new(arg->ifp->if_xname, op);
+	na.nm_mem = netmap_mem_private_new(arg->ifp->if_xname,
+			na.num_tx_rings, na.num_tx_desc,
+			na.num_rx_rings, na.num_rx_desc);
 	netmap_attach(&na, na.num_tx_rings);
 }
 

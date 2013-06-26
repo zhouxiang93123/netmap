@@ -104,6 +104,7 @@ struct glob_arg {
 	void *mmap_addr;
 	int mmap_size;
 	char *ifname;
+	char *nmr_config;
 };
 enum dev_type { DEV_NONE, DEV_NETMAP, DEV_PCAP, DEV_TAP };
 
@@ -254,6 +255,53 @@ system_ncpus(void)
 #include <net/if_utun.h>
 #define TAP_CLONEDEV	"/dev/tap"
 #endif /* __APPLE__ */
+
+
+/*
+ * parse the vale configuration in conf and put it in nmr.
+ * The configuration may consist of 0 to 4 numbers separated
+ * by commas: #tx-slots,#rx-slots,#tx-rinzgs,#rx-rings.
+ * Missing numbers or zeroes stand for default values.
+ * As an additional convenience, if exactly one number
+ * is specified, then this is assigned to bot #tx-slots and #rx-slots.
+ * If there is no 4th number, then the 3rd is assigned to bot #tx-rings 
+ * and #rx-rings.
+ */
+void parse_nmr_config(const char* conf, struct nmreq *nmr)
+{
+	char *w, *tok;
+	int i, v;
+
+	nmr->nr_tx_rings = nmr->nr_rx_rings = 0;
+	nmr->nr_tx_slots = nmr->nr_rx_slots = 0;
+	if (conf == NULL || ! *conf)
+		return;
+	w = strdup(conf);
+	for (i = 0, tok = strtok(w, ","); tok; i++, tok = strtok(NULL, ",")) {
+		v = atoi(tok);
+		switch (i) {
+		case 0:
+			nmr->nr_tx_slots = nmr->nr_rx_slots = v;
+			break;
+		case 1:
+			nmr->nr_rx_slots = v;
+			break;
+		case 2:
+			nmr->nr_tx_rings = nmr->nr_rx_rings = v;
+			break;
+		case 3:
+			nmr->nr_rx_rings = v;
+			break;
+		default:
+			D("ignored config: %s", tok);
+			break;
+		}
+	}
+	D("txr %d txd %d rxr %d rxd %d",
+			nmr->nr_tx_rings, nmr->nr_tx_slots,
+			nmr->nr_rx_rings, nmr->nr_rx_slots);
+	free(w);
+}
 
 
 /*
@@ -1135,6 +1183,7 @@ start_threads(struct glob_arg *g)
 		strncpy(tifreq.nr_name, g->ifname, sizeof(tifreq.nr_name));
 		tifreq.nr_version = NETMAP_API;
 		tifreq.nr_ringid = (g->nthreads > 1) ? (i | NETMAP_HW_RING) : 0;
+		parse_nmr_config(g->nmr_config, &tifreq);
 
 		/*
 		 * if we are acting as a receiver only, do not touch the transmit ring.
@@ -1367,9 +1416,10 @@ main(int arc, char **argv)
 	g.forever = 1;
 	g.tx_rate = 0;
 	g.frags = 1;
+	g.nmr_config = "";
 
 	while ( (ch = getopt(arc, argv,
-			"a:f:F:n:i:It:r:l:d:s:D:S:b:c:o:p:PT:w:WvR:X")) != -1) {
+			"a:f:F:n:i:It:r:l:d:s:D:S:b:c:o:p:PT:w:WvR:XC:")) != -1) {
 		struct sf *fn;
 
 		switch(ch) {
@@ -1487,6 +1537,9 @@ main(int arc, char **argv)
 			break;
 		case 'X':
 			g.options |= OPT_DUMP;
+			break;
+		case 'C':
+			g.nmr_config = strdup(optarg);
 		}
 	}
 
@@ -1569,10 +1622,14 @@ main(int arc, char **argv)
 	nmr.nr_version = NETMAP_API;
 	strncpy(nmr.nr_name, g.ifname, sizeof(nmr.nr_name));
 	nmr.nr_version = NETMAP_API;
+	parse_nmr_config(g.nmr_config, &nmr);
 	if (ioctl(g.main_fd, NIOCREGIF, &nmr) == -1) {
 		D("Unable to register interface %s", g.ifname);
 		//continue, fail later
 	}
+	ND("%s: txr %d txd %d rxr %d rxd %d", g.ifname,
+			nmr.nr_tx_rings, nmr.nr_tx_slots,
+			nmr.nr_rx_rings, nmr.nr_rx_slots);
 	//if ((ioctl(g.main_fd, NIOCGINFO, &nmr)) == -1) {
 	//	D("Unable to get if info without name");
 	//} else {
