@@ -3253,7 +3253,8 @@ bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	u_int i, j, k, lim = kring->nkr_num_slots - 1;
+	u_int j, k, lim = kring->nkr_num_slots - 1;
+	int i;
 
 	k = ring->cur;
 	if (k > lim)
