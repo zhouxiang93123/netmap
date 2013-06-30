@@ -3098,7 +3098,7 @@ linux_netmap_mmap(struct file *f, struct vm_area_struct *vma)
 {
 	int error = 0;
 	unsigned long off, va;
-	vm_offset_t pa;
+	vm_ooffset_t pa;
 	struct netmap_priv_d *priv = f->private_data;
 	/*
 	 * vma->vm_start: start of mapping user address space
@@ -3126,6 +3126,7 @@ linux_netmap_mmap(struct file *f, struct vm_area_struct *vma)
 		if (pa == 0) 
 			return -EINVAL;
 	
+		D("va %lx pa %p", va, pa);	
 		error = remap_pfn_range(vma, va, pa >> PAGE_SHIFT, PAGE_SIZE, vma->vm_page_prot);
 		if (error) 
 			return error;

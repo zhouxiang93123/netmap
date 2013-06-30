@@ -179,7 +179,7 @@ vm_paddr_t
 netmap_mem_ofstophys(struct netmap_mem_d* nmd, vm_ooffset_t offset)
 {
 	int i;
-	vm_offset_t o = offset;
+	vm_ooffset_t o = offset;
 	vm_paddr_t pa;
 	struct netmap_obj_pool *p;
 
