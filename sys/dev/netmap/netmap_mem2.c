@@ -310,7 +310,7 @@ netmap_obj_offset(struct netmap_obj_pool *p, const void *vaddr)
  * otherwise buffer allocation becomes terribly expensive.
  */
 static void *
-netmap_obj_malloc(struct netmap_obj_pool *p, int len, uint32_t *start, uint32_t *index)
+netmap_obj_malloc(struct netmap_obj_pool *p, u_int len, uint32_t *start, uint32_t *index)
 {
 	uint32_t i = 0;			/* index in the bitmap */
 	uint32_t mask, j;		/* slot counter */
@@ -374,10 +374,7 @@ netmap_obj_free(struct netmap_obj_pool *p, uint32_t j)
 static void
 netmap_obj_free_va(struct netmap_obj_pool *p, void *vaddr)
 {
-	int i, j, n = p->_memtotal / p->_clustsize;
-
-	if (vaddr == NULL)
-		return;
+	u_int i, j, n = p->_memtotal / p->_clustsize;
 
 	for (i = 0, j = 0; i < n; i++, j += p->clustentries) {
 		void *base = p->lut[i * p->clustentries].vaddr;
@@ -415,7 +412,7 @@ netmap_new_bufs(struct netmap_if *nifp,
                 struct netmap_slot *slot, u_int n)
 {
 	struct netmap_obj_pool *p = &nm_mem.pools[NETMAP_BUF_POOL];
-	int i = 0;	/* slot counter */
+	u_int i = 0;	/* slot counter */
 	uint32_t pos = 0;	/* slot in p->bitmap */
 	uint32_t index = 0;	/* buffer index */
 
@@ -453,6 +450,7 @@ netmap_free_buf(struct netmap_if *nifp, uint32_t i)
 {
 	struct netmap_obj_pool *p = &nm_mem.pools[NETMAP_BUF_POOL];
 
+	(void)nifp;
 	if (i < 2 || i >= p->objtotal) {
 		D("Cannot free buf#%d: should be in [2, %d[", i, p->objtotal);
 		return;
@@ -463,16 +461,19 @@ netmap_free_buf(struct netmap_if *nifp, uint32_t i)
 static void
 netmap_reset_obj_allocator(struct netmap_obj_pool *p)
 {
+
 	if (p == NULL)
 		return;
 	if (p->bitmap)
 		free(p->bitmap, M_NETMAP);
 	p->bitmap = NULL;
 	if (p->lut) {
-		int i;
+		u_int i;
+		size_t sz = p->_clustsize;
+
 		for (i = 0; i < p->objtotal; i += p->clustentries) {
 			if (p->lut[i].vaddr)
-				contigfree(p->lut[i].vaddr, p->_clustsize, M_NETMAP);
+				contigfree(p->lut[i].vaddr, sz, M_NETMAP);
 		}
 		bzero(p->lut, sizeof(struct lut_entry) * p->objtotal);
 #ifdef linux
@@ -594,7 +595,8 @@ error:
 static int
 netmap_finalize_obj_allocator(struct netmap_obj_pool *p)
 {
-	int i, n;
+	int i; /* must be signed */
+	size_t n;
 
 	n = sizeof(struct lut_entry) * p->objtotal;
 #ifdef linux
@@ -603,7 +605,7 @@ netmap_finalize_obj_allocator(struct netmap_obj_pool *p)
 	p->lut = malloc(n, M_NETMAP, M_NOWAIT | M_ZERO);
 #endif
 	if (p->lut == NULL) {
-		D("Unable to create lookup table (%d bytes) for '%s'", n, p->name);
+		D("Unable to create lookup table (%d bytes) for '%s'", (int)n, p->name);
 		goto clean;
 	}
 
@@ -611,7 +613,7 @@ netmap_finalize_obj_allocator(struct netmap_obj_pool *p)
 	n = (p->objtotal + 31) / 32;
 	p->bitmap = malloc(sizeof(uint32_t) * n, M_NETMAP, M_NOWAIT | M_ZERO);
 	if (p->bitmap == NULL) {
-		D("Unable to create bitmap (%d entries) for allocator '%s'", n,
+		D("Unable to create bitmap (%d entries) for allocator '%s'", (int)n,
 		    p->name);
 		goto clean;
 	}
@@ -620,12 +622,13 @@ netmap_finalize_obj_allocator(struct netmap_obj_pool *p)
 	/*
 	 * Allocate clusters, init pointers and bitmap
 	 */
-	for (i = 0; i < p->objtotal;) {
+	n = p->_clustsize;
+	for (i = 0; i < (int)p->objtotal;) {
 		int lim = i + p->clustentries;
 		char *clust;
 
-		clust = contigmalloc(p->_clustsize, M_NETMAP, M_NOWAIT | M_ZERO,
-		    0, -1UL, PAGE_SIZE, 0);
+		clust = contigmalloc(n, M_NETMAP, M_NOWAIT | M_ZERO,
+		    (size_t)0, -1UL, PAGE_SIZE, 0);
 		if (clust == NULL) {
 			/*
 			 * If we get here, there is a severe memory shortage,
@@ -639,7 +642,7 @@ netmap_finalize_obj_allocator(struct netmap_obj_pool *p)
 				p->bitmap[ (i>>5) ] &=  ~( 1 << (i & 31) );
 				if (i % p->clustentries == 0 && p->lut[i].vaddr)
 					contigfree(p->lut[i].vaddr,
-						p->_clustsize, M_NETMAP);
+						n, M_NETMAP);
 			}
 			p->objtotal = i;
 			p->objfree = p->objtotal - 2;
@@ -653,7 +656,7 @@ netmap_finalize_obj_allocator(struct netmap_obj_pool *p)
 			p->lut[i].paddr = vtophys(clust);
 		}
 	}
-	p->bitmap[0] = ~3; /* objs 0 and 1 is always busy */
+	p->bitmap[0] = (uint32_t)(~3); /* objs 0 and 1 is always busy */
 	if (netmap_verbose)
 		D("Pre-allocated %d clusters (%d/%dKB) for '%s'",
 		    p->_numclusters, p->_clustsize >> 10,
@@ -800,7 +803,7 @@ netmap_memory_fini(void)
 static void
 netmap_free_rings(struct netmap_adapter *na)
 {
-	int i;
+	u_int i;
 	if (!na->tx_rings)
 		return;
 	for (i = 0; i < na->num_tx_rings + 1; i++) {
@@ -830,16 +833,22 @@ netmap_if_new(const char *ifname, struct netmap_adapter *na)
 	ssize_t base; /* handy for relative offsets between rings and nifp */
 	u_int i, len, ndesc, ntx, nrx;
 	struct netmap_kring *kring;
+	uint32_t *nkr_leases = NULL;
 
 	if (netmap_update_config(na)) {
 		/* configuration mismatch, report and fail */
 		return NULL;
 	}
+	/*
+	 * verify whether virtual port need the stack ring
+	 */
 	ntx = na->num_tx_rings + 1; /* shorthand, include stack ring */
 	nrx = na->num_rx_rings + 1; /* shorthand, include stack ring */
 	/*
 	 * the descriptor is followed inline by an array of offsets
 	 * to the tx and rx rings in the shared memory region.
+	 * For virtual rx rings we also allocate an array of
+	 * pointers to assign to nkr_leases.
 	 */
 	len = sizeof(struct netmap_if) + (nrx + ntx) * sizeof(ssize_t);
 	nifp = netmap_if_malloc(len);
@@ -850,7 +859,7 @@ netmap_if_new(const char *ifname, struct netmap_adapter *na)
 	/* initialize base fields -- override const */
 	*(int *)(uintptr_t)&nifp->ni_tx_rings = na->num_tx_rings;
 	*(int *)(uintptr_t)&nifp->ni_rx_rings = na->num_rx_rings;
-	strncpy(nifp->ni_name, ifname, IFNAMSIZ);
+	strncpy(nifp->ni_name, ifname, (size_t)IFNAMSIZ);
 
 	(na->refcount)++;	/* XXX atomic ? we are under lock */
 	if (na->refcount > 1) { /* already setup, we are done */
@@ -858,12 +867,19 @@ netmap_if_new(const char *ifname, struct netmap_adapter *na)
 	}
 
 	len = (ntx + nrx) * sizeof(struct netmap_kring);
-	na->tx_rings = malloc(len, M_DEVBUF, M_NOWAIT | M_ZERO);
+	if (nma_is_vp(na)) {
+		D("VP %s allocate leases for %d rings %d slots",
+			ifname, na->num_rx_rings, na->num_rx_desc);
+		len += sizeof(uint32_t) * na->num_rx_desc * na->num_rx_rings;
+	}
+	na->tx_rings = malloc((size_t)len, M_DEVBUF, M_NOWAIT | M_ZERO);
 	if (na->tx_rings == NULL) {
 		D("Cannot allocate krings for %s", ifname);
 		goto cleanup;
 	}
 	na->rx_rings = na->tx_rings + ntx;
+	if (nma_is_vp(na))
+		nkr_leases = (uint32_t *)(na->rx_rings + nrx);
 
 	/*
 	 * First instance, allocate netmap rings and buffers for this card
@@ -920,6 +936,10 @@ netmap_if_new(const char *ifname, struct netmap_adapter *na)
 
 		kring->na = na;
 		kring->ring = ring;
+		if (nkr_leases && i < na->num_rx_rings) {
+			kring->nkr_leases = nkr_leases;
+			nkr_leases += ndesc;
+		}
 		*(int *)(uintptr_t)&ring->num_slots = kring->nkr_num_slots = ndesc;
 		*(ssize_t *)(uintptr_t)&ring->buf_ofs =
 		    (nm_mem.pools[NETMAP_IF_POOL]._memtotal +

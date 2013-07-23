@@ -141,9 +141,13 @@ struct net_device_ops {
 typedef unsigned long phys_addr_t;
 extern struct net init_net;
 #endif
-
+#define ifunit_ref(_x)		dev_get_by_name(&init_net, _x);
+#define if_rele(ifp)		dev_put(ifp)
 #define CURVNET_SET(x)
 #define CURVNET_RESTORE(x)
+
+#define refcount_acquire(_a)    atomic_add(1, (atomic_t *)_a)
+#define refcount_release(_a)    atomic_dec_and_test((atomic_t *)_a)
 
 
 /*
@@ -168,12 +172,12 @@ static inline void mtx_unlock(safe_spinlock_t *m)
 
 #define mtx_init(a, b, c, d)	spin_lock_init(&((a)->sl))
 #define mtx_destroy(a)		// XXX spin_lock_destroy(a)
-#define rw_init(a, b)		spin_lock_init(&((a)->sl))
-#define rw_destroy(a)
 
-/* BDG_LOCK facilities */
-#define BDG_LOCK()		mtx_lock(&netmap_bridge_mutex)
-#define BDG_UNLOCK()		mtx_unlock(&netmap_bridge_mutex)
+/*
+ * XXX these must be changed, as we cannot sleep within the RCU.
+ * Must change to proper rwlock, and then can move the definitions
+ * into the main netmap.c file.
+ */
 #define BDG_WLOCK(b)		do { mtx_lock(&(b)->bdg_lock); rcu_read_lock(); } while (0)
 #define BDG_WUNLOCK(b)		do { rcu_read_unlock(); mtx_unlock(&(b)->bdg_lock); } while (0)
 #define BDG_RLOCK(b)		rcu_read_lock()

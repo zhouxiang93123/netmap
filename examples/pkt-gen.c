@@ -1565,9 +1565,6 @@ main(int arc, char **argv)
 		bzero(&nmr, sizeof(nmr));
 		nmr.nr_version = NETMAP_API;
 		strncpy(nmr.nr_name, g.ifname, sizeof(nmr.nr_name));
-		/* XXX should be changed if NM_NAME is exported */
-		if (g.nthreads > 1 && strncmp(g.ifname, "vale", 4) == 0)
-			nmr.nr_tx_rings = nmr.nr_rx_rings = g.nthreads;
 		if ((ioctl(g.main_fd, NIOCGINFO, &nmr)) == -1) {
 			D("Unable to get if info for %s", g.ifname);
 		}
