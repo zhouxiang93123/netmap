@@ -2939,7 +2939,10 @@ netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
 	if (kring->nr_kflags & NKR_RBUSY)
 		return;
 	kring->nr_kflags |= NKR_RBUSY;
-	na->nm_lock(ifp, NETMAP_RX_UNLOCK, ring_nr);
+	if (na->separate_locks)
+		na->nm_lock(ifp, NETMAP_RX_UNLOCK, ring_nr);
+	else
+		na->nm_lock(ifp, NETMAP_CORE_UNLOCK, 0);
 	
 	/* fetch packets that have arrived.
 	 * XXX maybe do this in a loop ?
@@ -2965,7 +2968,10 @@ netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
 done:
 	/* restore the lock and enable running here again */
 	D("restore lock and clear RBUSY");
-	na->nm_lock(ifp, NETMAP_RX_LOCK, ring_nr);
+	if (na->separate_locks)
+		na->nm_lock(ifp, NETMAP_RX_LOCK, ring_nr);
+	else
+		na->nm_lock(ifp, NETMAP_CORE_LOCK, 0);
 	kring->nr_kflags &= ~NKR_RBUSY;
 	return;
 }
