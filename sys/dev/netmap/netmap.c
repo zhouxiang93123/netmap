@@ -1076,9 +1076,14 @@ netmap_dev_pager_fault(vm_object_t object, vm_ooffset_t offset,
 		 * Replace the passed in reqpage page with our own fake page and
 		 * free up the all of the original pages.
 		 */
-		VM_OBJECT_UNLOCK(object);
+#ifndef VM_OBJECT_WUNLOCK	/* FreeBSD < 10.x */
+#define VM_OBJECT_WUNLOCK VM_OBJECT_UNLOCK
+#define VM_OBJECT_WLOCK	VM_OBJECT_LOCK
+#endif /* VM_OBJECT_WUNLOCK */
+
+		VM_OBJECT_WUNLOCK(object);
 		page = vm_page_getfake(paddr, memattr);
-		VM_OBJECT_LOCK(object);
+		VM_OBJECT_WLOCK(object);
 		vm_page_lock(*mres);
 		vm_page_free(*mres);
 		vm_page_unlock(*mres);
@@ -1145,7 +1150,7 @@ err_deref:
 	priv->np_refcount--;
 err_unlock:
 	NMG_UNLOCK();
-err:
+// err:
 	free(vmh, M_DEVBUF);
 	return error;
 }
