@@ -176,17 +176,16 @@ static inline void mtx_unlock(safe_spinlock_t *m)
  * Must change to proper rwlock, and then can move the definitions
  * into the main netmap.c file.
  */
-#define BDG_WLOCK(b)		do { mtx_lock(&(b)->bdg_lock); rcu_read_lock(); } while (0)
-#define BDG_WUNLOCK(b)		do { rcu_read_unlock(); mtx_unlock(&(b)->bdg_lock); } while (0)
-#define BDG_RLOCK(b)		rcu_read_lock()
-#define BDG_RUNLOCK(b)		rcu_read_unlock()
-#define BDG_SET_VAR(lval, p)	rcu_assign_pointer(lval, p)
-#define BDG_GET_VAR(lval)	rcu_dereference(lval)
-#define BDG_FREE(p)			\
-	do {				\
-		synchronize_rcu();	\
-		free(p, M_DEVBUF);	\
-	} while (0)
+#define BDG_RWLOCK_T		struct rw_semaphore
+#define BDG_RWINIT(b)		init_rwsem(&(b)->bdg_lock)
+#define BDG_WLOCK(b)		down_write(&(b)->bdg_lock)
+#define BDG_WUNLOCK(b)		up_write(&(b)->bdg_lock)
+#define BDG_RLOCK(b)		down_read(&(b)->bdg_lock)
+#define BDG_RUNLOCK(b)		up_read(&(b)->bdg_lock)
+#define BDG_RTRYLOCK(b)		down_read_trylock(&(b)->bdg_lock)
+#define BDG_SET_VAR(lval, p)	((lval) = (p))
+#define BDG_GET_VAR(lval)	(lval)
+#define BDG_FREE(p)		kfree(p)
 
 /* use volatile to fix a probable compiler error on 2.6.25 */
 #define malloc(_size, type, flags)                      \

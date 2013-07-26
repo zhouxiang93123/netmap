@@ -151,12 +151,13 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 241723 2012-10-19 09:41:45Z gle
 
 #define prefetch(x)	__builtin_prefetch(x)
 
-#define NM_RWLOCK_T		struct sx // struct rwlock
+#define BDG_RWLOCK_T		struct sx // struct rwlock
 
-#define	NM_RWINIT(b)		sx_init(&(b)->bdg_lock, "bdg lock")
+#define	BDG_RWINIT(b)		sx_init(&(b)->bdg_lock, "bdg lock")
 #define BDG_WLOCK(b)		sx_xlock(&(b)->bdg_lock)
 #define BDG_WUNLOCK(b)		sx_xunlock(&(b)->bdg_lock)
 #define BDG_RLOCK(b)		sx_slock(&(b)->bdg_lock)
+#define BDG_RTRYLOCK(b)		sx_try_slock(&(b)->bdg_lock)
 #define BDG_RUNLOCK(b)		sx_sunlock(&(b)->bdg_lock)
 
 
@@ -179,10 +180,6 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 241723 2012-10-19 09:41:45Z gle
 
 #include "bsd_glue.h"
 static netdev_tx_t linux_netmap_start(struct sk_buff *, struct net_device *);
-
-/* XXX double check */
-#define NM_RWLOCK_T     safe_spinlock_t // see bsd_glue.h
-#define	NM_RWINIT(b)	spin_lock_init(&((b)->bdg_lock.sl))
 
 static struct device_driver*
 linux_netmap_find_driver(struct device *dev)
@@ -397,7 +394,7 @@ struct nm_bridge {
 	int namelen;	/* 0 means free */
 
 	/* XXX what is the proper alignment/layout ? */
-	NM_RWLOCK_T bdg_lock;	/* protects bdg_ports */
+	BDG_RWLOCK_T bdg_lock;	/* protects bdg_ports */
 	struct netmap_adapter *bdg_ports[NM_BDG_MAXPORTS];
 
 	char basename[IFNAMSIZ];
@@ -1606,8 +1603,9 @@ ifunit_rele:
 				SWNA(iter)->bdg_port = cand2;
 				SWNA(iter)->na_bdg = b;
 			}
-		} else /* not a netmap-capable NIC */
+		} else { /* not a netmap-capable NIC */
 			goto ifunit_rele;
+		}
 		na = NA(iter);
 		na->bdg_port = cand;
 		/* bind the port to the bridge (virtual ports are not active) */
@@ -1856,8 +1854,9 @@ kern_netmap_regif(struct nmreq *nmr)
 	}
 
 	nifp = netmap_do_regif(npriv, ifp, nmr->nr_ringid, &error);
-	if (!nifp)
+	if (!nifp) {
 		goto unref_exit;
+	}
 	wmb(); // XXX do we need it ?
 	npriv->np_nifp = nifp;
 	NA(ifp)->na_kpriv = npriv;
@@ -3399,7 +3398,8 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 	dsts = (uint16_t *)(dst_ents + NM_BDG_MAXPORTS * NM_BDG_MAXRINGS + 1);
 
 	ND("wait rlock for %d packets", n);
-	BDG_RLOCK(b);
+	if (!BDG_RTRYLOCK(b))
+		return 0;
 	ND("rlock acquired for %d packets", n);
 	/* first pass: find a destination for each packet in the batch */
 	for (i = 0; likely(i < n); i += ft[i].ft_frags) {
@@ -3843,7 +3843,7 @@ netmap_init(void)
 		MTX_NETWORK_LOCK, MTX_DEF);
 	bzero(nm_bridges, sizeof(struct nm_bridge) * NM_BRIDGES); /* safety */
 	for (i = 0; i < NM_BRIDGES; i++)
-		NM_RWINIT(&nm_bridges[i]);
+		BDG_RWINIT(&nm_bridges[i]);
 	return (error);
 }
 
