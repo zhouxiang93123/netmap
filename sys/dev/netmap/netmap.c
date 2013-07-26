@@ -3131,7 +3131,7 @@ linux_netmap_mmap(struct file *f, struct vm_area_struct *vma)
 		if (pa == 0) 
 			return -EINVAL;
 	
-		D("va %lx pa %p", va, pa);	
+		ND("va %lx pa %p", va, pa);	
 		error = remap_pfn_range(vma, va, pa >> PAGE_SHIFT, PAGE_SIZE, vma->vm_page_prot);
 		if (error) 
 			return error;
