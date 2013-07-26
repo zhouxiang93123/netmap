@@ -1076,9 +1076,14 @@ netmap_dev_pager_fault(vm_object_t object, vm_ooffset_t offset,
 		 * Replace the passed in reqpage page with our own fake page and
 		 * free up the all of the original pages.
 		 */
-		VM_OBJECT_UNLOCK(object);
+#ifndef VM_OBJECT_WUNLOCK	/* FreeBSD < 10.x */
+#define VM_OBJECT_WUNLOCK VM_OBJECT_UNLOCK
+#define VM_OBJECT_WLOCK	VM_OBJECT_LOCK
+#endif /* VM_OBJECT_WUNLOCK */
+
+		VM_OBJECT_WUNLOCK(object);
 		page = vm_page_getfake(paddr, memattr);
-		VM_OBJECT_LOCK(object);
+		VM_OBJECT_WLOCK(object);
 		vm_page_lock(*mres);
 		vm_page_free(*mres);
 		vm_page_unlock(*mres);
@@ -1145,7 +1150,7 @@ err_deref:
 	priv->np_refcount--;
 err_unlock:
 	NMG_UNLOCK();
-err:
+// err:
 	free(vmh, M_DEVBUF);
 	return error;
 }
@@ -2294,7 +2299,7 @@ unlock_out:
  * Can be called for one or more queues.
  * Return true the event mask corresponding to ready events.
  * If there are no ready events, do a selrecord on either individual
- * selfd or on the global one.
+ * selinfo or on the global one.
  * Device-dependent parts (locking and sync of tx/rx rings)
  * are done through callbacks.
  *
@@ -2340,8 +2345,9 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 
 	lim_tx = na->num_tx_rings;
 	lim_rx = na->num_rx_rings;
-	/* how many queues we are scanning */
+
 	if (priv->np_qfirst == NETMAP_SW_RING) {
+		/* handle the host stack ring */
 		if (priv->np_txpoll || want_tx) {
 			/* push any packets up, then we are always ready */
 			netmap_sync_to_host(na);
@@ -2370,12 +2376,12 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	}
 
 	/*
-	 * check_all is set if the card has more than one queue and
+	 * check_all is set if the card has more than one queue AND
 	 * the client is polling all of them. If true, we sleep on
-	 * the "global" selfd, otherwise we sleep on individual selfd
-	 * (we can only sleep on one of them per direction).
+	 * the "global" selinfo, otherwise we sleep on individual selinfo
+	 * (FreeBSD only allows two selinfo's per file descriptor).
 	 * The interrupt routine in the driver should always wake on
-	 * the individual selfd, and also on the global one if the card
+	 * the individual selinfo, and also on the global one if the card
 	 * has more than one ring.
 	 *
 	 * If the card has only one lock, we just use that.
