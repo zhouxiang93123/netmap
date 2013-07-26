@@ -290,6 +290,10 @@ struct netmap_adapter {
 				 * useful during initialization
 				 */
 #define NAF_SW_ONLY	2	/* forward packets only to sw adapter */
+#define NAF_BDG_MAYSLEEP 4	/* the bridge is allowed to sleep when
+				 * forwarding packets coming from this
+				 * interface
+				 */
 	int refcount; /* number of user-space descriptors using this
 			 interface, which is equal to the number of
 			 struct netmap_if objs in the mapped region. */

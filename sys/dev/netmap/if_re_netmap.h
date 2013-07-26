@@ -412,6 +412,7 @@ re_netmap_attach(struct rl_softc *sc)
 
 	na.ifp = sc->rl_ifp;
 	na.separate_locks = 0;
+	na.na_flags = NAF_BDG_MAYSLEEP;
 	na.num_tx_desc = sc->rl_ldata.rl_tx_desc_cnt;
 	na.num_rx_desc = sc->rl_ldata.rl_rx_desc_cnt;
 	na.nm_txsync = re_netmap_txsync;

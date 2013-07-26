@@ -3398,7 +3398,9 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 	dsts = (uint16_t *)(dst_ents + NM_BDG_MAXPORTS * NM_BDG_MAXRINGS + 1);
 
 	ND("wait rlock for %d packets", n);
-	if (!BDG_RTRYLOCK(b))
+	if (na->na_flags & NAF_BDG_MAYSLEEP)
+		BDG_RLOCK(b);
+	else if (!BDG_RTRYLOCK(b))
 		return 0;
 	ND("rlock acquired for %d packets", n);
 	/* first pass: find a destination for each packet in the batch */
@@ -3798,6 +3800,7 @@ bdg_netmap_attach(struct netmap_adapter *arg)
 
 	na.ifp = arg->ifp;
 	na.separate_locks = 1;
+	na.na_flags = NAF_BDG_MAYSLEEP;
 	na.num_tx_rings = arg->num_tx_rings;
 	na.num_rx_rings = arg->num_rx_rings;
 	na.num_tx_desc = arg->num_tx_desc;

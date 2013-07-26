@@ -598,6 +598,7 @@ ixgbe_netmap_attach(struct adapter *adapter)
 
 	na.ifp = adapter->ifp;
 	na.separate_locks = 1;	/* this card has separate rx/tx locks */
+	na.na_flags = NAF_BDG_MAYSLEEP;
 	na.num_tx_desc = adapter->num_tx_desc;
 	na.num_rx_desc = adapter->num_rx_desc;
 	na.nm_txsync = ixgbe_netmap_txsync;
