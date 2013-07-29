@@ -73,9 +73,28 @@ invalid usage.
 
 Within the kernel, each NIC operating in netmap mode is protected
 using the following locks:
-- an exclusive lock on each ring, also protecting access to the selwait
-  structure
+- an exclusive lock on each ring:
+  The code guarantees that there is at most one instance of *_*xsync()
+  active on the ring at any time. For rings connected to user file
+  descriptors, an atomic_test_and_set() protects this, and the
+  lock on the ring is not actually used.
+  For NIC RX rings connected to a VALE switch, an atomic_test_and_set()
+  is also used to prevent multiple executions (the driver might indeed
+  already guarantee this).
+  For NIC TX rings connected to a VALE switch, the lock arbitrates
+  access to the queue (both when allocating buffers and when pushing
+  them out).
+
+- *xsync() should be protected against initializations of the card.
+  On FreeBSD most devices have the reset routine protected by
+  a RING lock (ixgbe, igb, em) or core lock (re). lem is missing
+  the RING protection on rx_reset(), this should be added.
+
+  On linux there is an external lock on the tx path, which probably
+  also arbitrates access to the reset routine. XXX to be revised
+
 - a global lock protecting configuration of the interface
+  (to be revised)
 
 --- VALE SWITCH ---
 
@@ -2822,6 +2841,14 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
 	if (!(na->ifp->if_capenable & IFCAP_NETMAP))
 		return NULL;	/* nothing to reinitialize */
 
+	/* XXX note- in the new scheme, we are not guaranteed to be
+	 * under lock (e.g. when called on a device reset).
+	 * In this case, we should set a flag and do not trust too
+	 * much the values. In practice:
+	 * - set a RESET flag somewhere in the kring
+	 * - do the processing in a conservative way
+	 * - let the *sync() fixup at the end.
+	 */
 	if (tx == NR_TX) {
 		if (n >= na->num_tx_rings)
 			return NULL;
