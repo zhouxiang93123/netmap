@@ -2983,17 +2983,20 @@ done:
 
 
 /*
- * Default functions to handle rx/tx interrupts
- * we have 4 cases:
- * 1 ring, single lock:
- *	lock(core); wake(i=0); unlock(core)
- * N rings, single lock:
- *	lock(core); wake(i); wake(N+1) unlock(core)
- * 1 ring, separate locks: (i=0)
- *	lock(i); wake(i); unlock(i)
- * N rings, separate locks:
- *	lock(i); wake(i); unlock(i); lock(core) wake(N+1) unlock(core)
- * work_done is non-null on the RX path.
+ * Default functions to handle rx/tx interrupts from a physical device.
+ * "work_done" is non-null on the RX path, NULL for the TX path.
+ *
+ * XXX we assume that there is only one instance ?
+ *
+ * If the card is not in netmap mode it simply returns 0 with the
+ * locking state unchanged.
+ * If the card is connected to a netmap file descriptor,
+ * it does a selwakeup on the individual queue, plus one on the global one
+ * if needed (multiqueue card _and_ there are multiqueue listeners),
+ * and returns possibly releasing locks as specified by the calling
+ * arguments.
+ * Finally, if called from an interface connected to a switch,
+ * calls the proper forwarding routine.
  *
  * The 'q' argument also includes flag to tell whether the queue is
  * already locked on enter, and whether it should remain locked on exit.
@@ -3003,9 +3006,9 @@ int
 netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 {
 	struct netmap_adapter *na;
-	struct netmap_kring *r;
+	struct netmap_kring *kring;
 	NM_SELINFO_T *main_wq;
-	int locktype, unlocktype, nic_to_bridge, lock;
+	int lock;
 
 	if (!(ifp->if_capenable & IFCAP_NETMAP))
 		return 0;
@@ -3023,55 +3026,44 @@ netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 	if (work_done) { /* RX path */
 		if (q >= na->num_rx_rings)
 			return 0;	// not a physical queue
-		r = na->rx_rings + q;
-		r->nr_kflags |= NKR_PENDINTR;
+		kring = na->rx_rings + q;
+		kring->nr_kflags |= NKR_PENDINTR;	// XXX atomic ?
 		main_wq = (na->num_rx_rings > 1) ? &na->rx_si : NULL;
 		/* set a flag if the NIC is attached to a VALE switch */
-		nic_to_bridge = (na->na_bdg != NULL);
-		locktype = NETMAP_RX_LOCK;
-		unlocktype = NETMAP_RX_UNLOCK;
+		if (na->na_bdg != NULL) {
+			netmap_nic_to_bdg(ifp, q);
+		} else {
+			selwakeuppri(&kring->si, PI_NET);
+			if (na->num_rx_rings > 1 /* or multiple listeners */ )
+				selwakeuppri(&na->rx_si, PI_NET);
+		}
+		/* handle locking exit */
+		switch (lock & (NETMAP_LOCKED_ENTER | NETMAP_LOCKED_EXIT)) {
+		case 0:
+		case (NETMAP_LOCKED_ENTER | NETMAP_LOCKED_EXIT):
+			break;
+		case NETMAP_LOCKED_ENTER:
+		case NETMAP_LOCKED_EXIT:
+			;
+		}
 	} else { /* TX path */
 		if (q >= na->num_tx_rings)
 			return 0;	// not a physical queue
-		r = na->tx_rings + q;
+		kring = na->tx_rings + q;
 		main_wq = (na->num_tx_rings > 1) ? &na->tx_si : NULL;
 		work_done = &q; /* dummy */
-		nic_to_bridge = 0;
-		locktype = NETMAP_TX_LOCK;
-		unlocktype = NETMAP_TX_UNLOCK;
-	}
-	if (na->separate_locks) {
-		if (!(lock & NETMAP_LOCKED_ENTER))
-			na->nm_lock(ifp, locktype, q);
-		/* If a NIC is attached to a bridge, flush packets
-		 * (and no need to wakeup anyone). Otherwise, wakeup
-		 * possible processes waiting for packets.
-		 */
-		if (nic_to_bridge)
-			netmap_nic_to_bdg(ifp, q);
-		else
-			selwakeuppri(&r->si, PI_NET);
-		na->nm_lock(ifp, unlocktype, q);
-		if (main_wq && !nic_to_bridge) {
-			na->nm_lock(ifp, NETMAP_CORE_LOCK, 0);
-			selwakeuppri(main_wq, PI_NET);
-			na->nm_lock(ifp, NETMAP_CORE_UNLOCK, 0);
+		/* we can do the wakeup without touching the locks */
+		selwakeuppri(&kring->si, PI_NET);
+		if (na->num_tx_rings > 1 /* or multiple listeners */ )
+			selwakeuppri(&na->tx_si, PI_NET);
+		/* handle locking exit */
+		switch (lock & (NETMAP_LOCKED_ENTER | NETMAP_LOCKED_EXIT)) {
+		case 0:
+		case (NETMAP_LOCKED_ENTER | NETMAP_LOCKED_EXIT):
+		case NETMAP_LOCKED_ENTER:
+		case NETMAP_LOCKED_EXIT:
+			;
 		}
-		/* lock the queue again if requested */
-		if (lock & NETMAP_LOCKED_EXIT)
-			na->nm_lock(ifp, locktype, q);
-	} else {
-		if (!(lock & NETMAP_LOCKED_ENTER))
-			na->nm_lock(ifp, NETMAP_CORE_LOCK, 0);
-		if (nic_to_bridge)
-			netmap_nic_to_bdg(ifp, q);
-		else {
-			selwakeuppri(&r->si, PI_NET);
-			if (main_wq)
-				selwakeuppri(main_wq, PI_NET);
-		}
-		if (!(lock & NETMAP_LOCKED_EXIT))
-			na->nm_lock(ifp, NETMAP_CORE_UNLOCK, 0);
 	}
 	*work_done = 1; /* do not fire napi again */
 	return 1;
