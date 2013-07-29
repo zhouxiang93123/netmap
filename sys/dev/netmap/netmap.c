@@ -3465,7 +3465,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		int retry = netmap_txsync_retry;
 		struct nm_bdg_q *d;
 		uint32_t my_start = 0, lease_idx = 0;
-		int nrings, lock_cmd, unlock_cmd;
+		int nrings;
 
 		d_i = dsts[i];
 		ND("second pass %d port %d", i, d_i);
@@ -3504,12 +3504,8 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		dst_nr = d_i & (NM_BDG_MAXRINGS-1);
 		if (is_vp) { /* virtual port */
 			nrings = dst_na->num_rx_rings;
-			lock_cmd = NETMAP_RX_LOCK;
-			unlock_cmd = NETMAP_RX_UNLOCK;
 		} else {
 			nrings = dst_na->num_tx_rings;
-			lock_cmd = NETMAP_TX_LOCK;
-			unlock_cmd = NETMAP_TX_UNLOCK;
 		}
 		if (dst_nr >= nrings)
 			dst_nr = dst_nr % nrings;
@@ -3517,23 +3513,33 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 				&dst_na->tx_rings[dst_nr];
 		ring = kring->ring;
 		lim = kring->nkr_num_slots - 1;
-		dst_na->nm_lock(dst_ifp, lock_cmd, dst_nr);
+
 retry:
-		if (!is_vp) { /* do a txsync to recover packets */
+		/* on physical interfaces, do a txsync to recover
+		 * slots for packets already transmitted.
+		 * XXX maybe we could be optimistic and rely on a retry
+		 * in case of failure.
+		 */
+		if (!is_vp) {
 			dst_na->nm_txsync(dst_ifp, dst_nr, 0);
 		}
+
 		/* reserve the buffers in the queue and an entry
 		 * to report completion, and drop lock.
+		 * XXX this might become a helper function.
 		 */
+		mtx_lock(&kring->q_lock);
 		my_start = j = kring->nkr_hwlease;
 		howmany = nm_kr_space(kring, is_vp);
 		if (needed < howmany)
 			howmany = needed;
 		lease_idx = nm_kr_lease(kring, howmany, is_vp);
-		dst_na->nm_lock(dst_ifp, unlock_cmd, dst_nr);
+		mtx_unlock(&kring->q_lock);
+
 		/* only retry if we need more than available slots */
 		if (retry && needed <= howmany)
 			retry = 0;
+
 		/* copy to the destination queue */
 		while (howmany > 0) {
 			struct netmap_slot *slot;
@@ -3591,8 +3597,9 @@ retry:
 		    /* current position */
 		    uint32_t *p = kring->nkr_leases; /* shorthand */
 		    uint32_t update_pos;
+		    int still_locked = 1;
 
-		    dst_na->nm_lock(dst_ifp, lock_cmd, dst_nr);
+		    mtx_lock(&kring->q_lock);
 		    if (unlikely(howmany > 0)) {
 			/* not used all bufs. If i am the last one
 			 * i can recover the slots, otherwise must
@@ -3613,12 +3620,13 @@ retry:
 		    }
 		    p[lease_idx] = j; /* report I am done */
 
-		    /* Do a selwakeup if all slots before my_start
-		     * have been reported. If so, also scan subsequent
-		     * leases to see if other ranges have been completed.
-		     */
 		    update_pos = is_vp ? nm_kr_rxpos(kring) : ring->cur;
+
 		    if (my_start == update_pos) {
+			/* all slots before my_start have been reported,
+			 * so scan subsequent leases to see if other ranges
+			 * have been completed, and to a selwakeup or txsync.
+		         */
 			while (lease_idx != kring->nkr_lease_idx &&
 				p[lease_idx] != NR_NOSLOT) {
 			    j = p[lease_idx];
@@ -3639,18 +3647,24 @@ retry:
 					D("avail shrink %d -> %d",
 						old_avail, kring->nr_hwavail);
 				}
+				still_locked = 0;
+				mtx_unlock(&kring->q_lock);
 				selwakeuppri(&kring->si, PI_NET);
 			    } else {
 				ring->cur = j;
 				/* XXX update avail ? */
+				still_locked = 0;
+				mtx_unlock(&kring->q_lock);
 				dst_na->nm_txsync(dst_ifp, dst_nr, 0);
+
 				/* retry to send more packets */
 				if (nma_is_hw(dst_na) && retry--)
 					goto retry;
 			    }
 			}
 		    }
-		    dst_na->nm_lock(dst_ifp, unlock_cmd, dst_nr);
+		    if (still_locked)
+			mtx_unlock(&kring->q_lock);
 		}
 		d->bq_head = d->bq_tail = NM_FT_NULL; /* cleanup */
 		d->bq_len = 0;

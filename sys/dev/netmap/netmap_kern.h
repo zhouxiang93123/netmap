@@ -147,6 +147,13 @@ struct netmap_priv_d;
  *			completion of their block. NR_NOSLOT (~0) indicates
  *			that the writer has not finished yet
  *	nkr_lease_idx	index of next free slot in nr_leases, to be assigned 
+ *
+ * The kring is manipulated by txsync/rxsync and generic netmap function.
+ * q_lock is used to arbitrate access to the kring from within the netmap
+ * code, and this and other protections guarantee that there is never
+ * more than 1 concurrent call to txsync or rxsync. So we are free
+ * to manipulate the kring from within txsync/rxsync without any extra
+ * locks.
  */
 struct netmap_kring {
 	struct netmap_ring *ring;
@@ -168,7 +175,7 @@ struct netmap_kring {
 	uint32_t nkr_lease_idx;
 
 	NM_SELINFO_T si;	/* poll/select wait queue */
-	NM_LOCK_T q_lock;	/* used if no device lock available */
+	NM_LOCK_T q_lock;	/* protects kring and ring. */
 } __attribute__((__aligned__(64)));
 
 
