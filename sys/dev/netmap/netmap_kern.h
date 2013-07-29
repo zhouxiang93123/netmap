@@ -139,6 +139,10 @@ struct netmap_priv_d;
  *			A writer in nm_bdg_flush reserves N buffers
  *			from nr_hwlease, advances it, then does the
  *			copy outside the lock.
+ *			In RX rings (used for VALE ports),
+ *			nkr_hwcur + nkr_hwavail <= nkr_hwlease < nkr_hwcur+N-1
+ *			In TX rings (used for NIC or host stack ports)
+ *			nkr_hwcur <= nkr_hwlease < nkr_hwcur+ nkr_hwavail
  *	nkr_leases	array of nkr_num_slots where writers can report
  *			completion of their block. NR_NOSLOT (~0) indicates
  *			that the writer has not finished yet
@@ -179,7 +183,8 @@ nm_next(uint32_t i, uint32_t lim)
 /* some macros to access interesting points in the rings
  * All numbers are modulo nkr_num_slots
  * TX rings:
- *
+ *	ring->cur   =:= kring->nr_cur + (bufs to be sent)
+ *	pending_tx  =:= nkr_num_slots - (nr_hwcur+nr_hwavail)
  * RX rings:
  *	kring->nr_hwcur   =:= ring->cur - ring->reserved;
  *	kring->nr_hwavail =:= ring->avail + ring->reserved
@@ -194,15 +199,23 @@ nm_next(uint32_t i, uint32_t lim)
 
 
 /*
- * space in the receive ring. Make sure there is always at least
- * one empty slot.
+ * space in the ring.
  */
 static inline uint32_t
-nm_kr_rxspace(struct netmap_kring *k)
+nm_kr_space(struct netmap_kring *k, int is_rx)
 {
-	int busy = k->nkr_hwlease - k->nr_hwcur;
-	if (busy < 0)
-		busy += k->nkr_num_slots;
+	int space;
+
+	if (is_rx) {
+		int busy = k->nkr_hwlease - k->nr_hwcur;
+		if (busy < 0)
+			busy += k->nkr_num_slots;
+		space = k->nkr_num_slots - 1 - busy;
+	} else {
+		space = k->nr_hwcur + k->nr_hwavail - k->nkr_hwlease;
+		if (space < 0)
+			space += k->nkr_num_slots;
+	}
 #if 0
 	// sanity check
 	if (k->nkr_hwlease >= k->nkr_num_slots ||
@@ -214,7 +227,7 @@ nm_kr_rxspace(struct netmap_kring *k)
 			k->nkr_lease_idx, k->nkr_num_slots);
 	}
 #endif
-	return k->nkr_num_slots - 1 - busy;
+	return space;
 }
 
 
@@ -243,7 +256,7 @@ nm_kr_rxpos(struct netmap_kring *k)
  * lease index
  */
 static inline uint32_t
-nm_kr_rxlease(struct netmap_kring *k, u_int n)
+nm_kr_lease(struct netmap_kring *k, u_int n, int is_rx)
 {
 	uint32_t lim = k->nkr_num_slots - 1;
 	uint32_t lease_idx = k->nkr_lease_idx;
@@ -251,7 +264,7 @@ nm_kr_rxlease(struct netmap_kring *k, u_int n)
 	k->nkr_leases[lease_idx] = NR_NOSLOT;
 	k->nkr_lease_idx = nm_next(lease_idx, lim);
 
-	if (n > nm_kr_rxspace(k)) {
+	if (n > nm_kr_space(k, is_rx)) {
 		D("invalid request for %d slots", n);
 		panic("x");
 	}
@@ -269,6 +282,7 @@ nm_kr_rxlease(struct netmap_kring *k, u_int n)
 	}
 	return lease_idx;
 }
+
 
 
 /*
