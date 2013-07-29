@@ -940,8 +940,8 @@ netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
 	}
 
 	/* initialize base fields -- override const */
-	*(int *)(uintptr_t)&nifp->ni_tx_rings = na->num_tx_rings;
-	*(int *)(uintptr_t)&nifp->ni_rx_rings = na->num_rx_rings;
+	*(u_int *)(uintptr_t)&nifp->ni_tx_rings = na->num_tx_rings;
+	*(u_int *)(uintptr_t)&nifp->ni_rx_rings = na->num_rx_rings;
 	strncpy(nifp->ni_name, ifname, (size_t)IFNAMSIZ);
 
 	if (na->refcount) { /* already setup, we are done */
@@ -981,7 +981,7 @@ netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
 		ND("txring[%d] at %p ofs %d", i, ring);
 		kring->na = na;
 		kring->ring = ring;
-		*(int *)(uintptr_t)&ring->num_slots = kring->nkr_num_slots = ndesc;
+		*(uint32_t *)(uintptr_t)&ring->num_slots = kring->nkr_num_slots = ndesc;
 		*(ssize_t *)(uintptr_t)&ring->buf_ofs =
 		    (na->nm_mem->pools[NETMAP_IF_POOL]._memtotal +
 			na->nm_mem->pools[NETMAP_RING_POOL]._memtotal) -
@@ -995,7 +995,7 @@ netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
 		 */
 		ring->avail = kring->nr_hwavail = ndesc - 1;
 		ring->cur = kring->nr_hwcur = 0;
-		*(int *)(uintptr_t)&ring->nr_buf_size =
+		*(uint16_t *)(uintptr_t)&ring->nr_buf_size =
 			NETMAP_BDG_BUF_SIZE(na->nm_mem);
 		ND("initializing slots for txring[%d]", i);
 		if (netmap_new_bufs(na->nm_mem, nifp, ring->slot, ndesc)) {
@@ -1023,7 +1023,7 @@ netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
 			kring->nkr_leases = nkr_leases;
 			nkr_leases += ndesc;
 		}
-		*(int *)(uintptr_t)&ring->num_slots = kring->nkr_num_slots = ndesc;
+		*(uint32_t *)(uintptr_t)&ring->num_slots = kring->nkr_num_slots = ndesc;
 		*(ssize_t *)(uintptr_t)&ring->buf_ofs =
 		    (na->nm_mem->pools[NETMAP_IF_POOL]._memtotal +
 		        na->nm_mem->pools[NETMAP_RING_POOL]._memtotal) -
