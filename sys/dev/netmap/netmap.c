@@ -2984,24 +2984,17 @@ netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
  * arguments.
  * Finally, if called from an interface connected to a switch,
  * calls the proper forwarding routine.
- *
- * The 'q' argument also includes flag to tell whether the queue is
- * already locked on enter, and whether it should remain locked on exit.
- * This helps adapting to different defaults in drivers and OSes.
  */
 int
 netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 {
 	struct netmap_adapter *na;
 	struct netmap_kring *kring;
-	NM_SELINFO_T *main_wq;
-	int lock;
 
 	if (!(ifp->if_capenable & IFCAP_NETMAP))
 		return 0;
 
-	lock = q & (NETMAP_LOCKED_ENTER | NETMAP_LOCKED_EXIT);
-	q = q & NETMAP_RING_MASK;
+	q &= NETMAP_RING_MASK;
 
 	RD(5, "received %s queue %d", work_done ? "RX" : "TX" , q);
 	na = NA(ifp);
@@ -3015,8 +3008,6 @@ netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 			return 0;	// not a physical queue
 		kring = na->rx_rings + q;
 		kring->nr_kflags |= NKR_PENDINTR;	// XXX atomic ?
-		main_wq = (na->num_rx_rings > 1) ? &na->rx_si : NULL;
-		/* set a flag if the NIC is attached to a VALE switch */
 		if (na->na_bdg != NULL) {
 			netmap_nic_to_bdg(ifp, q);
 		} else {
@@ -3024,35 +3015,15 @@ netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 			if (na->num_rx_rings > 1 /* or multiple listeners */ )
 				selwakeuppri(&na->rx_si, PI_NET);
 		}
-		/* handle locking exit */
-		switch (lock & (NETMAP_LOCKED_ENTER | NETMAP_LOCKED_EXIT)) {
-		case 0:
-		case (NETMAP_LOCKED_ENTER | NETMAP_LOCKED_EXIT):
-			break;
-		case NETMAP_LOCKED_ENTER:
-		case NETMAP_LOCKED_EXIT:
-			;
-		}
+		*work_done = 1; /* do not fire napi again */
 	} else { /* TX path */
 		if (q >= na->num_tx_rings)
 			return 0;	// not a physical queue
 		kring = na->tx_rings + q;
-		main_wq = (na->num_tx_rings > 1) ? &na->tx_si : NULL;
-		work_done = &q; /* dummy */
-		/* we can do the wakeup without touching the locks */
 		selwakeuppri(&kring->si, PI_NET);
 		if (na->num_tx_rings > 1 /* or multiple listeners */ )
 			selwakeuppri(&na->tx_si, PI_NET);
-		/* handle locking exit */
-		switch (lock & (NETMAP_LOCKED_ENTER | NETMAP_LOCKED_EXIT)) {
-		case 0:
-		case (NETMAP_LOCKED_ENTER | NETMAP_LOCKED_EXIT):
-		case NETMAP_LOCKED_ENTER:
-		case NETMAP_LOCKED_EXIT:
-			;
-		}
 	}
-	*work_done = 1; /* do not fire napi again */
 	return 1;
 }
 
