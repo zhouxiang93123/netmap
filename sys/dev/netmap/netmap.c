@@ -1458,6 +1458,8 @@ netmap_bdg_to_host(struct ifnet *ifp, u_int ring_nr, int do_lock)
 {
 	(void)ring_nr;
 	(void)do_lock;
+	if (netmap_verbose > 255)
+		RD(5, "sync to host %s ring %d", ifp->if_xname, ring_nr);
 	netmap_sync_to_host(NA(ifp));
 	return 0;
 }
@@ -2710,7 +2712,8 @@ bdg_netmap_start(struct ifnet *ifp, struct mbuf *m)
 	ft->ft_buf = buf;
 	ft->ft_next = NM_FT_NULL;
 	ft->ft_frags = 1;
-	ND("pkt %p size %d to bridge", buf, len);
+	if (netmap_verbose & NM_VERB_HOST)
+		RD(5, "pkt %p size %d to bridge", buf, len);
 	nm_bdg_flush(ft, 1, na, 0);
 
 	/* release the mbuf in either cases of success or failure. As an
@@ -3369,7 +3372,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		BDG_RLOCK(b);
 	else if (!BDG_RTRYLOCK(b))
 		return 0;
-	ND("rlock acquired for %d packets", n);
+	ND(5, "rlock acquired for %d packets", n);
 	/* first pass: find a destination for each packet in the batch */
 	for (i = 0; likely(i < n); i += ft[i].ft_frags) {
 		uint8_t dst_ring = ring_nr; /* default, same ring as origin */
@@ -3379,6 +3382,8 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		ND("slot %d frags %d", i, ft[i].ft_frags);
 		dst_port = b->nm_bdg_lookup(ft[i].ft_buf, ft[i].ft_len,
 			&dst_ring, na);
+		if (netmap_verbose > 255)
+			RD(5, "slot %d port %d -> %d", i, me, dst_port);
 		if (dst_port == NM_BDG_NOPORT)
 			continue; /* this packet is identified to be dropped */
 		else if (unlikely(dst_port > NM_BDG_MAXPORTS))
@@ -3421,6 +3426,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		}
 	}
 
+	ND(5, "pass 1 done %d pkts %d dsts", n, num_dsts);
 	/* second pass: scan destinations (XXX will be modular somehow) */
 	for (i = 0; i < num_dsts; i++) {
 		struct ifnet *dst_ifp;
@@ -3467,7 +3473,8 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		needed = d->bq_len + brddst->bq_len;
 
 		is_vp = nma_is_vp(dst_na);
-		ND("dst %d is %s", i, is_vp ? "virtual" : "nic-host");
+		ND(5, "pass 2 dst %d is %x %s",
+			i, d_i, is_vp ? "virtual" : "nic/host");
 		dst_nr = d_i & (NM_BDG_MAXRINGS-1);
 		if (is_vp) { /* virtual port */
 			nrings = dst_na->num_rx_rings;
