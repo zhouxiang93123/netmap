@@ -55,7 +55,7 @@
 #ifndef DEV_NETMAP
 #define DEV_NETMAP
 
-#define NM_ATOMIC_T	volatile long
+#define NM_ATOMIC_T	volatile long unsigned int
 
 #endif /* DEV_NETMAP */
 

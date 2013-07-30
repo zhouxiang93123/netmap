@@ -192,6 +192,10 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 241723 2012-10-19 09:41:45Z gle
 #define NMG_UNLOCK()		mtx_unlock(&netmap_global_lock)
 
 
+/* atomic operations */
+#define NM_ATOMIC_TEST_AND_SET(p)	(!atomic_cmpset_int((p), 0, 1))
+#define NM_ATOMIC_CLEAR(p)		atomic_set_rel((p), 0)
+
 
 #elif defined(linux)
 
@@ -310,13 +314,12 @@ NMG_LOCK_T	netmap_global_lock;
 /* return 1 on failure */
 static __inline int nm_kr_tryget(struct netmap_kring *kr)
 {
-	// XXX return ATOMIC_TEST_AND_SET(0, &kr->nr_busy);
-	return 0;
+	return NM_ATOMIC_TEST_AND_SET(&kr->nr_busy);
 }
 
 static __inline void nm_kr_put(struct netmap_kring *kr)
 {
-	// ATOMIC_CLEAR(0, &kr->nr_busy);
+	NM_ATOMIC_CLEAR(&kr->nr_busy);
 }
 
 
