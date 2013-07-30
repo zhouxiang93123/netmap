@@ -3494,7 +3494,7 @@ retry:
 		 * XXX maybe we could be optimistic and rely on a retry
 		 * in case of failure.
 		 */
-		if (!is_vp) {
+		if (nma_is_hw(dst_na)) {
 			dst_na->nm_txsync(dst_ifp, dst_nr, 0);
 		}
 
