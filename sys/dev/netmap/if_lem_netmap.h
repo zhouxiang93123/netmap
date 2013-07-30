@@ -133,6 +133,8 @@ lem_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	 * netmap ring, l is the corresponding index in the NIC ring.
 	 */
 	j = kring->nr_hwcur;
+	if (netmap_verbose > 255)
+		RD(5, "device %s send %d->%d", ifp->if_xname, j, k);
 	if (j != k) {	/* we have new packets to send */
 		l = netmap_idx_k2n(kring, j);
 		for (n = 0; j != k; n++) {
@@ -192,6 +194,9 @@ lem_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			/* some tx completed, increment hwavail. */
 			if (delta < 0)
 				delta += kring->nkr_num_slots;
+			if (netmap_verbose > 255)
+				RD(5, "%s tx recover %d bufs",
+					ifp->if_xname, delta);
 			adapter->next_tx_to_clean = l;
 			kring->nr_hwavail += delta;
 		}
