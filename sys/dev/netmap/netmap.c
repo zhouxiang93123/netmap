@@ -966,10 +966,12 @@ nm_if_rele(struct ifnet *ifp)
 	full = 0;
 	/* remove the entry from the bridge, also check
 	 * if there are any leftover interfaces
-	 * XXX we should optimize this code, e.g. going directly
+	 * XXX we must optimize this code, as it blocks others who
+	 * want to acquire the read lock, e.g. going directly
 	 * to na->bdg_port, and having a counter of ports that
-	 * are connected. But it is not in a critical path.
+	 * are connected.
 	 * In NIC's case, index of sw na is always higher than hw na
+	 * and this lets us scan the list inline.
 	 */
 	for (i = 0; i < NM_BDG_MAXPORTS; i++) {
 		struct netmap_adapter *tmp = BDG_GET_VAR(b->bdg_ports[i]);
@@ -3347,15 +3349,26 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 	struct nm_bridge *b = na->na_bdg;
 	u_int i, me = na->bdg_port;
 
+	/*
+	 * The work area (pointed by ft) is followed by an array of
+	 * pointers to queues , dst_ents; there are NM_BDG_MAXRINGS
+	 * queues per port plus one for the broadcast traffic.
+	 * Then we have an array of destination indexes.
+	 */
 	dst_ents = (struct nm_bdg_q *)(ft + NM_BDG_BATCH_MAX);
 	dsts = (uint16_t *)(dst_ents + NM_BDG_MAXPORTS * NM_BDG_MAXRINGS + 1);
 
+	/* To protect against modifications to the bridge we acquire a
+	 * shared lock, waiting if we can sleep (if the source port is
+	 * attached to a user process) or with a trylock otherwise (NICs).
+	 */
 	ND("wait rlock for %d packets", n);
 	if (na->na_flags & NAF_BDG_MAYSLEEP)
 		BDG_RLOCK(b);
 	else if (!BDG_RTRYLOCK(b))
 		return 0;
 	ND(5, "rlock acquired for %d packets", n);
+
 	/* first pass: find a destination for each packet in the batch */
 	for (i = 0; likely(i < n); i += ft[i].ft_frags) {
 		uint8_t dst_ring = ring_nr; /* default, same ring as origin */
@@ -3394,9 +3407,12 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		d->bq_len += ft[i].ft_frags;
 	}
 
-	/* if there is a broadcast, set ring 0 of all ports to be scanned
-	 * XXX This would be optimized by recording the highest index of active
-	 * ports.
+	/*
+	 * Broadcast traffic goes to ring 0 on all destinations.
+	 * So we need to add these rings to the list of ports to scan.
+	 * XXX at the moment we scan all NM_BDG_MAXPORTS ports, which is
+	 * expensive. We should keep a compact list of active destinations
+	 * so we could shorten this loop.
 	 */
 	brddst = dst_ents + NM_BDG_BROADCAST * NM_BDG_MAXRINGS;
 	if (brddst->bq_head != NM_FT_NULL) {
