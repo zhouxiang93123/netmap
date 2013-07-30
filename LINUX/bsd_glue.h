@@ -305,4 +305,7 @@ int sysctl_handle_long(SYSCTL_HANDLER_ARGS);
 #define MALLOC_DECLARE(a)
 #define MALLOC_DEFINE(a, b, c)
 
+#define ATOMIC_TEST_AND_SET(b, f)	test_and_set_bit((b), (f))
+#define ATOMIC_CLEAR(b, f)		clear_bit((b), (f))
+
 #endif /* _BSD_GLUE_H */

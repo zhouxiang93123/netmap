@@ -176,9 +176,22 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 241723 2012-10-19 09:41:45Z gle
 #define NMG_LOCK()		mtx_lock(&netmap_global_lock)
 #define NMG_UNLOCK()		mtx_unlock(&netmap_global_lock)
 
+
+/* return 1 on failure */
+static __inline int nm_kr_tryget(struct netmap_adapter *na, u_int qnum)
+{
+	// ....
+	return 0;
+}
+
+static __inline void nm_kr_put(struct netmap_adapter *na, u_int qnum)
+{
+}
+
 #elif defined(linux)
 
 #include "bsd_glue.h"
+
 static netdev_tx_t linux_netmap_start(struct sk_buff *, struct net_device *);
 
 static struct device_driver*
@@ -285,6 +298,18 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, flags, CTLFLAG_RW, &netmap_flags, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, fwd, CTLFLAG_RW, &netmap_fwd, 0 , "");
 
 NMG_LOCK_T	netmap_global_lock;
+
+
+static __inline int nm_kr_tryget(struct netmap_kring *kr)
+{
+	return ATOMIC_TEST_AND_SET(0, &kr->nr_busy);
+}
+
+static __inline void nm_kr_put(struct netmap_kring *kr)
+{
+	ATOMIC_CLEAR(0, &kr->nr_busy);
+}
+
 
 
 /*
@@ -2064,6 +2089,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	int error;
 	u_int i, lim;
 	struct netmap_if *nifp;
+	struct netmap_kring *krings;
 
 	(void)dev;	/* UNUSED */
 	(void)fflag;	/* UNUSED */
@@ -2239,9 +2265,14 @@ unlock_out:
 			lim = (cmd == NIOCTXSYNC) ?
 			    na->num_tx_rings : na->num_rx_rings;
 
+		krings = (cmd == NIOCTXSYNC) ? na->tx_rings : na->rx_rings;
 		for (i = priv->np_qfirst; i < lim; i++) {
+			struct netmap_kring *kring = krings + i;
+			if (nm_kr_tryget(kring)) {
+				error = EBUSY;
+				goto out;
+			}
 			if (cmd == NIOCTXSYNC) {
-				struct netmap_kring *kring = &na->tx_rings[i];
 				if (netmap_verbose & NM_VERB_TXSYNC)
 					D("pre txsync ring %d cur %d hwcur %d",
 					    i, kring->ring->cur,
@@ -2255,6 +2286,7 @@ unlock_out:
 				na->nm_rxsync(ifp, i, 1 /* do lock */);
 				microtime(&na->rx_rings[i].ring->ts);
 			}
+			nm_kr_put(kring);
 		}
 
 		break;
@@ -2286,6 +2318,7 @@ unlock_out:
 		error = EOPNOTSUPP;
 #endif /* linux */
 	}
+out:
 
 	CURVNET_RESTORE();
 	return (error);
@@ -2397,26 +2430,6 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	 */
 	check_all = (priv->np_qlast == NETMAP_HW_RING) && (lim_tx > 1 || lim_rx > 1);
 
-	/*
-	 * core_lock indicates what to do with the core lock.
-	 * The core lock is used when either the card has no individual
-	 * locks, or it has individual locks but we are cheking all
-	 * rings so we need the core lock to avoid missing wakeup events.
-	 *
-	 * It has three possible states:
-	 * NO_CL	we don't need to use the core lock, e.g.
-	 *		because we are protected by individual locks.
-	 * NEED_CL	we need the core lock. In this case, when we
-	 *		call the lock routine, move to LOCKED_CL
-	 *		to remember to release the lock once done.
-	 * LOCKED_CL	core lock is set, so we need to release it.
-	 */
-	core_lock = (check_all || !na->separate_locks) ? NEED_CL : NO_CL;
-	/* the bridge uses separate locks */
-	if (na->nm_register == bdg_netmap_reg) {
-		ND("not using core lock for %s", ifp->if_xname);
-		core_lock = NO_CL;
-	}
 	if (priv->np_qlast != NETMAP_HW_RING) {
 		lim_tx = lim_rx = priv->np_qlast;
 	}
@@ -2458,17 +2471,11 @@ flush_tx:
 			 */
 			if (!want_tx && kring->ring->cur == kring->nr_hwcur)
 				continue;
-			if (core_lock == NEED_CL) {
-				na->nm_lock(ifp, NETMAP_CORE_LOCK, 0);
-				core_lock = LOCKED_CL;
+			if (nm_kr_tryget(kring)) {
+				D("ring %p busy", kring);
+				revents |= POLLER;
+				goto out;			
 			}
-			if (na->separate_locks)
-				na->nm_lock(ifp, NETMAP_TX_LOCK, i);
-			if (kring->nr_kflags & NKR_WBUSY) {
-				D("ring %p write busy", kring);
-				// XXX should unlock
-			}
-			kring->nr_kflags |= NKR_WBUSY;
 
 			if (netmap_verbose & NM_VERB_TXSYNC)
 				D("send %d on %s %d",
@@ -2485,13 +2492,15 @@ flush_tx:
 					 */
 					revents |= want_tx;
 					want_tx = 0;
-				} else if (!check_all)
+				} else if (!check_all) {
 					selrecord(td, &kring->si);
+					// TODO retry
+				}
 			}
-			kring->nr_kflags &= ~NKR_WBUSY;
-			if (na->separate_locks)
-				na->nm_lock(ifp, NETMAP_TX_UNLOCK, i);
+			nm_kr_put(kring);
 		}
+		// if we exit with want_tx != 0 and revents & POLLOUT == 0
+		// then selrecord and retry all
 	}
 
 	/*
@@ -2501,17 +2510,12 @@ flush_tx:
 	if (want_rx) {
 		for (i = priv->np_qfirst; i < lim_rx; i++) {
 			kring = &na->rx_rings[i];
-			if (core_lock == NEED_CL) {
-				na->nm_lock(ifp, NETMAP_CORE_LOCK, 0);
-				core_lock = LOCKED_CL;
+
+			if (nm_kr_tryget(kring)) {
+				revents |= POLLERR;
+				goto out;
 			}
-			if (na->separate_locks)
-				na->nm_lock(ifp, NETMAP_RX_LOCK, i);
-			if (kring->nr_kflags & NKR_RBUSY) {
-				D("ring %p read busy", kring);
-				// XXX should unlock
-			}
-			kring->nr_kflags |= NKR_RBUSY;
+
 			if (netmap_fwd ||kring->ring->flags & NR_FORWARD) {
 				ND(10, "forwarding some buffers up %d to %d",
 				    kring->nr_hwcur, kring->ring->cur);
@@ -2527,18 +2531,14 @@ flush_tx:
 
 			if (kring->ring->avail > 0)
 				revents |= want_rx;
-			else if (!check_all)
+			else if (!check_all) {
 				selrecord(td, &kring->si);
-			kring->nr_kflags &= ~NKR_RBUSY;
-			if (na->separate_locks)
-				na->nm_lock(ifp, NETMAP_RX_UNLOCK, i);
+				// retry
+			}
+			nm_kr_put(kring);
 		}
-	}
-	if (check_all && revents == 0) { /* signal on the global queue */
-		if (want_tx)
-			selrecord(td, &na->tx_si);
-		if (want_rx)
-			selrecord(td, &na->rx_si);
+		// if we exit with want_rx != 0 and revents & POLLIN == 0
+		// then selrecord and retry all
 	}
 
 	/* forward host to the netmap ring */
@@ -2549,20 +2549,16 @@ flush_tx:
 	if ( (priv->np_qlast == NETMAP_HW_RING) // XXX check_all
 			&& (netmap_fwd || kring->ring->flags & NR_FORWARD)
 			 && kring->nr_hwavail > 0 && !host_forwarded) {
-		if (core_lock == NEED_CL) {
-			na->nm_lock(ifp, NETMAP_CORE_LOCK, 0);
-			core_lock = LOCKED_CL;
-		}
 		netmap_sw_to_nic(na);
 		host_forwarded = 1; /* prevent another pass */
 		want_rx = 0;
 		goto flush_tx;
 	}
 
-	if (core_lock == LOCKED_CL)
-		na->nm_lock(ifp, NETMAP_CORE_UNLOCK, 0);
 	if (q.head)
 		netmap_send_up(na->ifp, q.head);
+
+out:
 
 	return (revents);
 }

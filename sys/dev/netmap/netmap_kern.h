@@ -43,6 +43,8 @@
 #define	MBUF_LEN(m)	((m)->m_pkthdr.len)
 #define	NM_SEND_UP(ifp, m)	((ifp)->if_input)(ifp, m)
 
+#define NM_ATOMIC_T	volatile long
+
 #elif defined (linux)
 
 #define	NM_LOCK_T	safe_spinlock_t	// see bsd_glue.h
@@ -52,6 +54,9 @@
 
 #ifndef DEV_NETMAP
 #define DEV_NETMAP
+
+#define NM_ATOMIC_T	volatile long
+
 #endif /* DEV_NETMAP */
 
 /*
@@ -161,8 +166,6 @@ struct netmap_kring {
 	uint32_t nr_hwavail;
 	uint32_t nr_kflags;	/* private driver flags */
 #define NKR_PENDINTR	0x1	// Pending interrupt.
-#define NKR_WBUSY	0x2	// write path is busy
-#define NKR_RBUSY	0x4	// read path is busy
 	uint32_t nkr_num_slots;
 	int32_t	nkr_hwofs;	/* offset between NIC and netmap ring */
 
@@ -176,6 +179,7 @@ struct netmap_kring {
 
 	NM_SELINFO_T si;	/* poll/select wait queue */
 	NM_LOCK_T q_lock;	/* protects kring and ring. */
+	NM_ATOMIC_T nr_busy;	/* prevent concurrent syscalls */
 } __attribute__((__aligned__(64)));
 
 
