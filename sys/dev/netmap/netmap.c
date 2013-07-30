@@ -1927,23 +1927,7 @@ netmap_swlock_wrapper(struct ifnet *dev, int what, u_int queueid)
 {
 	struct netmap_adapter *na = SWNA(dev);
 
-	switch (what) {
-	case NETMAP_TX_LOCK:
-		mtx_lock(&na->tx_rings[queueid].q_lock);
-		break;
-
-	case NETMAP_TX_UNLOCK:
-		mtx_unlock(&na->tx_rings[queueid].q_lock);
-		break;
-
-	case NETMAP_RX_LOCK:
-		mtx_lock(&na->rx_rings[queueid].q_lock);
-		break;
-
-	case NETMAP_RX_UNLOCK:
-		mtx_unlock(&na->rx_rings[queueid].q_lock);
-		break;
-	}
+	D("called but invalid for %d on %p", what, na);
 }
 
 
@@ -2601,21 +2585,6 @@ netmap_lock_wrapper(struct ifnet *dev, int what, u_int queueid)
 		mtx_unlock(&na->core_lock);
 		break;
 
-	case NETMAP_TX_LOCK:
-		mtx_lock(&na->tx_rings[queueid].q_lock);
-		break;
-
-	case NETMAP_TX_UNLOCK:
-		mtx_unlock(&na->tx_rings[queueid].q_lock);
-		break;
-
-	case NETMAP_RX_LOCK:
-		mtx_lock(&na->rx_rings[queueid].q_lock);
-		break;
-
-	case NETMAP_RX_UNLOCK:
-		mtx_unlock(&na->rx_rings[queueid].q_lock);
-		break;
 	}
 }
 

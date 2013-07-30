@@ -106,18 +106,6 @@ sfxge_netmap_lock_wrapper(struct ifnet *ifp, int what, u_int queueid)
 	case NETMAP_CORE_UNLOCK:
 		sx_xunlock(&sc->softc_lock);
 		break;
-	case NETMAP_TX_LOCK:
-		mtx_lock(SFXGE_TXQ_LOCK(sc->txq[queueid]));
-		break;
-	case NETMAP_TX_UNLOCK:
-		mtx_unlock(SFXGE_TXQ_LOCK(sc->txq[queueid]));
-		break;
-	case NETMAP_RX_LOCK:
-		mtx_lock(&sc->evq[queueid]->lock);
-		break;
-	case NETMAP_RX_UNLOCK:
-		mtx_unlock(&sc->evq[queueid]->lock);
-		break;
 	}
 }
 
@@ -185,8 +173,6 @@ sfxge_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 
 	if (k > lim)
 		return netmap_ring_reinit(kring);
-	if (do_lock)
-		mtx_lock(SFXGE_TXQ_LOCK(txr));
 
 //	bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
 //			BUS_DMASYNC_POSTREAD);
@@ -235,8 +221,6 @@ sfxge_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 
 			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
 ring_reset:
-				if (do_lock)
-					mtx_unlock(SFXGE_TXQ_LOCK(txr));
 
 				return netmap_ring_reinit(kring);
 			}
@@ -299,8 +283,6 @@ ring_reset:
 	/* update avail to what the kernel knows */
 	ring->avail = kring->nr_hwavail;
 
-	if (do_lock)
-		mtx_unlock(SFXGE_TXQ_LOCK(txr));
 	if (kring->nr_hwavail > lim)
 		return netmap_ring_reinit(kring);
 	return 0;

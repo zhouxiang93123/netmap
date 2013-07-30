@@ -52,18 +52,6 @@ lem_netmap_lock_wrapper(struct ifnet *ifp, int what, u_int ringid)
 	case NETMAP_CORE_UNLOCK:
 		EM_CORE_UNLOCK(adapter);
 		break;
-	case NETMAP_TX_LOCK:
-		EM_TX_LOCK(adapter);
-		break;
-	case NETMAP_TX_UNLOCK:
-		EM_TX_UNLOCK(adapter);
-		break;
-	case NETMAP_RX_LOCK:
-		EM_RX_LOCK(adapter);
-		break;
-	case NETMAP_RX_UNLOCK:
-		EM_RX_UNLOCK(adapter);
-		break;
 	}
 }
 
@@ -138,8 +126,6 @@ lem_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	if (k > lim)
 		return netmap_ring_reinit(kring);
 
-	if (do_lock)
-		EM_TX_LOCK(adapter);
 	bus_dmamap_sync(adapter->txdma.dma_tag, adapter->txdma.dma_map,
 			BUS_DMASYNC_POSTREAD);
 	/*
@@ -163,8 +149,6 @@ lem_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			u_int len = slot->len;
 
 			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
-				if (do_lock)
-					EM_TX_UNLOCK(adapter);
 				return netmap_ring_reinit(kring);
 			}
 
@@ -215,8 +199,6 @@ lem_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	/* update avail to what the kernel knows */
 	ring->avail = kring->nr_hwavail;
 
-	if (do_lock)
-		EM_TX_UNLOCK(adapter);
 	return 0;
 }
 
@@ -238,8 +220,6 @@ lem_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	if (k > lim)
 		return netmap_ring_reinit(kring);
 
-	if (do_lock)
-		EM_RX_LOCK(adapter);
 
 	/* XXX check sync modes */
 	bus_dmamap_sync(adapter->rxdma.dma_tag, adapter->rxdma.dma_map,
@@ -300,8 +280,6 @@ lem_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			void *addr = PNMB(slot, &paddr);
 
 			if (addr == netmap_buffer_base) { /* bad buf */
-				if (do_lock)
-					EM_RX_UNLOCK(adapter);
 				return netmap_ring_reinit(kring);
 			}
 
@@ -332,8 +310,6 @@ lem_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	}
 	/* tell userspace that there are new packets */
 	ring->avail = kring->nr_hwavail - resvd;
-	if (do_lock)
-		EM_RX_UNLOCK(adapter);
 	return 0;
 }
 

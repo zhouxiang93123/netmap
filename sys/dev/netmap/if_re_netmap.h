@@ -54,13 +54,6 @@ re_netmap_lock_wrapper(struct ifnet *ifp, int what, u_int queueid)
 	case NETMAP_CORE_UNLOCK:
 		RL_UNLOCK(adapter);
 		break;
-
-	case NETMAP_TX_LOCK:
-	case NETMAP_RX_LOCK:
-	case NETMAP_TX_UNLOCK:
-	case NETMAP_RX_UNLOCK:
-		D("invalid lock call %d, no tx/rx locks here", what);
-		break;
 	}
 }
 
@@ -124,9 +117,6 @@ re_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	if (k > lim)
 		return netmap_ring_reinit(kring);
 
-	if (do_lock)
-		RL_LOCK(sc);
-
 	/* Sync the TX descriptor list */
 	bus_dmamap_sync(sc->rl_ldata.rl_tx_list_tag,
             sc->rl_ldata.rl_tx_list_map,
@@ -164,8 +154,6 @@ re_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			int len = slot->len;
 
 			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
-				if (do_lock)
-					RL_UNLOCK(sc);
 				// XXX what about prodidx ?
 				return netmap_ring_reinit(kring);
 			}
@@ -200,8 +188,6 @@ re_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		/* start ? */
 		CSR_WRITE_1(sc, sc->rl_txstart, RL_TXSTART_START);
 	}
-	if (do_lock)
-		RL_UNLOCK(sc);
 	return 0;
 }
 
@@ -225,8 +211,6 @@ re_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	if (k > lim)
 		return netmap_ring_reinit(kring);
 
-	if (do_lock)
-		RL_LOCK(sc);
 	/* XXX check sync modes */
 	bus_dmamap_sync(sc->rl_ldata.rl_rx_list_tag,
 	    sc->rl_ldata.rl_rx_list_map,
@@ -291,8 +275,6 @@ re_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			void *addr = PNMB(slot, &paddr);
 
 			if (addr == netmap_buffer_base) { /* bad buf */
-				if (do_lock)
-					RL_UNLOCK(sc);
 				return netmap_ring_reinit(kring);
 			}
 
@@ -323,8 +305,6 @@ re_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	}
 	/* tell userspace that there are new packets */
 	ring->avail = kring->nr_hwavail - resvd;
-	if (do_lock)
-		RL_UNLOCK(sc);
 	return 0;
 }
 

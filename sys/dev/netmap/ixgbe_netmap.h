@@ -88,18 +88,6 @@ ixgbe_netmap_lock_wrapper(struct ifnet *_a, int what, u_int queueid)
 	case NETMAP_CORE_UNLOCK:
 		IXGBE_CORE_UNLOCK(adapter);
 		break;
-	case NETMAP_TX_LOCK:
-		IXGBE_TX_LOCK(&adapter->tx_rings[queueid]);
-		break;
-	case NETMAP_TX_UNLOCK:
-		IXGBE_TX_UNLOCK(&adapter->tx_rings[queueid]);
-		break;
-	case NETMAP_RX_LOCK:
-		IXGBE_RX_LOCK(&adapter->rx_rings[queueid]);
-		break;
-	case NETMAP_RX_UNLOCK:
-		IXGBE_RX_UNLOCK(&adapter->rx_rings[queueid]);
-		break;
 	}
 }
 
@@ -237,8 +225,6 @@ ixgbe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 
 	if (k > lim)
 		return netmap_ring_reinit(kring);
-	if (do_lock)
-		IXGBE_TX_LOCK(txr);
 
 	bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
 			BUS_DMASYNC_POSTREAD);
@@ -303,8 +289,6 @@ ixgbe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			 */
 			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
 ring_reset:
-				if (do_lock)
-					IXGBE_TX_UNLOCK(txr);
 				return netmap_ring_reinit(kring);
 			}
 
@@ -422,8 +406,6 @@ ring_reset:
 	/* update avail to what the kernel knows */
 	ring->avail = kring->nr_hwavail;
 
-	if (do_lock)
-		IXGBE_TX_UNLOCK(txr);
 	return 0;
 }
 
@@ -459,8 +441,6 @@ ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	if (k > lim)
 		return netmap_ring_reinit(kring);
 
-	if (do_lock)
-		IXGBE_RX_LOCK(rxr);
 	/* XXX check sync modes */
 	bus_dmamap_sync(rxr->rxdma.dma_tag, rxr->rxdma.dma_map,
 			BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
@@ -571,13 +551,9 @@ ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	/* tell userspace that there are new packets */
 	ring->avail = kring->nr_hwavail - resvd;
 
-	if (do_lock)
-		IXGBE_RX_UNLOCK(rxr);
 	return 0;
 
 ring_reset:
-	if (do_lock)
-		IXGBE_RX_UNLOCK(rxr);
 	return netmap_ring_reinit(kring);
 }
 

@@ -48,6 +48,7 @@ em_netmap_lock_wrapper(struct ifnet *ifp, int what, u_int queueid)
 {
 	struct adapter *adapter = ifp->if_softc;
 
+	D("called for %d", what);
 	ASSERT(queueid < adapter->num_queues);
 	switch (what) {
 	case NETMAP_CORE_LOCK:
@@ -55,18 +56,6 @@ em_netmap_lock_wrapper(struct ifnet *ifp, int what, u_int queueid)
 		break;
 	case NETMAP_CORE_UNLOCK:
 		EM_CORE_UNLOCK(adapter);
-		break;
-	case NETMAP_TX_LOCK:
-		EM_TX_LOCK(&adapter->tx_rings[queueid]);
-		break;
-	case NETMAP_TX_UNLOCK:
-		EM_TX_UNLOCK(&adapter->tx_rings[queueid]);
-		break;
-	case NETMAP_RX_LOCK:
-		EM_RX_LOCK(&adapter->rx_rings[queueid]);
-		break;
-	case NETMAP_RX_UNLOCK:
-		EM_RX_UNLOCK(&adapter->rx_rings[queueid]);
 		break;
 	}
 }
@@ -176,8 +165,6 @@ em_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	if (k > lim)
 		return netmap_ring_reinit(kring);
 
-	if (do_lock)
-		EM_TX_LOCK(txr);
 	bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
 			BUS_DMASYNC_POSTREAD);
 
@@ -202,8 +189,6 @@ em_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			u_int len = slot->len;
 
 			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
-				if (do_lock)
-					EM_TX_UNLOCK(txr);
 				return netmap_ring_reinit(kring);
 			}
 
@@ -252,8 +237,6 @@ em_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	/* update avail to what the kernel knows */
 	ring->avail = kring->nr_hwavail;
 
-	if (do_lock)
-		EM_TX_UNLOCK(txr);
 	return 0;
 }
 
@@ -276,9 +259,6 @@ em_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	k = ring->cur;
 	if (k > lim)
 		return netmap_ring_reinit(kring);
-
-	if (do_lock)
-		EM_RX_LOCK(rxr);
 
 	/* XXX check sync modes */
 	bus_dmamap_sync(rxr->rxdma.dma_tag, rxr->rxdma.dma_map,
@@ -334,8 +314,6 @@ em_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			void *addr = PNMB(slot, &paddr);
 
 			if (addr == netmap_buffer_base) { /* bad buf */
-				if (do_lock)
-					EM_RX_UNLOCK(rxr);
 				return netmap_ring_reinit(kring);
 			}
 
@@ -364,8 +342,6 @@ em_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	}
 	/* tell userspace that there are new packets */
 	ring->avail = kring->nr_hwavail - resvd;
-	if (do_lock)
-		EM_RX_UNLOCK(rxr);
 	return 0;
 }
 

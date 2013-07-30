@@ -26,19 +26,13 @@ bge_netmap_lock_wrapper(void *_a, int what, u_int queueid)
 {
 	struct bge_softc *adapter = _a;
 
+	D("called for %d", what);
 	switch (what) {
 	case NETMAP_CORE_LOCK:
 		BGE_LOCK(adapter);
 		break;
 	case NETMAP_CORE_UNLOCK:
 		BGE_UNLOCK(adapter);
-		break;
-
-	case NETMAP_TX_LOCK:
-	case NETMAP_RX_LOCK:
-	case NETMAP_TX_UNLOCK:
-	case NETMAP_RX_UNLOCK:
-		D("invalid lock call %d, no tx/rx locks here", what);
 		break;
 	}
 }
