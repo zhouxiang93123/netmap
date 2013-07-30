@@ -688,6 +688,7 @@ netmap_mem_private_delete(struct netmap_mem_d *nmd)
 		return;
 	D("deleting %p", nmd);
 	netmap_mem_reset_all(nmd);
+	D("done deleting %p", nmd);
 	NMA_LOCK_DESTROY(nmd);
 	free(nmd, M_DEVBUF);
 }
