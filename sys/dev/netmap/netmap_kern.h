@@ -52,11 +52,10 @@
 #define	MBUF_LEN(m)	((m)->len)
 #define	NM_SEND_UP(ifp, m)	netif_rx(m)
 
-#ifndef DEV_NETMAP
-#define DEV_NETMAP
-
 #define NM_ATOMIC_T	volatile long unsigned int
 
+#ifndef DEV_NETMAP
+#define DEV_NETMAP
 #endif /* DEV_NETMAP */
 
 /*
@@ -419,8 +418,6 @@ struct netmap_adapter {
 enum {
 	NETMAP_NO_LOCK = 0,
 	NETMAP_CORE_LOCK, NETMAP_CORE_UNLOCK,
-//	NETMAP_TX_LOCK, NETMAP_TX_UNLOCK,
-//	NETMAP_RX_LOCK, NETMAP_RX_UNLOCK,
 #ifdef __FreeBSD__
 #define	NETMAP_REG_LOCK		NETMAP_CORE_LOCK
 #define	NETMAP_REG_UNLOCK	NETMAP_CORE_UNLOCK
