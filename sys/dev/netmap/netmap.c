@@ -193,8 +193,9 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 241723 2012-10-19 09:41:45Z gle
 
 
 /* atomic operations */
-#define NM_ATOMIC_TEST_AND_SET(p)	(!atomic_cmpset_int((p), 0, 1))
-#define NM_ATOMIC_CLEAR(p)		atomic_set_rel((p), 0)
+#include <machine/atomic.h>
+#define NM_ATOMIC_TEST_AND_SET(p)	(!atomic_cmpset_acq_int((p), 0, 1))
+#define NM_ATOMIC_CLEAR(p)		atomic_store_rel_int((p), 0)
 
 
 #elif defined(linux)
@@ -2477,7 +2478,7 @@ flush_tx:
 				continue;
 			/* make sure only one user thread is doing this */
 			if (nm_kr_tryget(kring)) {
-				D("ring %p busy", kring);
+				D("ring %p busy is %d", kring, kring->nr_busy);
 				revents |= POLLERR;
 				goto out;
 			}

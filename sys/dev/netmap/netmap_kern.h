@@ -43,7 +43,7 @@
 #define	MBUF_LEN(m)	((m)->m_pkthdr.len)
 #define	NM_SEND_UP(ifp, m)	((ifp)->if_input)(ifp, m)
 
-#define NM_ATOMIC_T	volatile long
+#define NM_ATOMIC_T	volatile int
 
 #elif defined (linux)
 
