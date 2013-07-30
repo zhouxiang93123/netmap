@@ -2356,7 +2356,6 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	u_int i, check_all, want_tx, want_rx, revents = 0;
 	u_int lim_tx, lim_rx, host_forwarded = 0;
 	struct mbq q = { NULL, NULL, 0 };
-	enum {NO_CL, NEED_CL, LOCKED_CL }; /* see below */
 	void *pwait = dev;	/* linux compatibility */
 
 	(void)pwait;
@@ -2526,7 +2525,7 @@ flush_tx:
 				netmap_grab_packets(kring, &q, netmap_fwd);
 			}
 
-			if (na->nm_rxsync(ifp, i, 0 /* no lock */))
+			if (na->nm_rxsync(ifp, i, 0))
 				revents |= POLLERR;
 			if (netmap_no_timestamp == 0 ||
 					kring->ring->flags & NR_TIMESTAMP) {
@@ -3694,7 +3693,9 @@ done:
 
 /*
  * user process reading from a VALE switch.
- * Already protected against concurrent calls
+ * Already protected against concurrent calls from userspace,
+ * but we must acquire the queue's lock to protect against
+ * writers on the same queue.
  */
 static int
 bdg_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
@@ -3706,8 +3707,12 @@ bdg_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	u_int k = ring->cur, resvd = ring->reserved;
 	int n;
 
-	if (k > lim)
-		return netmap_ring_reinit(kring);
+	mtx_lock(&kring->q_lock);
+	if (k > lim) {
+		D("ouch dangerous reset!!!");
+		n = netmap_ring_reinit(kring);
+		goto done;
+	}
 
 	/* skip past packets that userspace has released */
 	j = kring->nr_hwcur;    /* netmap ring index */
@@ -3729,10 +3734,9 @@ bdg_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
                         void *addr = BDG_NMB(na->nm_mem, slot);
 
                         if (addr == netmap_buffer_base) { /* bad buf */
-                                return netmap_ring_reinit(kring);
+				D("bad buffer index %d, ignore ?",
+					slot->buf_idx);
                         }
-			/* decrease refcount for buffer */
-
 			slot->flags &= ~NS_BUF_CHANGED;
                         j = nm_next(j, lim);
                 }
@@ -3741,7 +3745,10 @@ bdg_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
         }
         /* tell userspace that there are new packets */
         ring->avail = kring->nr_hwavail - resvd;
-	return 0;
+	n = 0;
+done:
+	mtx_unlock(&kring->q_lock);
+	return n;
 }
 
 
