@@ -2521,7 +2521,7 @@ flush_tx:
 	 * Do it on all rings because otherwise we starve.
 	 */
 	if (want_rx) {
-		int retry_rx;
+		int retry_rx = 1;
 do_retry_rx:
 		for (i = priv->np_qfirst; i < lim_rx; i++) {
 			kring = &na->rx_rings[i];
