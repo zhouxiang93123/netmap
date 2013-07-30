@@ -917,7 +917,7 @@ netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
 	ssize_t base; /* handy for relative offsets between rings and nifp */
 	u_int i, len, ndesc, ntx, nrx;
 	struct netmap_kring *kring;
-	uint32_t *nkr_leases = NULL;
+	uint32_t *tx_leases = NULL, *rx_leases = NULL;
 
 	/*
 	 * verify whether virtual port need the stack ring
@@ -950,19 +950,30 @@ netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
 	}
 
 	len = (ntx + nrx) * sizeof(struct netmap_kring);
+	D("VP %s allocate leases for %d rings %d slots",
+		ifname, na->num_rx_rings, na->num_rx_desc);
+	/*
+	 * Leases are attached to TX rings on NIC/host ports,
+	 * and to RX rings on VALE ports.
+	 */
 	if (nma_is_vp(na)) {
-		D("VP %s allocate leases for %d rings %d slots",
-			ifname, na->num_rx_rings, na->num_rx_desc);
 		len += sizeof(uint32_t) * na->num_rx_desc * na->num_rx_rings;
+	} else {
+		len += sizeof(uint32_t) * na->num_tx_desc * ntx;
 	}
+
 	na->tx_rings = malloc((size_t)len, M_DEVBUF, M_NOWAIT | M_ZERO);
 	if (na->tx_rings == NULL) {
 		D("Cannot allocate krings for %s", ifname);
 		goto cleanup;
 	}
 	na->rx_rings = na->tx_rings + ntx;
-	if (nma_is_vp(na))
-		nkr_leases = (uint32_t *)(na->rx_rings + nrx);
+
+	if (nma_is_vp(na)) {
+		rx_leases = (uint32_t *)(na->rx_rings + nrx);
+	} else {
+		tx_leases = (uint32_t *)(na->rx_rings + nrx);
+	}
 
 	/*
 	 * First instance, allocate netmap rings and buffers for this card
@@ -982,6 +993,10 @@ netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
 		ND("txring[%d] at %p ofs %d", i, ring);
 		kring->na = na;
 		kring->ring = ring;
+		if (tx_leases) {
+			kring->nkr_leases = tx_leases;
+			tx_leases += ndesc;
+		}
 		*(uint32_t *)(uintptr_t)&ring->num_slots = kring->nkr_num_slots = ndesc;
 		*(ssize_t *)(uintptr_t)&ring->buf_ofs =
 		    (na->nm_mem->pools[NETMAP_IF_POOL]._memtotal +
@@ -1020,9 +1035,9 @@ netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
 
 		kring->na = na;
 		kring->ring = ring;
-		if (nkr_leases && i < na->num_rx_rings) {
-			kring->nkr_leases = nkr_leases;
-			nkr_leases += ndesc;
+		if (rx_leases && i < na->num_rx_rings) {
+			kring->nkr_leases = rx_leases;
+			rx_leases += ndesc;
 		}
 		*(uint32_t *)(uintptr_t)&ring->num_slots = kring->nkr_num_slots = ndesc;
 		*(ssize_t *)(uintptr_t)&ring->buf_ofs =
