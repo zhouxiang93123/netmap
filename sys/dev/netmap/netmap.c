@@ -196,16 +196,6 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 241723 2012-10-19 09:41:45Z gle
 #define NMG_UNLOCK()		mtx_unlock(&netmap_global_lock)
 
 
-/* return 1 on failure */
-static __inline int nm_kr_tryget(struct netmap_adapter *na, u_int qnum)
-{
-	// ....
-	return 0;
-}
-
-static __inline void nm_kr_put(struct netmap_adapter *na, u_int qnum)
-{
-}
 
 #elif defined(linux)
 
@@ -318,15 +308,19 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, fwd, CTLFLAG_RW, &netmap_fwd, 0 , "");
 
 NMG_LOCK_T	netmap_global_lock;
 
-
+/*
+ * protect against multiple threads using the same ring
+ */
+/* return 1 on failure */
 static __inline int nm_kr_tryget(struct netmap_kring *kr)
 {
-	return ATOMIC_TEST_AND_SET(0, &kr->nr_busy);
+	// XXX return ATOMIC_TEST_AND_SET(0, &kr->nr_busy);
+	return 0;
 }
 
 static __inline void nm_kr_put(struct netmap_kring *kr)
 {
-	ATOMIC_CLEAR(0, &kr->nr_busy);
+	// ATOMIC_CLEAR(0, &kr->nr_busy);
 }
 
 
@@ -1429,12 +1423,17 @@ netmap_sync_to_host(struct netmap_adapter *na)
 	u_int k, lim = kring->nkr_num_slots - 1;
 	struct mbq q = { NULL, NULL, 0 };
 
-	k = ring->cur;
-	if (k > lim) {
-		netmap_ring_reinit(kring);
+	if (nm_kr_tryget(kring)) {
+		D("ring %p busy (user error)", kring);
 		return;
 	}
-	// na->nm_lock(na->ifp, NETMAP_CORE_LOCK, 0);
+	k = ring->cur;
+	if (k > lim) {
+		D("invalid ring index in stack TX kring %p", kring);
+		netmap_ring_reinit(kring);
+		nm_kr_put(kring);
+		return;
+	}
 
 	/* Take packets from hwcur to cur and pass them up.
 	 * In case of no buffers we give up. At the end of the loop,
@@ -1443,8 +1442,8 @@ netmap_sync_to_host(struct netmap_adapter *na)
 	netmap_grab_packets(kring, &q, 1);
 	kring->nr_hwcur = k;
 	kring->nr_hwavail = ring->avail = lim;
-	// na->nm_lock(na->ifp, NETMAP_CORE_UNLOCK, 0);
 
+	nm_kr_put(kring);
 	netmap_send_up(na->ifp, q.head);
 }
 
@@ -1484,9 +1483,11 @@ netmap_sync_from_host(struct netmap_adapter *na, struct thread *td, void *pwait)
 	u_int k = ring->cur, resvd = ring->reserved;
 
 	(void)pwait;	/* disable unused warnings */
-	na->nm_lock(na->ifp, NETMAP_CORE_LOCK, 0);
+
+	mtx_lock(&kring->q_lock);
 	if (k >= lim) {
 		netmap_ring_reinit(kring);
+		mtx_unlock(&kring->q_lock);
 		return;
 	}
 	/* new packets are already set in nr_hwavail */
@@ -1509,7 +1510,7 @@ netmap_sync_from_host(struct netmap_adapter *na, struct thread *td, void *pwait)
 		selrecord(td, &kring->si);
 	if (k && (netmap_verbose & NM_VERB_HOST))
 		D("%d pkts from stack", k);
-	na->nm_lock(na->ifp, NETMAP_CORE_UNLOCK, 0);
+	mtx_unlock(&kring->q_lock);
 }
 
 
@@ -1699,6 +1700,7 @@ netmap_ring_reinit(struct netmap_kring *kring)
 	u_int i, lim = kring->nkr_num_slots - 1;
 	int errors = 0;
 
+	// XXX KASSERT nm_kr_tryget
 	RD(10, "called for %s", kring->na->ifp->if_xname);
 	if (ring->cur > lim)
 		errors++;
@@ -2365,7 +2367,7 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	struct netmap_adapter *na;
 	struct ifnet *ifp;
 	struct netmap_kring *kring;
-	u_int core_lock, i, check_all, want_tx, want_rx, revents = 0;
+	u_int i, check_all, want_tx, want_rx, revents = 0;
 	u_int lim_tx, lim_rx, host_forwarded = 0;
 	struct mbq q = { NULL, NULL, 0 };
 	enum {NO_CL, NEED_CL, LOCKED_CL }; /* see below */
@@ -2431,16 +2433,8 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	 * the client is polling all of them. If true, we sleep on
 	 * the "global" selinfo, otherwise we sleep on individual selinfo
 	 * (FreeBSD only allows two selinfo's per file descriptor).
-	 * The interrupt routine in the driver should always wake on
-	 * the individual selinfo, and also on the global one if the card
-	 * has more than one ring.
-	 *
-	 * If the card has only one lock, we just use that.
-	 * If the card has separate ring locks, we just use those
-	 * unless we are doing check_all, in which case the whole
-	 * loop is wrapped by the global lock.
-	 * We acquire locks only when necessary: if poll is called
-	 * when buffers are available, we can just return without locks.
+	 * The interrupt routine in the driver wake one or the other
+	 * (or both) depending on which clients are active.
 	 *
 	 * rxsync() is only called if we run out of buffers on a POLLIN.
 	 * txsync() is called if we run out of buffers on POLLOUT, or
@@ -2479,27 +2473,35 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	 * to avoid that the tx rings stall).
 	 */
 	if (priv->np_txpoll || want_tx) {
+		/* If we really want to be woken up (want_tx),
+		 * do a selrecord, either on the global or on
+		 * the private structure.  Then issue the txsync
+		 * so there is no race in the selrecord/selwait
+		 */
+		if (want_tx)
+			selrecord(td, check_all ?
+			    &na->tx_si : &na->tx_rings[priv->np_qfirst].si);
 flush_tx:
 		for (i = priv->np_qfirst; i < lim_tx; i++) {
 			kring = &na->tx_rings[i];
 			/*
-			 * Skip the current ring if want_tx == 0
+			 * Skip this ring if want_tx == 0
 			 * (we have already done a successful sync on
 			 * a previous ring) AND kring->cur == kring->hwcur
 			 * (there are no pending transmissions for this ring).
 			 */
 			if (!want_tx && kring->ring->cur == kring->nr_hwcur)
 				continue;
+			/* make sure only one user thread is doing this */
 			if (nm_kr_tryget(kring)) {
 				D("ring %p busy", kring);
-				revents |= POLLER;
-				goto out;			
+				revents |= POLLERR;
+				goto out;
 			}
 
 			if (netmap_verbose & NM_VERB_TXSYNC)
 				D("send %d on %s %d",
-					kring->ring->cur,
-					ifp->if_xname, i);
+					kring->ring->cur, ifp->if_xname, i);
 			if (na->nm_txsync(ifp, i, 0 /* no lock */))
 				revents |= POLLERR;
 
@@ -2511,15 +2513,10 @@ flush_tx:
 					 */
 					revents |= want_tx;
 					want_tx = 0;
-				} else if (!check_all) {
-					selrecord(td, &kring->si);
-					// TODO retry
 				}
 			}
 			nm_kr_put(kring);
 		}
-		// if we exit with want_tx != 0 and revents & POLLOUT == 0
-		// then selrecord and retry all
 	}
 
 	/*
@@ -2527,6 +2524,8 @@ flush_tx:
 	 * Do it on all rings because otherwise we starve.
 	 */
 	if (want_rx) {
+		selrecord(td, check_all ?
+			    &na->rx_si : &na->rx_rings[priv->np_qfirst].si);
 		for (i = priv->np_qfirst; i < lim_rx; i++) {
 			kring = &na->rx_rings[i];
 
@@ -2550,14 +2549,8 @@ flush_tx:
 
 			if (kring->ring->avail > 0)
 				revents |= want_rx;
-			else if (!check_all) {
-				selrecord(td, &kring->si);
-				// retry
-			}
 			nm_kr_put(kring);
 		}
-		// if we exit with want_rx != 0 and revents & POLLIN == 0
-		// then selrecord and retry all
 	}
 
 	/* forward host to the netmap ring */
@@ -2788,8 +2781,8 @@ netmap_start(struct ifnet *ifp, struct mbuf *m)
 	if (na->na_bdg)
 		return bdg_netmap_start(ifp, m);
 
-	/* XXX should use a separate lock for the host ring */
-	na->nm_lock(ifp, NETMAP_CORE_LOCK, 0);
+	/* possibly we don't need lock/unlock on linux */
+	mtx_lock(&kring->q_lock);
 	if (kring->nr_hwavail >= lim) {
 		if (netmap_verbose)
 			D("stack ring %s full\n", ifp->if_xname);
@@ -2808,7 +2801,7 @@ netmap_start(struct ifnet *ifp, struct mbuf *m)
 	selwakeuppri(&kring->si, PI_NET);
 	error = 0;
 done:
-	na->nm_lock(ifp, NETMAP_CORE_UNLOCK, 0);
+	mtx_unlock(&kring->q_lock);
 
 	/* release the mbuf in either cases of success or failure. As an
 	 * alternative, put the mbuf in a free list and free the list
@@ -2964,14 +2957,8 @@ netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
 	/* make sure that only one thread is ever in here,
 	 * after which we can unlock.
 	 */
-	if (kring->nr_kflags & NKR_RBUSY)
+	if (nm_kr_tryget(kring))
 		return;
-	kring->nr_kflags |= NKR_RBUSY;
-	if (na->separate_locks)
-		na->nm_lock(ifp, NETMAP_RX_UNLOCK, ring_nr);
-	else
-		na->nm_lock(ifp, NETMAP_CORE_UNLOCK, 0);
-	
 	/* fetch packets that have arrived.
 	 * XXX maybe do this in a loop ?
 	 */
@@ -2979,7 +2966,8 @@ netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
 	if (kring->nr_hwavail == 0 && netmap_verbose) {
 		D("how strange, interrupt with no packets on %s",
 			ifp->if_xname);
-		goto done;
+		nm_kr_put(kring);
+		return;
 	}
 	k = nm_kr_rxpos(kring);
 
@@ -2993,15 +2981,7 @@ netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
 	ring->avail = 0;
 	na->nm_rxsync(ifp, ring_nr, 0);
 
-done:
-	/* restore the lock and enable running here again */
-	D("restore lock and clear RBUSY");
-	if (na->separate_locks)
-		na->nm_lock(ifp, NETMAP_RX_LOCK, ring_nr);
-	else
-		na->nm_lock(ifp, NETMAP_CORE_LOCK, 0);
-	kring->nr_kflags &= ~NKR_RBUSY;
-	return;
+	nm_kr_put(kring);
 }
 
 
@@ -3161,6 +3141,9 @@ linux_netmap_mmap(struct file *f, struct vm_area_struct *vma)
 }
 
 
+/*
+ * This one is probably already protected by the netif lock XXX
+ */
 static netdev_tx_t
 linux_netmap_start(struct sk_buff *skb, struct net_device *dev)
 {
@@ -3693,8 +3676,8 @@ retry:
 
 /*
  * main dispatch routine for the bridge.
- * Locking is somewhat special here, as we must run
- * nm_bdg_preflush without lock.
+ * We already know that only one thread is running this.
+ * we must run nm_bdg_preflush without lock.
  */
 static int
 bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
@@ -3707,23 +3690,6 @@ bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	k = ring->cur;
 	if (k > lim)
 		return netmap_ring_reinit(kring);
-	if (do_lock) {
-		/* we were unlocked on entry, so lock and
-		 * verify the flags
-		 */
-		na->nm_lock(ifp, NETMAP_TX_LOCK, ring_nr);
-		if (kring->nr_kflags & NKR_WBUSY) {
-			D("ring %p write busy", kring);
-			// XXX should unlock
-		}
-		kring->nr_kflags |= NKR_WBUSY;
-	} else {
-		/* we were already locked, NKR_WBUSY should be set */
-		if (0 == (kring->nr_kflags & NKR_WBUSY)) {
-			D("called without do_lock but NKR_WBUSY unset");
-		}
-	}
-	na->nm_lock(ifp, NETMAP_TX_UNLOCK, ring_nr);
 
 	if (bridge_batch <= 0) { /* testing only */
 		j = k; // used all
@@ -3743,19 +3709,17 @@ bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 done:
 	kring->nr_hwcur = j;
 	ring->avail = kring->nr_hwavail;
-	if (do_lock) {
-		/* we are already unlocked */
-		kring->nr_kflags &= ~NKR_WBUSY;
-	} else {
-		/* grab the lock, the cleaning will be done later */
-		na->nm_lock(ifp, NETMAP_TX_LOCK, ring_nr);
-	}
 	if (netmap_verbose)
 		D("%s ring %d lock %d", ifp->if_xname, ring_nr, do_lock);
+	nm_kr_put(kring);
 	return 0;
 }
 
 
+/*
+ * user process reading from a VALE switch.
+ * Already protected against concurrent calls
+ */
 static int
 bdg_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 {
@@ -3766,13 +3730,8 @@ bdg_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	u_int k = ring->cur, resvd = ring->reserved;
 	int n;
 
-	ND("%s ring %d lock %d avail %d",
-		ifp->if_xname, ring_nr, do_lock, kring->nr_hwavail);
-
 	if (k > lim)
 		return netmap_ring_reinit(kring);
-	if (do_lock)
-		na->nm_lock(ifp, NETMAP_RX_LOCK, ring_nr);
 
 	/* skip past packets that userspace has released */
 	j = kring->nr_hwcur;    /* netmap ring index */
@@ -3794,8 +3753,6 @@ bdg_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
                         void *addr = BDG_NMB(na->nm_mem, slot);
 
                         if (addr == netmap_buffer_base) { /* bad buf */
-                                if (do_lock)
-                                        na->nm_lock(ifp, NETMAP_RX_UNLOCK, ring_nr);
                                 return netmap_ring_reinit(kring);
                         }
 			/* decrease refcount for buffer */
@@ -3808,9 +3765,6 @@ bdg_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
         }
         /* tell userspace that there are new packets */
         ring->avail = kring->nr_hwavail - resvd;
-
-	if (do_lock)
-		na->nm_lock(ifp, NETMAP_RX_UNLOCK, ring_nr);
 	return 0;
 }
 
