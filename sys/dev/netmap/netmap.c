@@ -73,9 +73,16 @@ invalid usage.
 
 Within the kernel, each NIC operating in netmap mode is protected
 using the following locks:
-- an exclusive lock on each ring:
-  The code guarantees that there is at most one instance of *_*xsync()
-  active on the ring at any time. For rings connected to user file
+- a spinlock on each ring, to handle producer/consumer races on:
+  RX rings attached to the host stack (against multiple host
+  threads writing to the same ring);
+  the RX ring in VALE ports, and TX rings in NIC/host ports
+  attached to a VALE switch
+  (multiple active senders for the same destination)
+
+- an atomic variable to guarantees that there is at most one
+  instance of *_*xsync() on the ring at any time.
+  For rings connected to user file
   descriptors, an atomic_test_and_set() protects this, and the
   lock on the ring is not actually used.
   For NIC RX rings connected to a VALE switch, an atomic_test_and_set()
@@ -2358,6 +2365,8 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	struct mbq q = { NULL, NULL, 0 };
 	void *pwait = dev;	/* linux compatibility */
 
+		int retry_tx = 1;
+
 	(void)pwait;
 
 	if (devfs_get_cdevpriv((void **)&priv) != 0 || priv == NULL)
@@ -2463,9 +2472,6 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 		 * the private structure.  Then issue the txsync
 		 * so there is no race in the selrecord/selwait
 		 */
-		if (want_tx)
-			selrecord(td, check_all ?
-			    &na->tx_si : &na->tx_rings[priv->np_qfirst].si);
 flush_tx:
 		for (i = priv->np_qfirst; i < lim_tx; i++) {
 			kring = &na->tx_rings[i];
@@ -2487,7 +2493,7 @@ flush_tx:
 			if (netmap_verbose & NM_VERB_TXSYNC)
 				D("send %d on %s %d",
 					kring->ring->cur, ifp->if_xname, i);
-			if (na->nm_txsync(ifp, i, 0 /* no lock */))
+			if (na->nm_txsync(ifp, i, 0))
 				revents |= POLLERR;
 
 			/* Check avail/call selrecord only if called with POLLOUT */
@@ -2502,6 +2508,12 @@ flush_tx:
 			}
 			nm_kr_put(kring);
 		}
+		if (want_tx && retry_tx) {
+			selrecord(td, check_all ?
+			    &na->tx_si : &na->tx_rings[priv->np_qfirst].si);
+			retry_tx = 0;
+			goto flush_tx;
+		}
 	}
 
 	/*
@@ -2509,8 +2521,8 @@ flush_tx:
 	 * Do it on all rings because otherwise we starve.
 	 */
 	if (want_rx) {
-		selrecord(td, check_all ?
-			    &na->rx_si : &na->rx_rings[priv->np_qfirst].si);
+		int retry_rx;
+do_retry_rx:
 		for (i = priv->np_qfirst; i < lim_rx; i++) {
 			kring = &na->rx_rings[i];
 
@@ -2532,9 +2544,17 @@ flush_tx:
 				microtime(&kring->ring->ts);
 			}
 
-			if (kring->ring->avail > 0)
+			if (kring->ring->avail > 0) {
 				revents |= want_rx;
+				retry_rx = 0;
+			}
 			nm_kr_put(kring);
+		}
+		if (retry_rx) {
+			retry_rx = 0;
+			selrecord(td, check_all ?
+			    &na->rx_si : &na->rx_rings[priv->np_qfirst].si);
+			goto do_retry_rx;
 		}
 	}
 
