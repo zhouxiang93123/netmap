@@ -161,6 +161,7 @@ struct netmap_slot {
 				 * on receive rings, the high 8 bits are the number of fragments.
 				 */
 #define	NS_RFRAGS(_slot)	( ((_slot)->flags >> 8) & 0xff)
+	uint64_t	ptr;	/* pointer for indirect buffers */
 };
 
 /*

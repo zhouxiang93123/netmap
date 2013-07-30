@@ -2869,7 +2869,7 @@ nm_bdg_preflush(struct netmap_adapter *na, u_int ring_nr,
 
 	for (; likely(j != end); j = nm_next(j, lim)) {
 		struct netmap_slot *slot = &ring->slot[j];
-		char *buf = BDG_NMB(na->nm_mem, slot);
+		char *buf;
 
 		ft[ft_i].ft_len = slot->len;
 		ft[ft_i].ft_flags = slot->flags;
@@ -2878,7 +2878,7 @@ nm_bdg_preflush(struct netmap_adapter *na, u_int ring_nr,
 		/* this slot goes into a list so initialize the link field */
 		ft[ft_i].ft_next = NM_FT_NULL;
 		buf = ft[ft_i].ft_buf = (slot->flags & NS_INDIRECT) ?
-			*((void **)buf) : buf;
+			(void *)slot->ptr : BDG_NMB(na->nm_mem, slot);
 		prefetch(buf);
 		++ft_i;
 		if (slot->flags & NS_MOREFRAG) {

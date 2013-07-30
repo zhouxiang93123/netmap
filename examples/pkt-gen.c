@@ -544,7 +544,7 @@ send_packets(struct netmap_ring *ring, struct pkt *pkt,
 			dump_payload(p, size, ring, cur);
 		if (options & OPT_INDIRECT) {
 			slot->flags |= NS_INDIRECT;
-			*((struct pkt **)(void *)p) = pkt;
+			slot->ptr = (uint64_t)pkt;
 		} else if (options & OPT_COPY)
 			pkt_copy(pkt, p, size);
 		else if (options & OPT_MEMCPY)
