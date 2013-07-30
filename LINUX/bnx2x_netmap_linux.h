@@ -675,8 +675,6 @@ bnx2x_netmap_attach(struct SOFTC_T *adapter)
 	bzero(&na, sizeof(na));
 
 	na.ifp = dev;
-	na.separate_locks = 0; // XXX experimental
-	/* this card has separate rx/tx locks */
 	/* The ring size is the number of tx bd, but since we use 2 per
 	 * packet, make the tx ring shorter.
 	 * Let's see what to do with the 

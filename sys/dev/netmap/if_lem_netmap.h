@@ -327,7 +327,6 @@ lem_netmap_attach(struct adapter *adapter)
 	bzero(&na, sizeof(na));
 
 	na.ifp = adapter->ifp;
-	na.separate_locks = 1;
 	na.na_flags = NAF_BDG_MAYSLEEP;
 	na.num_tx_desc = adapter->num_tx_desc;
 	na.num_rx_desc = adapter->num_rx_desc;

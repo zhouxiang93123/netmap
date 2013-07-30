@@ -417,7 +417,6 @@ nfe_netmap_attach(struct nfe_softc *sc)
 	bzero(&na, sizeof(na));
 
 	na.ifp = sc->nfe_ifp;
-	na.separate_locks = 0;
 	na.na_flags = NAF_BDG_MAYSLEEP;
 	na.num_tx_desc = NFE_TX_RING_COUNT;
 	na.num_rx_desc = NFE_RX_RING_COUNT;

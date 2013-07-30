@@ -333,7 +333,6 @@ re_netmap_attach(struct SOFTC_T *sc)
 	bzero(&na, sizeof(na));
 
 	na.ifp = sc->dev;
-	na.separate_locks = 0;
 	na.num_tx_desc = NUM_TX_DESC;
 	na.num_rx_desc = NUM_RX_DESC;
 	na.nm_txsync = re_netmap_txsync;

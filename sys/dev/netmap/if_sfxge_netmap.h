@@ -450,7 +450,6 @@ sfxge_netmap_attach(struct sfxge_softc *sc)
 	bzero(&na, sizeof(na));
 
 	na.ifp = sc->ifnet;
-	na.separate_locks = 1;	/* this card has separate rx/tx locks */
 	na.na_flags = NAF_BDG_MAYSLEEP;
 	na.num_tx_desc = SFXGE_NDESCS;
 	na.num_rx_desc = SFXGE_NDESCS;

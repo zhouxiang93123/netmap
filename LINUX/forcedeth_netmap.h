@@ -381,7 +381,6 @@ forcedeth_netmap_attach(struct SOFTC_T *np)
 	bzero(&na, sizeof(na));
 
 	na.ifp = np->dev;
-	na.separate_locks = 0;
 	na.num_tx_desc = np->tx_ring_size;
 	na.num_rx_desc = np->tx_ring_size;
 	na.nm_txsync = forcedeth_netmap_txsync;

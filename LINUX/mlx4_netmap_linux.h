@@ -777,7 +777,6 @@ mlx4_netmap_attach(struct SOFTC_T *priv)
 	bzero(&na, sizeof(na));
 
 	na.ifp = dev;
-	na.separate_locks = 1;
 	rxq = priv->rx_ring_num;
 	txq = priv->tx_ring_num;
 	/* this card has 1k tx queues, so better limit the number */

@@ -75,7 +75,6 @@ cxgbe_netmap_attach(struct port_info *pi)
 	bzero(&na, sizeof(na));
 
 	na.ifp = pi->ifp;
-	na.separate_locks = 1;
 	na.na_flags = NAF_BDG_MAYSLEEP;
 	na.num_tx_desc = 0; // qsize pi->num_tx_desc;
 	na.num_rx_desc = 0; // XXX qsize  pi->num_rx_desc;
