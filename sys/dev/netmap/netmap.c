@@ -69,18 +69,16 @@ invalid usage.
 
 		LOCKING (INTERNAL)
 
---- NICs in netmap mode ---
+Within the kernel, access to the netmap rings is protected as follows:
 
-Within the kernel, each NIC operating in netmap mode is protected
-using the following locks:
-- a spinlock on each ring, to handle producer/consumer races on:
+- a spinlock on each ring, to handle producer/consumer races on
   RX rings attached to the host stack (against multiple host
-  threads writing to the same ring);
-  the RX ring in VALE ports, and TX rings in NIC/host ports
-  attached to a VALE switch
-  (multiple active senders for the same destination)
+  threads writing fro the host stack to the same ring),
+  and on 'destination' rings attached to a VALE switch
+  (i.e. RX rings in VALE ports, and TX rings in NIC/host ports)
+  protecting multiple active senders for the same destination)
 
-- an atomic variable to guarantees that there is at most one
+- an atomic variable to guarantee that there is at most one
   instance of *_*xsync() on the ring at any time.
   For rings connected to user file
   descriptors, an atomic_test_and_set() protects this, and the
@@ -115,15 +113,6 @@ When forwarding, the lock is acquired in shared mode.
 The lock is held throughout the entire forwarding cycle,
 during which the thread may incur in a page fault.
 Hence it is important that sleepable shared locks are used.
-
-Each port has a spinlock on the tx and rx queue.
-
-The one on the tx port is only to detect attempts of
-multiple use and protect the selrecord structure.
-On entry (txsync), the lock on the tx port is acquired,
-the port is marked as busy, and the lock is released.
-An error is returned if the port was already busy.
-On exit, we lock, clear the busy flag, selwakeup and unlock.
 
 On the rx port, the lock is grabbed initially to reserve
 a number of slot in the ring, then the lock is released,
