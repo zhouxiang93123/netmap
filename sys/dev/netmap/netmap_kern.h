@@ -189,27 +189,58 @@ nm_next(uint32_t i, uint32_t lim)
 	return unlikely (i == lim) ? 0 : i + 1;
 }
 
-
-/* some macros to access interesting points in the rings
- * All numbers are modulo nkr_num_slots
- * TX rings:
- *	ring->cur   =:= kring->nr_cur + (bufs to be sent)
- *	pending_tx  =:= nkr_num_slots - (nr_hwcur+nr_hwavail)
- * RX rings:
- *	kring->nr_hwcur   =:= ring->cur - ring->reserved;
- *	kring->nr_hwavail =:= ring->avail + ring->reserved
+/*
  *
- *	busy = [nr_hwcur .. nkr_hwlease-1]
- *	nkr_num_slots - 1 - busy are available
- *   The write position is nkr_hwlease (which is incremented
- *   upon reservations).
- *   The update position (where new data are made available)
- *   is nr_hwcur+nr_hwavail, and causes nr_hwavail to advance.
+ * Here is the layout for the Rx and Tx rings.
+
+       RxRING                            TxRING
+
+      +-----------------+            +-----------------+
+      |                 |            |                 |
+      |XXX free slot XXX|            |XXX free slot XXX|
+      +-----------------+            +-----------------+
+      |                 |<-hwcur     |                 |<-hwcur
+      | reserved    h   |            | (ready          |
+      +-----------  w  -+            |  to be          |
+ cur->|             a   |            |  sent)      h   |
+      |             v   |            +----------   w   |
+      |             a   |       cur->| (being      a   |
+      |             i   |            |  prepared)  v   |
+      | avail       l   |            |             a   |
+      +-----------------+            +  a  ------  i   +
+      |                 | ...        |  v          l   |<-hwlease
+      | (being          | ...        |  a              | ...
+      |  prepared)      | ...        |  i              | ...
+      +-----------------+ ...        |  l              | ...
+      |                 |<-hwlease   +-----------------+
+      |                 |            |                 |
+      |                 |            |                 |
+      |                 |            |                 |
+      |                 |            |                 |
+      +-----------------+            +-----------------+
+
+ * The cur/avail (user view) and hwcur/hwavail (kernel view)
+ * are used in the normal operation of the card.
+ *
+ * When a ring is the output of a switch port (Rx ring for
+ * a VALE port, Tx ring for the host stack or NIC), slots
+ * are reserved in blocks through 'hwlease' which points
+ * to the next unused slot.
+ * On an Rx ring, hwlease is always after hwavail,
+ * and completions cause avail to advance.
+ * On a Tx ring, hwlease is always between cur and hwavail,
+ * and completions cause cur to advance.
+ *
+ * nm_kr_space() returns the maximum number of slots that
+ * can be assigned.
+ * nm_kr_lease() reserves the required number of buffers,
+ *    advances nkr_hwlease and also returns an entry in
+ *    a circular array where completions should be reported.
  */
 
 
 /*
- * space in the ring.
+ * Available space in the ring.
  */
 static inline uint32_t
 nm_kr_space(struct netmap_kring *k, int is_rx)
