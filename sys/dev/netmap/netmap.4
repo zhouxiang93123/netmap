@@ -244,6 +244,7 @@ struct netmap_slot {
 #define NS_REPORT       0x0002  /* tell hw to report results
                                  * e.g. by generating an interrupt
                                  */
+    uint64_t ptr;   /* buffer address (indirect buffers) */
 };
 .Ed
 .It Dv packet buffers
