@@ -200,9 +200,6 @@ retry:
  *
  * ring->avail is never used, only checked for bogus values.
  *
- * do_lock is set iff the function is called from the ioctl handler.
- * In this case, grab a lock around the body, and also reclaim transmitted
- * buffers irrespective of interrupt mitigation.
 
 OUTGOING (txr->prod)
 Tx packets need to fill a 64-byte block with one control block and
@@ -227,7 +224,7 @@ same for rx_cq and rx_ring.
 
  */
 static int
-mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
 	struct SOFTC_T *priv = netdev_priv(ifp);
 	struct mlx4_en_tx_ring *txr = &priv->tx_ring[ring_nr];
@@ -240,9 +237,6 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	/* if cur is invalid reinitialize the ring. */
 	if (k > lim)
 		return netmap_ring_reinit(kring);
-	if (do_lock)
-		mtx_lock(&na->core_lock); // XXX exp
-		// mtx_lock(&kring->q_lock);
 
 	// XXX debugging, only print if sending something
 	n = (txr->prod - txr->cons - 1) & 0xffffff; // should be modulo 2^24 ?
@@ -419,9 +413,6 @@ mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	ring->avail = kring->nr_hwavail;
 
 err:
-	if (do_lock)
-		mtx_unlock(&na->core_lock);
-		// mtx_unlock(&kring->q_lock);
 	if (error)
 		return netmap_ring_reinit(kring);
 	return 0;
@@ -442,7 +433,6 @@ err:
  * from nr_hwavail, make the descriptors available for the next reads,
  * and set kring->nr_hwcur = ring->cur and ring->avail = kring->nr_hwavail.
  *
- * do_lock has a special meaning: please refer to txsync.
 
 MELLANOX:
 
@@ -455,7 +445,7 @@ mlx4_en_update_rx_prod_db() tells the NIC where it can go
  
  */
 static int
-mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
 	struct SOFTC_T *priv = netdev_priv(ifp);
 	struct mlx4_en_rx_ring *rxr = &priv->rx_ring[ring_nr];
@@ -463,7 +453,7 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;
-	int force_update = do_lock || kring->nr_kflags & NKR_PENDINTR;
+	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 	u_int k = ring->cur, resvd = ring->reserved;
 
         if (!priv->port_up)	// XXX as in mlx4_en_process_rx_cq()
@@ -474,8 +464,6 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	ND(5, "START rxr %d cons %d prod %d kcur %d kavail %d cur %d avail %d",
 		ring_nr, rxr->cons, rxr->prod, kring->nr_hwcur, kring->nr_hwavail, ring->cur, ring->avail);
 
-	if (do_lock)
-		mtx_lock(&kring->q_lock);
 	/*
 	 * First part, import newly received packets into the netmap ring.
 	 *
@@ -630,13 +618,9 @@ mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	/* tell userspace that there are new packets */
 	ring->avail = kring->nr_hwavail - resvd;
 
-	if (do_lock)
-		mtx_unlock(&kring->q_lock);
 	return 0;
 
 ring_reset:
-	if (do_lock)
-		mtx_unlock(&kring->q_lock);
 	return netmap_ring_reinit(kring);
 }
 

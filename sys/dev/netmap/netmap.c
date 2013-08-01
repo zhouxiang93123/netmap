@@ -2286,13 +2286,13 @@ unlock_out:
 					D("pre txsync ring %d cur %d hwcur %d",
 					    i, kring->ring->cur,
 					    kring->nr_hwcur);
-				na->nm_txsync(ifp, i, 1 /* do lock */);
+				na->nm_txsync(ifp, i, NAF_FORCE_RECLAIM);
 				if (netmap_verbose & NM_VERB_TXSYNC)
 					D("post txsync ring %d cur %d hwcur %d",
 					    i, kring->ring->cur,
 					    kring->nr_hwcur);
 			} else {
-				na->nm_rxsync(ifp, i, 1 /* do lock */);
+				na->nm_rxsync(ifp, i, NAF_FORCE_READ);
 				microtime(&na->rx_rings[i].ring->ts);
 			}
 			nm_kr_put(kring);

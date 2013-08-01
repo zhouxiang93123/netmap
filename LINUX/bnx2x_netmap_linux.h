@@ -179,9 +179,6 @@ else
  *
  * ring->avail is never used, only checked for bogus values.
  *
- * do_lock is set iff the function is called from the ioctl handler.
- * In this case, grab a lock around the body, and also reclaim transmitted
- * buffers irrespective of interrupt mitigation.
 
 Broadcom: the tx routine is bnx2x_start_xmit()
 
@@ -225,7 +222,7 @@ set of queues.
 
  */
 static int
-bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct bnx2x_fastpath *fp = &adapter->fp[ring_nr];
@@ -240,9 +237,6 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	/* if cur is invalid reinitialize the ring. */
 	if (k > lim)
 		return netmap_ring_reinit(kring);
-	if (do_lock)
-		mtx_lock(&na->core_lock); // XXX exp
-		// mtx_lock(&kring->q_lock);
 
 	/*
 	 * Process new packets to send. j is the current index in the
@@ -401,9 +395,6 @@ bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		ND(3,"txring %d full", ring_nr);
 
 err:
-	if (do_lock)
-		mtx_unlock(&na->core_lock);
-		// mtx_unlock(&kring->q_lock);
 	if (error)
 		return netmap_ring_reinit(kring);
 	return 0;
@@ -424,7 +415,6 @@ err:
  * from nr_hwavail, make the descriptors available for the next reads,
  * and set kring->nr_hwcur = ring->cur and ring->avail = kring->nr_hwavail.
  *
- * do_lock has a special meaning: please refer to txsync.
 
 Broadcom:
 
@@ -448,7 +438,7 @@ apparently the same.
 
  */
 static int
-bnx2x_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+bnx2x_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct bnx2x_fastpath *rxr = &adapter->fp[ring_nr];
@@ -456,7 +446,7 @@ bnx2x_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;
-	int force_update = do_lock || kring->nr_kflags & NKR_PENDINTR;
+	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 	u_int k = ring->cur, resvd = ring->reserved;
 	uint16_t hw_comp_cons, sw_comp_cons;
 
@@ -465,8 +455,6 @@ return 0; // XXX unsupported now
 	if (k > lim) /* userspace is cheating */
 		return netmap_ring_reinit(kring);
 
-	if (do_lock)
-		mtx_lock(&kring->q_lock);
 	rmb();
 	/*
 	 * First part, import newly received packets into the netmap ring.
@@ -580,13 +568,9 @@ done:
 	/* tell userspace that there are new packets */
 	ring->avail = kring->nr_hwavail - resvd;
 
-	if (do_lock)
-		mtx_unlock(&kring->q_lock);
 	return 0;
 
 ring_reset:
-	if (do_lock)
-		mtx_unlock(&kring->q_lock);
 	return netmap_ring_reinit(kring);
 }
 

@@ -81,7 +81,7 @@ fail:
  * Reconcile kernel and user view of the transmit ring.
  */
 static int
-re_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+re_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
 	struct SOFTC_T *sc = netdev_priv(ifp);
 	void __iomem *ioaddr = sc->mmio_addr;
@@ -94,8 +94,6 @@ re_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	if (k > lim)
 		return netmap_ring_reinit(kring);
 
-	if (do_lock)
-		mtx_lock(&na->core_lock);
 	rmb();
 	/*
 	 * Process new packets to send. j is the current index in the
@@ -116,8 +114,6 @@ re_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 
 			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
 				sc->cur_tx = l; // XXX fix
-				if (do_lock)
-					mtx_unlock(&na->core_lock);
 				return netmap_ring_reinit(kring);
 			}
 
@@ -157,8 +153,6 @@ re_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	}
 	/* update avail to what the kernel knows */
 	ring->avail = kring->nr_hwavail;
-	if (do_lock)
-		mtx_unlock(&na->core_lock);
 	return 0;
 }
 
@@ -167,21 +161,19 @@ re_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
  * Reconcile kernel and user view of the receive ring.
  */
 static int
-re_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+re_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
 	struct SOFTC_T *sc = netdev_priv(ifp);
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;
-	int force_update = do_lock || kring->nr_kflags & NKR_PENDINTR;
+	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 	u_int k = ring->cur, resvd = ring->reserved;
 
 	if (k > lim)
 		return netmap_ring_reinit(kring);
 
-	if (do_lock)
-		mtx_lock(&na->core_lock);
 	rmb();
 	/*
 	 * The device uses all the buffers in the ring, so we need
@@ -235,8 +227,6 @@ re_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			void *addr = PNMB(slot, &paddr);
 
 			if (addr == netmap_buffer_base) { /* bad buf */
-				if (do_lock)
-					mtx_unlock(&na->core_lock);
 				return netmap_ring_reinit(kring);
 			}
 
@@ -259,8 +249,6 @@ re_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	}
 	/* tell userspace that there are new packets */
 	ring->avail = kring->nr_hwavail - resvd;
-	if (do_lock)
-		mtx_unlock(&na->core_lock);
 	return 0;
 }
 

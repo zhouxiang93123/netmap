@@ -125,7 +125,7 @@ forcedeth_netmap_reg(struct ifnet *dev, int onoff)
  * Reconcile kernel and user view of the transmit ring.
  */
 static int
-forcedeth_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+forcedeth_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
 	struct SOFTC_T *np = netdev_priv(ifp);
 	struct netmap_adapter *na = NA(ifp);
@@ -139,8 +139,6 @@ forcedeth_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	if (k > lim)
 		return netmap_ring_reinit(kring);
 
-	if (do_lock)
-		mtx_lock(&na->core_lock);
 
 	/* Sync the TX descriptor list */
 	rmb();
@@ -173,8 +171,6 @@ forcedeth_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			void *addr = PNMB(slot, &paddr);
 
 			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
-				if (do_lock)
-					mtx_unlock(&na->core_lock);
 				return netmap_ring_reinit(kring);
 			}
 
@@ -202,8 +198,6 @@ forcedeth_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	}
 	/* update avail to what the hardware knows */
 	ring->avail = kring->nr_hwavail;
-	if (do_lock)
-		mtx_unlock(&na->core_lock);
 	return 0;
 }
 
@@ -212,7 +206,7 @@ forcedeth_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
  * Reconcile kernel and user view of the receive ring.
  */
 static int
-forcedeth_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+forcedeth_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
 	struct SOFTC_T *np = netdev_priv(ifp);
 	struct netmap_adapter *na = NA(ifp);
@@ -228,8 +222,6 @@ forcedeth_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	if (k > lim)
 		return netmap_ring_reinit(kring);
 
-	if (do_lock)
-		mtx_lock(&na->core_lock);
 	rmb();
 	l = np->get_rx.ex - rxr; /* next pkt to check */
 	/* put_rx is the refill position, one before nr_hwcur.
@@ -271,8 +263,6 @@ forcedeth_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			void *addr = PNMB(slot, &paddr);
 
 			if (addr == netmap_buffer_base) { /* bad buf */
-				if (do_lock)
-					mtx_unlock(&na->core_lock);
 				return netmap_ring_reinit(kring);
 			}
 			slot->flags &= ~NS_REPORT;
@@ -297,8 +287,6 @@ forcedeth_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	}
 	/* tell userspace that there are new packets */
 	ring->avail = kring->nr_hwavail - resvd;
-	if (do_lock)
-		mtx_unlock(&na->core_lock);
 	return 0;
 }
 

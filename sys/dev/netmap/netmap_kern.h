@@ -393,8 +393,10 @@ struct netmap_adapter {
 
 	int (*nm_register)(struct ifnet *, int onoff);
 	void (*nm_lock)(struct ifnet *, int what, u_int ringid);
-	int (*nm_txsync)(struct ifnet *, u_int ring, int lock);
-	int (*nm_rxsync)(struct ifnet *, u_int ring, int lock);
+	int (*nm_txsync)(struct ifnet *, u_int ring, int flags);
+	int (*nm_rxsync)(struct ifnet *, u_int ring, int flags);
+#define NAF_FORCE_READ    1
+#define NAF_FORCE_RECLAIM 2
 	/* return configuration information */
 	int (*nm_config)(struct ifnet *, u_int *txr, u_int *txd,
 					u_int *rxr, u_int *rxd);
