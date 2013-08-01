@@ -161,7 +161,7 @@ fail:
  * Reconcile kernel and user view of the transmit ring.
  */
 static int
-sfxge_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+sfxge_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
 	struct sfxge_softc *sc = ifp->if_softc;
 	struct sfxge_txq *txr = sc->txq[ring_nr];
@@ -263,7 +263,7 @@ ring_reset:
 	/*
 	 * Reclaim buffers for completed transmissions.
 	 */
-	if (do_lock) {
+	if (flags & NAF_FORCE_RECLAIM) {
 		j = 1; /* forced reclaim, ignore interrupts */
 	} else if (kring->nr_hwavail > 0) {
 		j = 0; /* buffers still available: no reclaim, ignore intr. */
@@ -303,10 +303,9 @@ ring_reset:
  * from nr_hwavail, make the descriptors available for the next reads,
  * and set kring->nr_hwcur = ring->cur and ring->avail = kring->nr_hwavail.
  *
- * do_lock has a special meaning: please refer to txsync.
  */
 static int
-sfxge_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+sfxge_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
 	struct sfxge_softc *sc = ifp->if_softc;
 	struct sfxge_rxq *rxq = sc->rxq[ring_nr];
@@ -315,14 +314,12 @@ sfxge_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;
-	int force_update = do_lock || kring->nr_kflags & NKR_PENDINTR;
+	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 	u_int k = ring->cur, resvd = ring->reserved;
 
 	if (k > lim)
 		return netmap_ring_reinit(kring);
 
-	if (do_lock)
-		mtx_lock(&evq->lock);
 	/* XXX check sync modes */
 //	bus_dmamap_sync(rxq->rxdma.dma_tag, rxq->rxdma.dma_map,
 //			BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
@@ -424,13 +421,9 @@ sfxge_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	/* tell userspace that there are new packets */
 	ring->avail = kring->nr_hwavail - resvd;
 
-	if (do_lock)
-		mtx_unlock(&evq->lock);
 	return 0;
 
 ring_reset:
-	if (do_lock)
-		mtx_unlock(&evq->lock);
 	return netmap_ring_reinit(kring);
 }
 

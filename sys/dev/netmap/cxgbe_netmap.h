@@ -189,7 +189,7 @@ fail:
  * the ring afterwards.
  */
 static int
-cxgbe_netmap_txsync(void *a, u_int ring_nr, int do_lock)
+cxgbe_netmap_txsync(void *a, u_int ring_nr, int flags)
 {
 #if 0
 	struct adapter *adapter = a;
@@ -311,7 +311,7 @@ cxgbe_netmap_txsync(void *a, u_int ring_nr, int do_lock)
  * issuing a dmamap_sync on all slots.
  */
 static int
-cxgbe_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
+cxgbe_netmap_rxsync(void *a, u_int ring_nr, int flags)
 {
 #if 0
 	struct adapter *adapter = a;

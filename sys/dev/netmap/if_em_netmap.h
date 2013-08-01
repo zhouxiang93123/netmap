@@ -149,7 +149,7 @@ fail:
  * Reconcile kernel and user view of the transmit ring.
  */
 static int
-em_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+em_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
 	struct adapter *adapter = ifp->if_softc;
 	struct tx_ring *txr = &adapter->tx_rings[ring_nr];
@@ -245,7 +245,7 @@ em_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
  * Reconcile kernel and user view of the receive ring.
  */
 static int
-em_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+em_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
 	struct adapter *adapter = ifp->if_softc;
 	struct rx_ring *rxr = &adapter->rx_rings[ring_nr];
@@ -253,7 +253,7 @@ em_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;
-	int force_update = do_lock || kring->nr_kflags & NKR_PENDINTR;
+	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 	u_int k = ring->cur, resvd = ring->reserved;
 
 	k = ring->cur;

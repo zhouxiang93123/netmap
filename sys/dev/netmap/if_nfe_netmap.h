@@ -164,7 +164,7 @@ nfe_netmap_reg(struct ifnet *ifp, int onoff)
  * Reconcile kernel and user view of the transmit ring.
  */
 static int
-nfe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+nfe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
 	struct nfe_softc *sc = ifp->if_softc;
 	struct netmap_adapter *na = NA(ifp);
@@ -181,8 +181,6 @@ nfe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	if (k > lim)
 		return netmap_ring_reinit(kring);
 
-	if (do_lock)
-		NFE_LOCK(sc);
 	bus_dmamap_sync(sc->txq.tx_desc_tag, sc->txq.tx_desc_map,
 			BUS_DMASYNC_POSTREAD);
 
@@ -204,8 +202,6 @@ nfe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			u_int len = slot->len;
 
 			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
-				if (do_lock)
-					NFE_UNLOCK(sc);
 				return netmap_ring_reinit(kring);
 			}
 			slot->flags &= ~NS_REPORT;
@@ -275,8 +271,6 @@ nfe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	/* update avail to what the kernel knows */
 	ring->avail = kring->nr_hwavail;
 
-	if (do_lock)
-		NFE_UNLOCK(sc);
 	return 0;
 }
 
@@ -285,14 +279,14 @@ nfe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
  * Reconcile kernel and user view of the receive ring.
  */
 static int
-nfe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+nfe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
 	struct nfe_softc *sc = ifp->if_softc;
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;
-	int force_update = do_lock || kring->nr_kflags & NKR_PENDINTR;
+	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 	u_int k = ring->cur, resvd = ring->reserved;
 	struct nfe_desc32 *desc32;
 	struct nfe_desc64 *desc64;
@@ -300,8 +294,6 @@ nfe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	if (k > lim)
 		return netmap_ring_reinit(kring);
 
-	if (do_lock)
-		NFE_LOCK(sc);
 
 	/* XXX check sync modes */
 	bus_dmamap_sync(sc->rxq.rx_desc_tag, sc->rxq.rx_desc_map,
@@ -363,8 +355,6 @@ nfe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			void *addr = PNMB(slot, &paddr);
 
 			if (addr == netmap_buffer_base) { /* bad buf */
-				if (do_lock)
-					NFE_UNLOCK(sc);
 				return netmap_ring_reinit(kring);
 			}
 
@@ -403,8 +393,6 @@ nfe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	}
 	/* tell userspace that there are new packets */
 	ring->avail = kring->nr_hwavail - resvd;
-	if (do_lock)
-		NFE_UNLOCK(sc);
 	return 0;
 }
 

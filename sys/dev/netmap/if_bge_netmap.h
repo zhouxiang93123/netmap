@@ -86,7 +86,7 @@ fail:
  * Reconcile kernel and user view of the transmit ring.
  */
 static int
-bge_netmap_txsync(void *a, u_int ring_nr, int do_lock)
+bge_netmap_txsync(void *a, u_int ring_nr, int flags)
 {
 	struct bge_softc *sc = a;
 	struct netmap_adapter *na = NA(sc->bge_ifp);
@@ -98,8 +98,6 @@ bge_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 	if (k > lim)
 		return netmap_ring_reinit(kring);
 
-	if (do_lock)
-		BGE_LOCK(sc);
 
 	/* bge_tx_cons_idx is the equivalent of TDH on intel cards,
 	 * i.e. the index of the tx frame most recently completed.
@@ -136,8 +134,6 @@ bge_netmap_txsync(void *a, u_int ring_nr, int do_lock)
 			int len = slot->len;
 
 			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
-				if (do_lock)
-					BGE_UNLOCK(sc);
 				return netmap_ring_reinit(kring);
 			}
 
@@ -174,8 +170,6 @@ bge_netmap_txsync(void *a, u_int ring_nr, int do_lock)
                         bge_writembx(sc, BGE_MBX_TX_HOST_PROD0_LO, l);
                 sc->bge_timer = 5;
 	}
-	if (do_lock)
-		BGE_UNLOCK(sc);
 	return 0;
 }
 
@@ -204,7 +198,7 @@ bge_netmap_txsync(void *a, u_int ring_nr, int do_lock)
  *	^---- we have freed some buffers
  */
 static int
-bge_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
+bge_netmap_rxsync(void *a, u_int ring_nr, int flags)
 {
 	struct bge_softc *sc = a;
 	struct netmap_adapter *na = NA(sc->bge_ifp);
@@ -217,8 +211,6 @@ bge_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 	if (k > lim)
 		return netmap_ring_reinit(kring);
 
-	if (do_lock)
-		BGE_LOCK(sc);
 	/* XXX check sync modes */
         bus_dmamap_sync(sc->bge_cdata.bge_rx_return_ring_tag,
             sc->bge_cdata.bge_rx_return_ring_map, BUS_DMASYNC_POSTREAD);
@@ -277,8 +269,6 @@ bge_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 			uint64_t paddr = vtophys(addr);
 
 			if (addr == netmap_buffer_base) { /* bad buf */
-				if (do_lock)
-					BGE_UNLOCK(sc);
 				return netmap_ring_reinit(kring);
 			}
 
@@ -311,8 +301,6 @@ bge_netmap_rxsync(void *a, u_int ring_nr, int do_lock)
 	}
 	/* tell userspace that there are new packets */
 	ring->avail = kring->nr_hwavail ;
-	if (do_lock)
-		BGE_UNLOCK(sc);
 	return 0;
 }
 
