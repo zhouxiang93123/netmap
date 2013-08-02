@@ -2485,7 +2485,7 @@ flush_tx:
 				continue;
 			/* make sure only one user thread is doing this */
 			if (nm_kr_tryget(kring)) {
-				D("ring %p busy is %d", kring, kring->nr_busy);
+				D("ring %p busy is %d", kring, (int)kring->nr_busy);
 				revents |= POLLERR;
 				goto out;
 			}
@@ -3567,7 +3567,10 @@ retry:
 			    ND("send %d %d bytes at %s:%d",
 				i, ft_p->ft_len, dst_ifp->if_xname, j);
 			    if (ft_p->ft_flags & NS_INDIRECT) {
-				copyin(src, dst, len);
+				if (copyin(src, dst, len)) {
+					// invalid user pointer, pretend len is 0
+					ft_p->ft_len = 0;
+				}
 			    } else {
 				//memcpy(dst, src, len);
 				pkt_copy(src, dst, (int)len);
