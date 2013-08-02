@@ -201,12 +201,11 @@ fail:
  *
  * ring->avail is never used, only checked for bogus values.
  *
- * do_lock is set iff the function is called from the ioctl handler.
- * In this case, grab a lock around the body, and also reclaim transmitted
+ * I flags & FORCE_RECLAIM, reclaim transmitted
  * buffers irrespective of interrupt mitigation.
  */
 static int
-ixgbe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+ixgbe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
 	struct adapter *adapter = ifp->if_softc;
 	struct tx_ring *txr = &adapter->tx_rings[ring_nr];
@@ -331,7 +330,7 @@ ring_reset:
 	 * In all cases kring->nr_kflags indicates which slot will be
 	 * checked upon a tx interrupt (nkr_num_slots means none).
 	 */
-	if (do_lock) {
+	if (flags & NAF_FORCE_RECLAIM) {
 		j = 1; /* forced reclaim, ignore interrupts */
 		kring->nr_kflags = kring->nkr_num_slots;
 	} else if (kring->nr_hwavail > 0) {
@@ -424,10 +423,11 @@ ring_reset:
  * from nr_hwavail, make the descriptors available for the next reads,
  * and set kring->nr_hwcur = ring->cur and ring->avail = kring->nr_hwavail.
  *
- * do_lock has a special meaning: please refer to txsync.
+ * If (flags & NAF_FORCE_READ) also check for incoming packets irrespective
+ * of whether or not we received an interrupt.
  */
 static int
-ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
 	struct adapter *adapter = ifp->if_softc;
 	struct rx_ring *rxr = &adapter->rx_rings[ring_nr];
@@ -435,7 +435,7 @@ ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;
-	int force_update = do_lock || kring->nr_kflags & NKR_PENDINTR;
+	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 	u_int k = ring->cur, resvd = ring->reserved;
 
 	if (k > lim)
