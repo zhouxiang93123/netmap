@@ -176,7 +176,12 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 241723 2012-10-19 09:41:45Z gle
 #define BDG_RUNLOCK(b)		sx_sunlock(&(b)->bdg_lock)
 
 
-/* netmap global lock */
+/* netmap global lock.
+ * normally called within the user thread (upon a system call)
+ * or when a file descriptor or process is terminated
+ * (last close or last munmap)
+ */
+
 #define NMG_LOCK_T		struct mtx
 #define NMG_LOCK_INIT()		mtx_init(&netmap_global_lock, "netmap global lock", NULL, MTX_DEF)
 #define NMG_LOCK_DESTROY()	mtx_destroy(&netmap_global_lock)
@@ -264,6 +269,8 @@ if_rele(struct net_device *ifp)
 #include <net/netmap.h>
 #include <dev/netmap/netmap_kern.h>
 #include <dev/netmap/netmap_mem2.h>
+
+#define NMG_LOCK_ASSERT()	//	XXX to be completed
 
 MALLOC_DEFINE(M_NETMAP, "netmap", "Network memory map");
 
@@ -453,15 +460,20 @@ struct nm_bridge {
  * by an exclusive lock.
  */
 struct nm_bridge nm_bridges[NM_BRIDGES];
+
+#if 0 // use NMG_LOCK instead
 NM_LOCK_T	netmap_bridge_mutex;
 
 #define BDG_LOCK()		mtx_lock(&netmap_bridge_mutex)
 #define BDG_UNLOCK()		mtx_unlock(&netmap_bridge_mutex)
+#endif // use NMG_LOCK instead
 
 
 
 /*
  * A few function to tell which kind of port are we using.
+ * XXX should we hold a lock ?
+ *
  * nma_is_vp()		virtual port
  * nma_is_host()	port connected to the host stack
  * nma_is_hw()		port connected to a NIC
@@ -487,7 +499,7 @@ nma_is_hw(struct netmap_adapter *na)
 
 
 /*
- * Regarding holding a NIC, if the NIC is owned by the kernel
+ * If the NIC is owned by the kernel
  * (i.e., bridge), neither another bridge nor user can use it;
  * if the NIC is owned by a user, only users can share it.
  * Evaluation must be done under NMG_LOCK().
@@ -639,6 +651,8 @@ nm_test(struct nmreq *nmr)
 
 /*
  * locate a bridge among the existing ones.
+ * MUST BE CALLED WITH NMG_LOCK()
+ *
  * a ':' in the name terminates the bridge name. Otherwise, just NM_NAME.
  * We assume that this is called with a name of at least NM_NAME chars.
  */
@@ -647,6 +661,8 @@ nm_find_bridge(const char *name, int create)
 {
 	int i, l, namelen;
 	struct nm_bridge *b = NULL;
+
+	NMG_LOCK_ASSERT();
 
 	namelen = strlen(NM_NAME);	/* base length */
 	l = name ? strlen(name) : 0;		/* actual length */
@@ -664,7 +680,6 @@ nm_find_bridge(const char *name, int create)
 		namelen = IFNAMSIZ;
 	ND("--- prefix is '%.*s' ---", namelen, name);
 
-	BDG_LOCK();
 	/* lookup the name, remember empty slot if there is one */
 	for (i = 0; i < NM_BRIDGES; i++) {
 		struct nm_bridge *x = nm_bridges + i;
@@ -688,7 +703,6 @@ nm_find_bridge(const char *name, int create)
 		/* reset the MAC address table */
 		bzero(b->ht, sizeof(struct nm_hash_ent) * NM_BDG_HASH);
 	}
-	BDG_UNLOCK();
 	return b;
 }
 
@@ -702,6 +716,7 @@ nm_free_bdgfwd(struct netmap_adapter *na)
 	int nrings, i;
 	struct netmap_kring *kring;
 
+	NMG_LOCK_ASSERT();
 	nrings = nma_is_vp(na) ? na->num_tx_rings : na->num_rx_rings;
 	kring = nma_is_vp(na) ? na->tx_rings : na->rx_rings;
 	for (i = 0; i < nrings; i++) {
@@ -724,6 +739,7 @@ nm_alloc_bdgfwd(struct netmap_adapter *na)
 	int nrings, l, i, num_dstq;
 	struct netmap_kring *kring;
 
+	NMG_LOCK_ASSERT();
 	/* all port:rings + broadcast */
 	num_dstq = NM_BDG_MAXPORTS * NM_BDG_MAXRINGS + 1;
 	l = sizeof(struct nm_bdg_fwd) * NM_BDG_BATCH_MAX;
@@ -892,6 +908,7 @@ netmap_dtor_locked(void *data)
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_if *nifp = priv->np_nifp;
 
+	NMG_LOCK_ASSERT();
 	na->refcount--;
 	if (na->refcount <= 0) {	/* last instance */
 		u_int i;
@@ -931,7 +948,9 @@ netmap_dtor_locked(void *data)
 }
 
 
-/* we assume netmap adapter exists */
+/* we assume netmap adapter exists
+ * Called with NMG_LOCK held
+ */
 static void
 nm_if_rele(struct ifnet *ifp)
 {
@@ -939,6 +958,7 @@ nm_if_rele(struct ifnet *ifp)
 	struct nm_bridge *b;
 	struct netmap_adapter *na;
 
+	NMG_LOCK_ASSERT();
 	/* I can be called not only for get_ifp()-ed references where netmap's
 	 * capability is guaranteed, but also for non-netmap-capable NICs.
 	 */
@@ -1008,6 +1028,10 @@ netmap_dtor(void *data)
 
 	NMG_LOCK();
 #ifdef __FreeBSD__
+	/*
+	 * np_refcount is the number of active mmaps on
+	 * this file descriptor
+	 */
 	if (--priv->np_refcount > 0) {
 		NMG_UNLOCK();
 		return;
@@ -1016,6 +1040,7 @@ netmap_dtor(void *data)
 	if (ifp) {
 		struct netmap_adapter *na = NA(ifp);
 
+		// XXX why do we need these two locks ?
 		if (na->na_bdg)
 			BDG_WLOCK(na->na_bdg);
 		na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
@@ -1121,7 +1146,6 @@ netmap_dev_pager_fault(vm_object_t object, vm_ooffset_t offset,
 	}
 	page->valid = VM_PAGE_BITS_ALL;
 	return (VM_PAGER_OK);
-
 }
 
 
@@ -1185,45 +1209,7 @@ err_unlock:
 }
 
 
-#if 0
-/*
- * mmap(2) support for the "netmap" device.
- *
- * Expose all the memory previously allocated by our custom memory
- * allocator: this way the user has only to issue a single mmap(2), and
- * can work on all the data structures flawlessly.
- *
- * Return 0 on success, -1 otherwise.
- */
-
-static int
-netmap_mmap(struct cdev *dev,
-    vm_ooffset_t offset, vm_paddr_t *paddr, int nprot, vm_memattr_t *memattr)
-{
-	int error = 0;
-	struct netmap_priv_d *priv;
-
-	(void)dev;
-	(void)memattr;
-	if (nprot & PROT_EXEC)
-		return (-1);	// XXX -1 or EINVAL ?
-
-	error = devfs_get_cdevpriv((void **)&priv);
-	if (error == EBADF) {	/* called on fault, memory is initialized */
-		D("handling fault at ofs 0x%x", offset);
-		error = 0;
-	} else if (error == 0)	/* make sure memory is set */
-		error = netmap_get_memory(priv);
-	if (error)
-		return (error);
-
-	ND("request for offset 0x%x", (uint32_t)offset);
-	*paddr = netmap_mem_ofstophys(priv->np_mref, offset);
-
-	return (*paddr ? 0 : ENOMEM);
-}
-#endif
-
+// XXX can we remove this ?
 static int
 netmap_close(struct cdev *dev, int fflag, int devtype, struct thread *td)
 {
@@ -1356,9 +1342,17 @@ netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
 
 
 /*
- * called under main lock to send packets from the host to the NIC
  * The host ring has packets from nr_hwcur to (cur - reserved)
- * to be sent down. We scan the tx rings, which have just been
+ * to be sent down to the NIC.
+ * We need to use the queue lock on the source (host RX ring)
+ * to protect against netmap_start.
+ * If the user is well behaved we do not need to acquire locks
+ * on the destination(s),
+ * so we only need to make sure that there are no panics because
+ * of user errors.
+ * XXX verify
+ *
+ * We scan the tx rings, which have just been
  * flushed so nr_hwcur == cur. Pushing packets down means
  * increment cur and decrement avail.
  * XXX to be verified
@@ -1370,6 +1364,7 @@ netmap_sw_to_nic(struct netmap_adapter *na)
 	struct netmap_kring *k1 = &na->tx_rings[0];
 	u_int i, howmany, src_lim, dst_lim;
 
+	mtx_lock(&kring->q_lock);
 	howmany = kring->nr_hwavail;	/* XXX otherwise cur - reserved - nr_hwcur */
 
 	src_lim = kring->nkr_num_slots - 1;
@@ -1400,6 +1395,7 @@ netmap_sw_to_nic(struct netmap_adapter *na)
 		kring->ring->cur = kring->nr_hwcur; // XXX
 		k1++;
 	}
+	mtx_unlock(&kring->q_lock);
 }
 
 
@@ -1448,10 +1444,10 @@ netmap_sync_to_host(struct netmap_adapter *na)
  */
 /* SWNA(ifp)->txrings[0] is always NA(ifp)->txrings[NA(ifp)->num_txrings] */
 static int
-netmap_bdg_to_host(struct ifnet *ifp, u_int ring_nr, int do_lock)
+netmap_bdg_to_host(struct ifnet *ifp, u_int ring_nr, int flags)
 {
 	(void)ring_nr;
-	(void)do_lock;
+	(void)flags;
 	if (netmap_verbose > 255)
 		RD(5, "sync to host %s ring %d", ifp->if_xname, ring_nr);
 	netmap_sync_to_host(NA(ifp));
@@ -1511,7 +1507,11 @@ netmap_sync_from_host(struct netmap_adapter *na, struct thread *td, void *pwait)
 
 
 /*
+ * MUST BE CALLED UNDER NMG_LOCK()
+ *
  * get a refcounted reference to an interface.
+ * This is always called in the execution of an ioctl().
+ *
  * Return ENXIO if the interface does not exist, EINVAL if netmap
  * is not supported by the interface.
  * If successful, hold a reference.
@@ -1534,133 +1534,145 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp)
 	struct ifnet *iter = NULL;
 	int no_prefix = 0;
 
-	do {
-		struct nm_bridge *b;
-		struct netmap_adapter *na;
-		int i, cand = -1, cand2 = -1;
+	/* first try to see if this is a bridge port. */
+	struct nm_bridge *b;
+	struct netmap_adapter *na;
+	int i, cand = -1, cand2 = -1;
 
-		if (strncmp(name, NM_NAME, sizeof(NM_NAME) - 1)) {
-			no_prefix = 1;
-			break;
+	if (strncmp(name, NM_NAME, sizeof(NM_NAME) - 1)) {
+		no_prefix = 1;
+		goto no_bridge_port;
+	}
+
+	b = nm_find_bridge(name, 1 /* create a new one if no exist */ );
+	if (b == NULL) {
+		D("no bridges available for '%s'", name);
+		return (ENXIO);
+	}
+
+	/* Now we are sure that name starts with the bridge's name,
+	 * lookup the port in the bridge. We need to scan the entire
+	 * list. It is not important to hold a WLOCK on the bridge
+	 * during the search because NMG_LOCK already guarantees
+	 * that there are no other possible writers.
+	 */
+	BDG_WLOCK(b);
+	/* lookup in the local list of ports */
+	for (i = 0; i < NM_BDG_MAXPORTS; i++) {
+		na = b->bdg_ports[i];
+		if (na == NULL) {
+			if (cand == -1)
+				cand = i; /* potential insert point */
+			else if (cand2 == -1)
+				cand2 = i; /* for host stack */
+			continue;
 		}
-		b = nm_find_bridge(name, 1 /* create a new one if no exist */ );
-		if (b == NULL) {
-			D("no bridges available for '%s'", name);
-			return (ENXIO);
-		}
-		/* Now we are sure that name starts with the bridge's name */
-		BDG_WLOCK(b);
-		/* lookup in the local list of ports */
-		for (i = 0; i < NM_BDG_MAXPORTS; i++) {
-			na = b->bdg_ports[i];
-			if (na == NULL) {
-				if (cand == -1)
-					cand = i; /* potential insert point */
-				else if (cand2 == -1)
-					cand2 = i; /* for host stack */
-				continue;
-			}
-			iter = na->ifp;
-			/* XXX make sure the name only contains one : */
-			if (!strcmp(iter->if_xname, name) /* virtual port */ ||
-			    (namelen > b->namelen && !strcmp(iter->if_xname,
-			    name + b->namelen + 1)) /* NIC */) {
-				ADD_BDG_REF(iter);
-				ND("found existing interface");
-				BDG_WUNLOCK(b);
-				break;
-			}
-		}
-		if (i < NM_BDG_MAXPORTS) /* already unlocked */
-			break;
-		if (cand == -1) {
-			D("bridge full, cannot create new port");
-no_port:
+		iter = na->ifp;
+		/* XXX make sure the name only contains one : */
+		if (!strcmp(iter->if_xname, name) /* virtual port */ ||
+		    (namelen > b->namelen && !strcmp(iter->if_xname,
+		    name + b->namelen + 1)) /* NIC */) {
+			ADD_BDG_REF(iter);
+			ND("found existing interface");
 			BDG_WUNLOCK(b);
-			*ifp = NULL;
-			return EINVAL;
+			break;
 		}
-		ND("create new bridge port %s", name);
-		/*
-		 * create a struct ifnet for the new port.
-		 * The forwarding table is attached to the kring(s).
-		 */
-		/*
-		 * try see if there is a matching NIC with this name
-		 * (after the bridge's name)
-		 */
-		iter = ifunit_ref(name + b->namelen + 1);
-		if (!iter) { /* this is a virtual port */
-			/* Create a temporary NA with arguments, then
-			 * bdg_netmap_attach() will allocate the real one
-			 * and attach it to the ifp
-			 */
-			struct netmap_adapter tmp_na;
+	}
+	if (i < NM_BDG_MAXPORTS) /* already unlocked */
+		goto port_found;
 
-			if (nmr->nr_cmd) /* nr_cmd must be for a NIC */
-				goto no_port;
-			bzero(&tmp_na, sizeof(tmp_na));
-			/* bound checking */
-			if (nmr->nr_tx_rings < 1)
-				nmr->nr_tx_rings = 1;
-			if (nmr->nr_tx_rings > NM_BDG_MAXRINGS)
-				nmr->nr_tx_rings = NM_BDG_MAXRINGS;
-			tmp_na.num_tx_rings = nmr->nr_tx_rings;
-			if (nmr->nr_rx_rings < 1)
-				nmr->nr_rx_rings = 1;
-			if (nmr->nr_rx_rings > NM_BDG_MAXRINGS)
-				nmr->nr_rx_rings = NM_BDG_MAXRINGS;
-			tmp_na.num_rx_rings = nmr->nr_rx_rings;
-			if (nmr->nr_tx_slots < 1)
-				nmr->nr_tx_slots = NM_BRIDGE_RINGSIZE;
-			if (nmr->nr_tx_slots > NM_BDG_MAXSLOTS)
-				nmr->nr_tx_slots = NM_BDG_MAXSLOTS;
-			tmp_na.num_tx_desc = nmr->nr_tx_slots;
-			if (nmr->nr_rx_slots < 1)
-				nmr->nr_rx_slots = NM_BRIDGE_RINGSIZE;
-			if (nmr->nr_rx_slots > NM_BDG_MAXSLOTS)
-				nmr->nr_rx_slots = NM_BDG_MAXSLOTS;
-			tmp_na.num_rx_desc = nmr->nr_rx_slots;
-
-			iter = malloc(sizeof(*iter), M_DEVBUF, M_NOWAIT | M_ZERO);
-			if (!iter)
-				goto no_port;
-			strcpy(iter->if_xname, name);
-			tmp_na.ifp = iter;
-			/* bdg_netmap_attach creates a struct netmap_adapter */
-			bdg_netmap_attach(&tmp_na);
-		} else if (NETMAP_CAPABLE(iter)) { /* this is a NIC */
-			/* cannot attach the NIC that any user or another
-			 * bridge already holds.
-			 */
-			if (NETMAP_OWNED_BY_ANY(iter) || cand2 == -1) {
-ifunit_rele:
-				if_rele(iter); /* don't detach from bridge */
-				goto no_port;
-			}
-			/* bind the host stack to the bridge */
-			if (nmr->nr_arg1 == NETMAP_BDG_HOST) {
-				b->bdg_ports[cand2] = SWNA(iter);
-				SWNA(iter)->bdg_port = cand2;
-				SWNA(iter)->na_bdg = b;
-			}
-		} else { /* not a netmap-capable NIC */
-			goto ifunit_rele;
-		}
-		na = NA(iter);
-		na->bdg_port = cand;
-		/* bind the port to the bridge (virtual ports are not active) */
-		b->bdg_ports[cand] = na;
-		na->na_bdg = b;
-		ADD_BDG_REF(iter);
+	if (cand == -1) {
+		D("bridge full, cannot create new port");
+no_port:
 		BDG_WUNLOCK(b);
-		ND("attaching virtual bridge %p", b);
-	} while (0);
+		*ifp = NULL;
+		return EINVAL;
+	}
+	ND("create new bridge port %s", name);
+	/*
+	 * create a struct ifnet for the new port.
+	 * The forwarding table is attached to the kring(s).
+	 */
+	/*
+	 * try see if there is a matching NIC with this name
+	 * (after the bridge's name)
+	 */
+	iter = ifunit_ref(name + b->namelen + 1);
+	if (!iter) { /* this is a virtual port */
+		/* Create a temporary NA with arguments, then
+		 * bdg_netmap_attach() will allocate the real one
+		 * and attach it to the ifp
+		 */
+		struct netmap_adapter tmp_na;
+
+		if (nmr->nr_cmd) /* nr_cmd must be for a NIC */
+			goto no_port;
+		bzero(&tmp_na, sizeof(tmp_na));
+		/* bound checking */
+		if (nmr->nr_tx_rings < 1)
+			nmr->nr_tx_rings = 1;
+		if (nmr->nr_tx_rings > NM_BDG_MAXRINGS)
+			nmr->nr_tx_rings = NM_BDG_MAXRINGS;
+		tmp_na.num_tx_rings = nmr->nr_tx_rings;
+		if (nmr->nr_rx_rings < 1)
+			nmr->nr_rx_rings = 1;
+		if (nmr->nr_rx_rings > NM_BDG_MAXRINGS)
+			nmr->nr_rx_rings = NM_BDG_MAXRINGS;
+		tmp_na.num_rx_rings = nmr->nr_rx_rings;
+		if (nmr->nr_tx_slots < 1)
+			nmr->nr_tx_slots = NM_BRIDGE_RINGSIZE;
+		if (nmr->nr_tx_slots > NM_BDG_MAXSLOTS)
+			nmr->nr_tx_slots = NM_BDG_MAXSLOTS;
+		tmp_na.num_tx_desc = nmr->nr_tx_slots;
+		if (nmr->nr_rx_slots < 1)
+			nmr->nr_rx_slots = NM_BRIDGE_RINGSIZE;
+		if (nmr->nr_rx_slots > NM_BDG_MAXSLOTS)
+			nmr->nr_rx_slots = NM_BDG_MAXSLOTS;
+		tmp_na.num_rx_desc = nmr->nr_rx_slots;
+
+		/* XXX do we need M_NOWAIT ? */
+		iter = malloc(sizeof(*iter), M_DEVBUF, M_NOWAIT | M_ZERO);
+		if (!iter)
+			goto no_port;
+		strcpy(iter->if_xname, name);
+		tmp_na.ifp = iter;
+		/* bdg_netmap_attach creates a struct netmap_adapter */
+		bdg_netmap_attach(&tmp_na);
+	} else if (NETMAP_CAPABLE(iter)) { /* this is a NIC */
+		/* cannot attach the NIC that any user or another
+		 * bridge already holds.
+		 */
+		if (NETMAP_OWNED_BY_ANY(iter) || cand2 == -1) {
+ifunit_rele:
+			if_rele(iter); /* don't detach from bridge */
+			goto no_port;
+		}
+		/* bind the host stack to the bridge */
+		if (nmr->nr_arg1 == NETMAP_BDG_HOST) {
+			b->bdg_ports[cand2] = SWNA(iter);
+			SWNA(iter)->bdg_port = cand2;
+			SWNA(iter)->na_bdg = b;
+		}
+	} else { /* not a netmap-capable NIC */
+		goto ifunit_rele;
+	}
+	na = NA(iter);
+	na->bdg_port = cand;
+	/* bind the port to the bridge (virtual ports are not active) */
+	b->bdg_ports[cand] = na;
+	na->na_bdg = b;
+	ADD_BDG_REF(iter);
+	BDG_WUNLOCK(b);
+	ND("attaching virtual bridge %p", b);
+
+no_bridge_port:
 	*ifp = iter;
 	if (! *ifp)
-	*ifp = ifunit_ref(name);
+		*ifp = ifunit_ref(name);
 	if (*ifp == NULL)
 		return (ENXIO);
+
+port_found:
 	/* can do this if the capability exists and if_pspare[0]
 	 * points to the netmap descriptor.
 	 */
@@ -1795,8 +1807,6 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 	struct netmap_if *nifp = NULL;
 	int error;
 
-	na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
-
 	/* ring configuration may have changed, fetch from the card */
 	netmap_update_config(na);
 	priv->np_ifp = ifp;     /* store the reference */
@@ -1832,11 +1842,8 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 			SWNA(ifp)->tx_rings = &na->tx_rings[na->num_tx_rings];
 			SWNA(ifp)->rx_rings = &na->rx_rings[na->num_rx_rings];
 		}
-		if (na->na_bdg)
-			BDG_WLOCK(na->na_bdg);
 		error = na->nm_register(ifp, 1); /* mode on */
-		if (na->na_bdg)
-			BDG_WUNLOCK(na->na_bdg);
+		// XXX do we need to nm_alloc_bdgfwd() in all cases ?
 		if (!error)
 			error = nm_alloc_bdgfwd(na);
 		if (error) {
@@ -1849,7 +1856,6 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 	}
 out:
 	*err = error;
-	na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
 	return nifp;
 }
 
@@ -1942,7 +1948,6 @@ netmap_attach_sw(struct ifnet *ifp)
 	struct netmap_adapter *na = SWNA(ifp);
 
 	na->ifp = ifp;
-	na->separate_locks = 1;
 	na->nm_lock = netmap_swlock_wrapper;
 	na->num_rx_rings = na->num_tx_rings = 1;
 	na->num_tx_desc = hw_na->num_tx_desc;
@@ -1954,7 +1959,10 @@ netmap_attach_sw(struct ifnet *ifp)
 }
 
 
-/* exported to kernel callers */
+/* exported to kernel callers, e.g. OVS ?
+ * Entry point.
+ * Called without NMG_LOCK.
+ */
 int
 netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func)
 {
@@ -1978,13 +1986,14 @@ netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func)
 				error = EINVAL;
 				break;
 			}
+			NMG_LOCK();
 			b = nm_find_bridge(name, 0 /* don't create */);
 			if (!b) {
 				error = ENOENT;
+				NMG_UNLOCK();
 				break;
 			}
 
-			BDG_RLOCK(b);
 			error = ENOENT;
 			for (i = 0; i < NM_BDG_MAXPORTS; i++) {
 				na = b->bdg_ports[i];
@@ -2005,7 +2014,7 @@ netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func)
 					break;
 				}
 			}
-			BDG_RUNLOCK(b);
+			NMG_UNLOCK();
 		} else {
 			/* return the first non-empty entry starting from
 			 * bridge nr_arg1 and port nr_arg2.
@@ -2017,9 +2026,9 @@ netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func)
 			i = nmr->nr_arg1;
 			j = nmr->nr_arg2;
 
+			NMG_LOCK();
 			for (error = ENOENT; error && i < NM_BRIDGES; i++) {
 				b = nm_bridges + i;
-				BDG_RLOCK(b);
 				for (; j < NM_BDG_MAXPORTS; j++) {
 					na = b->bdg_ports[j];
 					if (na == NULL)
@@ -2032,9 +2041,9 @@ netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func)
 					error = 0;
 					break;
 				}
-				BDG_RUNLOCK(b);
 				j = 0; /* following bridges scan from 0 */
 			}
+			NMG_UNLOCK();
 		}
 		break;
 
@@ -2047,14 +2056,14 @@ netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func)
 			error = EINVAL;
 			break;
 		}
+		NMG_LOCK();
 		b = nm_find_bridge(name, 0 /* don't create */);
 		if (!b) {
 			error = EINVAL;
-			break;
+		} else {
+			b->nm_bdg_lookup = func;
 		}
-		BDG_WLOCK(b);
-		b->nm_bdg_lookup = func;
-		BDG_WUNLOCK(b);
+		NMG_UNLOCK();
 		break;
 
 	default:
@@ -2140,32 +2149,32 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			error = netmap_bdg_ctl(nmr, NULL);
 			break;
 		}
-		/* update configuration */
-		error = netmap_get_memory(priv);
-		ND("get_memory returned %d", error);
-		if (error)
-			break;
-		/* memsize is always valid */
-		nmr->nr_memsize = netmap_mem_get_totalsize(priv->np_mref);
-		nmr->nr_offset = 0;
-		nmr->nr_rx_slots = nmr->nr_tx_slots = 0;
-		if (nmr->nr_name[0] == '\0')	/* just get memory info */
-			break;
-		/* lock because get_ifp and update_config see na->refcount */
+
 		NMG_LOCK();
-		error = get_ifp(nmr, &ifp); /* get a refcount */
-		if (error) {
-			NMG_UNLOCK();
-			break;
-		}
-		na = NA(ifp); /* retrieve netmap_adapter */
-		netmap_update_config(na);
+		do {
+			/* update configuration */
+			error = netmap_get_memory_locked(priv);
+			ND("get_memory returned %d", error);
+			if (error)
+				break;
+			/* memsize is always valid */
+			nmr->nr_memsize = netmap_mem_get_totalsize(priv->np_mref);
+			nmr->nr_offset = 0;
+			nmr->nr_rx_slots = nmr->nr_tx_slots = 0;
+			if (nmr->nr_name[0] == '\0')	/* just get memory info */
+				break;
+			error = get_ifp(nmr, &ifp); /* get a refcount */
+			if (error)
+				break;
+			na = NA(ifp); /* retrieve netmap_adapter */
+			netmap_update_config(na);
+			nmr->nr_rx_rings = na->num_rx_rings;
+			nmr->nr_tx_rings = na->num_tx_rings;
+			nmr->nr_rx_slots = na->num_rx_desc;
+			nmr->nr_tx_slots = na->num_tx_desc;
+			nm_if_rele(ifp);	/* return the refcount */
+		} while (0);
 		NMG_UNLOCK();
-		nmr->nr_rx_rings = na->num_rx_rings;
-		nmr->nr_tx_rings = na->num_tx_rings;
-		nmr->nr_rx_slots = na->num_rx_desc;
-		nmr->nr_tx_slots = na->num_tx_desc;
-		nm_if_rele(ifp);	/* return the refcount */
 		break;
 
 	case NIOCREGIF:
@@ -2187,44 +2196,44 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 
 		/* protect access to priv from concurrent NIOCREGIF */
 		NMG_LOCK();
-		if (priv->np_ifp != NULL) {	/* thread already registered */
-			error = netmap_set_ringid(priv, nmr->nr_ringid);
-unlock_out:
-			NMG_UNLOCK();
-			break;
-		}
-		/* find the interface and a reference */
-		error = get_ifp(nmr, &ifp); /* keep reference */
-		if (error)
-			goto unlock_out;
-		if (NETMAP_OWNED_BY_KERN(ifp)) {
-			nm_if_rele(ifp);
-			goto unlock_out;
-		}
-		nifp = netmap_do_regif(priv, ifp, nmr->nr_ringid, &error);
-		if (!nifp) {    /* reg. failed, release priv and ref */
-			nm_if_rele(ifp);        /* return the refcount */
-			priv->np_ifp = NULL;
-			priv->np_nifp = NULL;
-			goto unlock_out;
-		}
+		do {
+			if (priv->np_ifp != NULL) {	/* thread already registered */
+				error = netmap_set_ringid(priv, nmr->nr_ringid);
+				break;
+			}
+			/* find the interface and a reference */
+			error = get_ifp(nmr, &ifp); /* keep reference */
+			if (error)
+				break;
+			if (NETMAP_OWNED_BY_KERN(ifp)) {
+				nm_if_rele(ifp);
+				break;
+			}
+			nifp = netmap_do_regif(priv, ifp, nmr->nr_ringid, &error);
+			if (!nifp) {    /* reg. failed, release priv and ref */
+				nm_if_rele(ifp);        /* return the refcount */
+				priv->np_ifp = NULL;
+				priv->np_nifp = NULL;
+				break;
+			}
 
-		/* the following assignment is a commitment.
-		 * Readers (i.e., poll and *SYNC) check for
-		 * np_nifp != NULL without locking
-		 */
-		wmb(); /* make sure previous writes are visible to all CPUs */
-		priv->np_nifp = nifp;
+			/* the following assignment is a commitment.
+			 * Readers (i.e., poll and *SYNC) check for
+			 * np_nifp != NULL without locking
+			 */
+			wmb(); /* make sure previous writes are visible to all CPUs */
+			priv->np_nifp = nifp;
+
+			/* return the offset of the netmap_if object */
+			na = NA(ifp); /* retrieve netmap adapter */
+			nmr->nr_rx_rings = na->num_rx_rings;
+			nmr->nr_tx_rings = na->num_tx_rings;
+			nmr->nr_rx_slots = na->num_rx_desc;
+			nmr->nr_tx_slots = na->num_tx_desc;
+			nmr->nr_memsize = netmap_mem_get_totalsize(na->nm_mem);
+			nmr->nr_offset = netmap_mem_if_offset(na->nm_mem, nifp);
+		} while (0);
 		NMG_UNLOCK();
-
-		/* return the offset of the netmap_if object */
-		na = NA(ifp); /* retrieve netmap adapter */
-		nmr->nr_rx_rings = na->num_rx_rings;
-		nmr->nr_tx_rings = na->num_tx_rings;
-		nmr->nr_rx_slots = na->num_rx_desc;
-		nmr->nr_tx_slots = na->num_tx_desc;
-		nmr->nr_memsize = netmap_mem_get_totalsize(na->nm_mem);
-		nmr->nr_offset = netmap_mem_if_offset(na->nm_mem, nifp);
 		break;
 
 	case NIOCUNREGIF:
@@ -2242,7 +2251,6 @@ unlock_out:
 			break;
 		}
 		rmb(); /* make sure following reads are not from cache */
-
 
 		ifp = priv->np_ifp;	/* we have a reference */
 
@@ -2303,14 +2311,19 @@ unlock_out:
 	default:	/* allow device-specific ioctls */
 	    {
 		struct socket so;
+
 		bzero(&so, sizeof(so));
+		NMG_LOCK();
 		error = get_ifp(nmr, &ifp); /* keep reference */
-		if (error)
+		if (error) {
+			NMG_UNLOCK();
 			break;
+		}
 		so.so_vnet = ifp->if_vnet;
 		// so->so_proto not null.
 		error = ifioctl(&so, cmd, data, td);
 		nm_if_rele(ifp);
+		NMG_UNLOCK();
 		break;
 	    }
 
@@ -2518,6 +2531,9 @@ do_retry_rx:
 				goto out;
 			}
 
+			/* XXX NR_FORWARD should only be read on
+			 * physical or NIC ports
+			 */
 			if (netmap_fwd ||kring->ring->flags & NR_FORWARD) {
 				ND(10, "forwarding some buffers up %d to %d",
 				    kring->nr_hwcur, kring->ring->cur);
@@ -2545,11 +2561,11 @@ do_retry_rx:
 		}
 	}
 
-	/* forward host to the netmap ring */
+	/* forward host to the netmap ring.
+	 * I am accessing nr_hwavail without lock, but netmap start
+	 * can only increment it, so the operation is safe.
+	 */
 	kring = &na->rx_rings[lim_rx];
-	if (kring->nr_hwavail > 0) {
-		ND("host rx %d has %d packets", lim_rx, kring->nr_hwavail);
-	}
 	if ( (priv->np_qlast == NETMAP_HW_RING) // XXX check_all
 			&& (netmap_fwd || kring->ring->flags & NR_FORWARD)
 			 && kring->nr_hwavail > 0 && !host_forwarded) {
@@ -2695,20 +2711,32 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n,
  * XXX this handles a packet from the host stack that goes
  * to the bridge. It might be possible to make it inline.
  * Also, if we support indirect buffers we can avoid the copy.
+ *
+ * XXX At the moment we protect this with NMG_LOCK(),
+ * because we need to avoid that the interface is deleted
+ * while we work on it.
  */
 
 /* XXX do we need locking ? is if_start() protected ? */
 static int
 bdg_netmap_start(struct ifnet *ifp, struct mbuf *m)
 {
-	struct netmap_adapter *na = SWNA(ifp);
-	struct nm_bdg_fwd *ft = na->rx_rings[0].nkr_ft;
 	u_int len = MBUF_LEN(m);
-	char *buf = BDG_NMB(na->nm_mem, &na->rx_rings[0].ring->slot[0]);
+	struct netmap_adapter *na;
+	struct nm_bdg_fwd *ft;
+	char *buf;
+
+	NMG_LOCK();
+	// XXX check that we are in netmap mode etc. etc. TODO
+	na = SWNA(ifp);
+	ft = na->rx_rings[0].nkr_ft;
+	buf = BDG_NMB(na->nm_mem, &na->rx_rings[0].ring->slot[0]);
 
 	/* use slot 0, there is nothing queued here */
-	if (!na->na_bdg) /* SWNA is not configured to be attached */
+	if (!na->na_bdg) { /* SWNA is not configured to be attached */
+		NMG_UNLOCK();
 		return EBUSY;
+	}
 	/* XXX we can save the copy calling m_copydata in nm_bdg_flush,
 	 * need a special flag for this.
 	 */
@@ -2721,7 +2749,7 @@ bdg_netmap_start(struct ifnet *ifp, struct mbuf *m)
 	if (netmap_verbose & NM_VERB_HOST)
 		RD(5, "pkt %p size %d to bridge", buf, len);
 	nm_bdg_flush(ft, 1, na, 0);
-
+	NMG_UNLOCK();
 	/* release the mbuf in either cases of success or failure. As an
 	 * alternative, put the mbuf in a free list and free the list
 	 * only when really necessary.
@@ -2740,6 +2768,8 @@ bdg_netmap_start(struct ifnet *ifp, struct mbuf *m)
 int
 netmap_start(struct ifnet *ifp, struct mbuf *m)
 {
+	// XXX same problem as for bdg_netmap_start, TODO
+
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[na->num_rx_rings];
 	u_int i, len = MBUF_LEN(m);
@@ -2811,7 +2841,7 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
 	/* XXX note- in the new scheme, we are not guaranteed to be
 	 * under lock (e.g. when called on a device reset).
 	 * In this case, we should set a flag and do not trust too
-	 * much the values. In practice:
+	 * much the values. In practice: TODO
 	 * - set a RESET flag somewhere in the kring
 	 * - do the processing in a conservative way
 	 * - let the *sync() fixup at the end.
@@ -2914,12 +2944,8 @@ nm_bdg_preflush(struct netmap_adapter *na, u_int ring_nr,
 
 
 /*
- * Pass packets from nic to the bridge. Must be called with
- * proper locks on the source interface.
- * We are called with lock held, but must drop it before the
- * rxsync routine which can potentially sleep.
- * To avoid races, kring->flags & NKR_RBUSY is set by the first
- * client entering the routine, others just return with nothing done.
+ * Pass packets from nic to the bridge.
+ * XXX TODO check locking
  *
  * Note, no user process can access this NIC so we can ignore
  * the info in the 'ring'.
@@ -3260,20 +3286,18 @@ nm_bridge_rthash(const uint8_t *addr)
 static int
 bdg_netmap_reg(struct ifnet *ifp, int onoff)
 {
-	// struct nm_bridge *b = NA(ifp)->na_bdg;
+	struct nm_bridge *b = NA(ifp)->na_bdg;
 
 	/* the interface is already attached to the bridge,
 	 * so we only need to toggle IFCAP_NETMAP.
-	 * Locking is not necessary (we are already under
-	 * NMG_LOCK, and the port is not in use during this call).
 	 */
-	/* BDG_WLOCK(b); */
+	BDG_WLOCK(b); // XXX maybe just atomic ?
 	if (onoff) {
 		ifp->if_capenable |= IFCAP_NETMAP;
 	} else {
 		ifp->if_capenable &= ~IFCAP_NETMAP;
 	}
-	/* BDG_WUNLOCK(b); */
+	BDG_WUNLOCK(b);
 	return 0;
 }
 
@@ -3648,7 +3672,7 @@ retry:
  * we must run nm_bdg_preflush without lock.
  */
 static int
-bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
@@ -3678,8 +3702,7 @@ done:
 	kring->nr_hwcur = j;
 	ring->avail = kring->nr_hwavail;
 	if (netmap_verbose)
-		D("%s ring %d lock %d", ifp->if_xname, ring_nr, do_lock);
-	nm_kr_put(kring);
+		D("%s ring %d flags %d", ifp->if_xname, ring_nr, flags);
 	return 0;
 }
 
@@ -3691,7 +3714,7 @@ done:
  * writers on the same queue.
  */
 static int
-bdg_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+bdg_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
@@ -3797,8 +3820,6 @@ netmap_init(void)
 	netmap_dev = make_dev(&netmap_cdevsw, 0, UID_ROOT, GID_WHEEL, 0660,
 			      "netmap");
 
-	mtx_init(&netmap_bridge_mutex, "netmap_bridge_mutex",
-		MTX_NETWORK_LOCK, MTX_DEF);
 	bzero(nm_bridges, sizeof(struct nm_bridge) * NM_BRIDGES); /* safety */
 	for (i = 0; i < NM_BRIDGES; i++)
 		BDG_RWINIT(&nm_bridges[i]);
