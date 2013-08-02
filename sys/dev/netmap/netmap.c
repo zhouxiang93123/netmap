@@ -176,14 +176,6 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 241723 2012-10-19 09:41:45Z gle
 #define BDG_RUNLOCK(b)		sx_sunlock(&(b)->bdg_lock)
 
 
-
-/* set/get variables. OS-specific macros may wrap these
- * assignments into read/write lock or similar
- */
-#define BDG_SET_VAR(lval, p)	(lval = p)
-#define BDG_GET_VAR(lval)	(lval)
-#define BDG_FREE(p)		free(p, M_DEVBUF)
-
 /* netmap global lock */
 #define NMG_LOCK_T		struct mtx
 #define NMG_LOCK_INIT()		mtx_init(&netmap_global_lock, "netmap global lock", NULL, MTX_DEF)
@@ -974,16 +966,16 @@ nm_if_rele(struct ifnet *ifp)
 	 * and this lets us scan the list inline.
 	 */
 	for (i = 0; i < NM_BDG_MAXPORTS; i++) {
-		struct netmap_adapter *tmp = BDG_GET_VAR(b->bdg_ports[i]);
+		struct netmap_adapter *tmp = b->bdg_ports[i];
 
 		if (tmp == na) {
 			/* disconnect from bridge */
-			BDG_SET_VAR(b->bdg_ports[i], NULL);
+			b->bdg_ports[i] = NULL;
 			na->na_bdg = NULL;
 			if (is_hw && SWNA(ifp)->na_bdg) {
 				/* disconnect sw adapter too */
 				int j = SWNA(ifp)->bdg_port;
-				BDG_SET_VAR(b->bdg_ports[j], NULL);
+				b->bdg_ports[j] = NULL;
 				SWNA(ifp)->na_bdg = NULL;
 			}
 		} else if (tmp != NULL) {
@@ -1560,7 +1552,7 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp)
 		BDG_WLOCK(b);
 		/* lookup in the local list of ports */
 		for (i = 0; i < NM_BDG_MAXPORTS; i++) {
-			na = BDG_GET_VAR(b->bdg_ports[i]);
+			na = b->bdg_ports[i];
 			if (na == NULL) {
 				if (cand == -1)
 					cand = i; /* potential insert point */
@@ -1648,7 +1640,7 @@ ifunit_rele:
 			}
 			/* bind the host stack to the bridge */
 			if (nmr->nr_arg1 == NETMAP_BDG_HOST) {
-				BDG_SET_VAR(b->bdg_ports[cand2], SWNA(iter));
+				b->bdg_ports[cand2] = SWNA(iter);
 				SWNA(iter)->bdg_port = cand2;
 				SWNA(iter)->na_bdg = b;
 			}
@@ -1658,7 +1650,7 @@ ifunit_rele:
 		na = NA(iter);
 		na->bdg_port = cand;
 		/* bind the port to the bridge (virtual ports are not active) */
-		BDG_SET_VAR(b->bdg_ports[cand], na);
+		b->bdg_ports[cand] = na;
 		na->na_bdg = b;
 		ADD_BDG_REF(iter);
 		BDG_WUNLOCK(b);
@@ -1995,7 +1987,7 @@ netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func)
 			BDG_RLOCK(b);
 			error = ENOENT;
 			for (i = 0; i < NM_BDG_MAXPORTS; i++) {
-				na = BDG_GET_VAR(b->bdg_ports[i]);
+				na = b->bdg_ports[i];
 				if (na == NULL)
 					continue;
 				iter = na->ifp;
@@ -2029,7 +2021,7 @@ netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func)
 				b = nm_bridges + i;
 				BDG_RLOCK(b);
 				for (; j < NM_BDG_MAXPORTS; j++) {
-					na = BDG_GET_VAR(b->bdg_ports[j]);
+					na = b->bdg_ports[j];
 					if (na == NULL)
 						continue;
 					iter = na->ifp;
@@ -3387,7 +3379,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		else if (dst_port == NM_BDG_BROADCAST)
 			dst_ring = 0; /* broadcasts always go to ring 0 */
 		else if (unlikely(dst_port == me ||
-		    !BDG_GET_VAR(b->bdg_ports[dst_port])))
+		    !b->bdg_ports[dst_port]))
 			continue;
 
 		/* get a position in the scratch pad */
@@ -3418,7 +3410,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 	if (brddst->bq_head != NM_FT_NULL) {
 		for (i = 0; likely(i < NM_BDG_MAXPORTS); i++) {
 			uint16_t d_i = i * NM_BDG_MAXRINGS;
-			if (unlikely(i == me) || !BDG_GET_VAR(b->bdg_ports[i]))
+			if (unlikely(i == me) || !b->bdg_ports[i])
 				continue;
 			else if (dst_ents[d_i].bq_head == NM_FT_NULL)
 				dsts[num_dsts++] = d_i;
@@ -3442,7 +3434,8 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		d_i = dsts[i];
 		ND("second pass %d port %d", i, d_i);
 		d = dst_ents + d_i;
-		dst_na = BDG_GET_VAR(b->bdg_ports[d_i/NM_BDG_MAXRINGS]);
+		// XXX fix the division
+		dst_na = b->bdg_ports[d_i/NM_BDG_MAXRINGS];
 		/* protect from the lookup function returning an inactive
 		 * destination port
 		 */
