@@ -80,7 +80,6 @@ cxgbe_netmap_attach(struct port_info *pi)
 	na.num_rx_desc = 0; // XXX qsize  pi->num_rx_desc;
 	na.nm_txsync = cxgbe_netmap_txsync;
 	na.nm_rxsync = cxgbe_netmap_rxsync;
-	na.nm_lock = cxgbe_netmap_lock_wrapper;
 	na.nm_register = cxgbe_netmap_reg;
 	/*
 	 * adapter->rx_mbuf_sz is set by SIOCSETMTU, but in netmap mode
@@ -90,40 +89,6 @@ cxgbe_netmap_attach(struct port_info *pi)
 	na.buff_size = NETMAP_BUF_SIZE;
 	netmap_attach(&na, pi->ntxq);
 }	
-
-
-/*
- * wrapper to export locks to the generic code
- */
-static void
-cxgbe_netmap_lock_wrapper(void *_a, int what, u_int queueid)
-{
-#if 0
-	struct adapter *adapter = _a;
-
-	ASSERT(queueid < adapter->num_queues);
-	switch (what) {
-	case NETMAP_CORE_LOCK:
-		IXGBE_CORE_LOCK(adapter);
-		break;
-	case NETMAP_CORE_UNLOCK:
-		IXGBE_CORE_UNLOCK(adapter);
-		break;
-	case NETMAP_TX_LOCK:
-		IXGBE_TX_LOCK(&adapter->tx_rings[queueid]);
-		break;
-	case NETMAP_TX_UNLOCK:
-		IXGBE_TX_UNLOCK(&adapter->tx_rings[queueid]);
-		break;
-	case NETMAP_RX_LOCK:
-		IXGBE_RX_LOCK(&adapter->rx_rings[queueid]);
-		break;
-	case NETMAP_RX_UNLOCK:
-		IXGBE_RX_UNLOCK(&adapter->rx_rings[queueid]);
-		break;
-	}
-#endif
-}
 
 
 /*

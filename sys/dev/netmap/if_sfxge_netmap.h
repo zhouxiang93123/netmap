@@ -91,24 +91,6 @@ sfxge_netmap_init_buffers(struct sfxge_softc *sc)
 	return 0;
 }
 
-/*
- * wrapper to export locks to the generic netmap code.
- */
-static void
-sfxge_netmap_lock_wrapper(struct ifnet *ifp, int what, u_int queueid)
-{
-	struct sfxge_softc *sc = ifp->if_softc;
-
-	switch (what) {
-	case NETMAP_CORE_LOCK:
-		sx_xlock(&sc->softc_lock);
-		break;
-	case NETMAP_CORE_UNLOCK:
-		sx_xunlock(&sc->softc_lock);
-		break;
-	}
-}
-
 
 /*
  * Register/unregister. We are already under core lock.
@@ -448,7 +430,6 @@ sfxge_netmap_attach(struct sfxge_softc *sc)
 	na.num_rx_desc = SFXGE_NDESCS;
 	na.nm_txsync = sfxge_netmap_txsync;
 	na.nm_rxsync = sfxge_netmap_rxsync;
-	na.nm_lock = sfxge_netmap_lock_wrapper;
 	na.nm_register = sfxge_netmap_reg;
 	na.num_tx_rings = SFXGE_TXQ_NTYPES + SFXGE_RX_SCALE_MAX;
 	netmap_attach(&na, SFXGE_RX_SCALE_MAX);

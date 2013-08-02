@@ -18,27 +18,6 @@
 
 
 /*
- * wrapper to export locks to the generic code
- * bge does not have separate tx/rx locks
- */
-static void
-bge_netmap_lock_wrapper(void *_a, int what, u_int queueid)
-{
-	struct bge_softc *adapter = _a;
-
-	D("called for %d", what);
-	switch (what) {
-	case NETMAP_CORE_LOCK:
-		BGE_LOCK(adapter);
-		break;
-	case NETMAP_CORE_UNLOCK:
-		BGE_UNLOCK(adapter);
-		break;
-	}
-}
-
-
-/*
  * support for netmap register/unregisted. We are already under core lock.
  * only called on the first register or the last unregister.
  */
@@ -403,7 +382,6 @@ bge_netmap_attach(struct bge_softc *sc)
 	na.num_rx_desc = BGE_STD_RX_RING_CNT;
 	na.nm_txsync = bge_netmap_txsync;
 	na.nm_rxsync = bge_netmap_rxsync;
-	na.nm_lock = bge_netmap_lock_wrapper;
 	na.nm_register = bge_netmap_reg;
 	netmap_attach(&na, 1);
 }

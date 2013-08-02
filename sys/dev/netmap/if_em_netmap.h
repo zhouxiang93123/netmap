@@ -43,24 +43,6 @@ static void	em_netmap_block_tasks(struct adapter *);
 static void	em_netmap_unblock_tasks(struct adapter *);
 
 
-static void
-em_netmap_lock_wrapper(struct ifnet *ifp, int what, u_int queueid)
-{
-	struct adapter *adapter = ifp->if_softc;
-
-	D("called for %d", what);
-	ASSERT(queueid < adapter->num_queues);
-	switch (what) {
-	case NETMAP_CORE_LOCK:
-		EM_CORE_LOCK(adapter);
-		break;
-	case NETMAP_CORE_UNLOCK:
-		EM_CORE_UNLOCK(adapter);
-		break;
-	}
-}
-
-
 // XXX do we need to block/unblock the tasks ?
 static void
 em_netmap_block_tasks(struct adapter *adapter)
@@ -359,7 +341,6 @@ em_netmap_attach(struct adapter *adapter)
 	na.num_rx_desc = adapter->num_rx_desc;
 	na.nm_txsync = em_netmap_txsync;
 	na.nm_rxsync = em_netmap_rxsync;
-	na.nm_lock = em_netmap_lock_wrapper;
 	na.nm_register = em_netmap_reg;
 	netmap_attach(&na, adapter->num_queues);
 }

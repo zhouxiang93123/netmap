@@ -72,25 +72,6 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, ix_rx_miss,
 SYSCTL_INT(_dev_netmap, OID_AUTO, ix_rx_miss_bufs,
     CTLFLAG_RW, &ix_rx_miss_bufs, 0, "potentially missed rx intr bufs");
 
-/*
- * wrapper to export locks to the generic netmap code.
- */
-static void
-ixgbe_netmap_lock_wrapper(struct ifnet *_a, int what, u_int queueid)
-{
-	struct adapter *adapter = _a->if_softc;
-
-	ASSERT(queueid < adapter->num_queues);
-	switch (what) {
-	case NETMAP_CORE_LOCK:
-		IXGBE_CORE_LOCK(adapter);
-		break;
-	case NETMAP_CORE_UNLOCK:
-		IXGBE_CORE_UNLOCK(adapter);
-		break;
-	}
-}
-
 
 static void
 set_crcstrip(struct ixgbe_hw *hw, int onoff)
@@ -578,7 +559,6 @@ ixgbe_netmap_attach(struct adapter *adapter)
 	na.num_rx_desc = adapter->num_rx_desc;
 	na.nm_txsync = ixgbe_netmap_txsync;
 	na.nm_rxsync = ixgbe_netmap_rxsync;
-	na.nm_lock = ixgbe_netmap_lock_wrapper;
 	na.nm_register = ixgbe_netmap_reg;
 	netmap_attach(&na, adapter->num_queues);
 }	

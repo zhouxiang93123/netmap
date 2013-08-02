@@ -39,23 +39,6 @@
 #include <dev/netmap/netmap_kern.h>
 
 
-static void
-lem_netmap_lock_wrapper(struct ifnet *ifp, int what, u_int ringid)
-{
-	struct adapter *adapter = ifp->if_softc;
-
-	/* only one ring here so ignore the ringid */
-	switch (what) {
-	case NETMAP_CORE_LOCK:
-		EM_CORE_LOCK(adapter);
-		break;
-	case NETMAP_CORE_UNLOCK:
-		EM_CORE_UNLOCK(adapter);
-		break;
-	}
-}
-
-
 /*
  * Register/unregister
  */
@@ -332,7 +315,6 @@ lem_netmap_attach(struct adapter *adapter)
 	na.num_rx_desc = adapter->num_rx_desc;
 	na.nm_txsync = lem_netmap_txsync;
 	na.nm_rxsync = lem_netmap_rxsync;
-	na.nm_lock = lem_netmap_lock_wrapper;
 	na.nm_register = lem_netmap_reg;
 	netmap_attach(&na, 1);
 }

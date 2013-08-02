@@ -39,26 +39,6 @@
 
 
 /*
- * wrapper to export locks to the generic code
- */
-static void
-igb_netmap_lock_wrapper(struct ifnet *ifp, int what, u_int queueid)
-{
-	struct adapter *adapter = ifp->if_softc;
-
-	ASSERT(queueid < adapter->num_queues);
-	switch (what) {
-	case NETMAP_CORE_LOCK:
-		IGB_CORE_LOCK(adapter);
-		break;
-	case NETMAP_CORE_UNLOCK:
-		IGB_CORE_UNLOCK(adapter);
-		break;
-	}
-}
-
-
-/*
  * register-unregister routine
  */
 static int
@@ -326,7 +306,6 @@ igb_netmap_attach(struct adapter *adapter)
 	na.num_rx_desc = adapter->num_rx_desc;
 	na.nm_txsync = igb_netmap_txsync;
 	na.nm_rxsync = igb_netmap_rxsync;
-	na.nm_lock = igb_netmap_lock_wrapper;
 	na.nm_register = igb_netmap_reg;
 	netmap_attach(&na, adapter->num_queues);
 }	

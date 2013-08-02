@@ -39,26 +39,6 @@
 
 
 /*
- * wrapper to export locks to the generic code
- * We should not use the tx/rx locks
- */
-static void
-re_netmap_lock_wrapper(struct ifnet *ifp, int what, u_int queueid)
-{
-	struct rl_softc *adapter = ifp->if_softc;
-
-	switch (what) {
-	case NETMAP_CORE_LOCK:
-		RL_LOCK(adapter);
-		break;
-	case NETMAP_CORE_UNLOCK:
-		RL_UNLOCK(adapter);
-		break;
-	}
-}
-
-
-/*
  * support for netmap register/unregisted. We are already under core lock.
  * only called on the first register or the last unregister.
  */
@@ -396,7 +376,6 @@ re_netmap_attach(struct rl_softc *sc)
 	na.num_rx_desc = sc->rl_ldata.rl_rx_desc_cnt;
 	na.nm_txsync = re_netmap_txsync;
 	na.nm_rxsync = re_netmap_rxsync;
-	na.nm_lock = re_netmap_lock_wrapper;
 	na.nm_register = re_netmap_reg;
 	netmap_attach(&na, 1);
 }

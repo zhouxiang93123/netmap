@@ -392,7 +392,7 @@ struct netmap_adapter {
 	NM_LOCK_T core_lock;	/* used if no device lock available */
 
 	int (*nm_register)(struct ifnet *, int onoff);
-	void (*nm_lock)(struct ifnet *, int what, u_int ringid);
+
 	int (*nm_txsync)(struct ifnet *, u_int ring, int flags);
 	int (*nm_rxsync)(struct ifnet *, u_int ring, int flags);
 #define NAF_FORCE_READ    1
@@ -444,20 +444,6 @@ struct netmap_adapter {
 
 #define NETMAP_DELETING(_na)  (  ((_na)->refcount == 0) &&	\
 	( (_na)->ifp->if_capenable & IFCAP_NETMAP) )
-
-/*
- * parameters for (*nm_lock)(adapter, what, index)
- */
-enum {
-	NETMAP_NO_LOCK = 0,
-	NETMAP_CORE_LOCK, NETMAP_CORE_UNLOCK,
-#ifdef __FreeBSD__
-#define	NETMAP_REG_LOCK		NETMAP_CORE_LOCK
-#define	NETMAP_REG_UNLOCK	NETMAP_CORE_UNLOCK
-#else
-	NETMAP_REG_LOCK, NETMAP_REG_UNLOCK
-#endif
-};
 
 
 /*

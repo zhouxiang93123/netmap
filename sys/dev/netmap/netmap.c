@@ -944,6 +944,10 @@ netmap_dtor_locked(void *data)
 		if (nma_is_hw(na))
 			SWNA(ifp)->tx_rings = SWNA(ifp)->rx_rings = NULL;
 	}
+	/*
+	 * netmap_mem_if_delete() deletes the nifp, and if this is
+	 * the last instance also buffers, rings and krings.
+	 */
 	netmap_mem_if_delete(na, nifp);
 }
 
@@ -1043,9 +1047,7 @@ netmap_dtor(void *data)
 		// XXX why do we need these two locks ?
 		if (na->na_bdg)
 			BDG_WLOCK(na->na_bdg);
-		na->nm_lock(ifp, NETMAP_REG_LOCK, 0);
 		netmap_dtor_locked(data);
-		na->nm_lock(ifp, NETMAP_REG_UNLOCK, 0);
 		if (na->na_bdg)
 			BDG_WUNLOCK(na->na_bdg);
 
@@ -1756,7 +1758,6 @@ netmap_set_ringid(struct netmap_priv_d *priv, u_int ringid)
 	struct netmap_adapter *na = NA(ifp);
 	u_int i = ringid & NETMAP_RING_MASK;
 	/* initially (np_qfirst == np_qlast) we don't want to lock */
-	int need_lock = (priv->np_qfirst != priv->np_qlast);
 	u_int lim = na->num_rx_rings;
 
 	if (na->num_tx_rings > lim)
@@ -1765,8 +1766,6 @@ netmap_set_ringid(struct netmap_priv_d *priv, u_int ringid)
 		D("invalid ring id %d", i);
 		return (EINVAL);
 	}
-	if (need_lock)
-		na->nm_lock(ifp, NETMAP_CORE_LOCK, 0);
 	priv->np_ringid = ringid;
 	if (ringid & NETMAP_SW_RING) {
 		priv->np_qfirst = NETMAP_SW_RING;
@@ -1779,8 +1778,6 @@ netmap_set_ringid(struct netmap_priv_d *priv, u_int ringid)
 		priv->np_qlast = NETMAP_HW_RING ;
 	}
 	priv->np_txpoll = (ringid & NETMAP_NO_TX_POLL) ? 0 : 1;
-	if (need_lock)
-		na->nm_lock(ifp, NETMAP_CORE_UNLOCK, 0);
     if (netmap_verbose) {
 	if (ringid & NETMAP_SW_RING)
 		D("ringid %s set to SW RING", ifp->if_xname);
@@ -1923,16 +1920,6 @@ free_exit:
 }
 
 
-/* CORE_LOCK is not necessary */
-static void
-netmap_swlock_wrapper(struct ifnet *dev, int what, u_int queueid)
-{
-	struct netmap_adapter *na = SWNA(dev);
-
-	D("called but invalid for %d on %p", what, na);
-}
-
-
 /* Initialize necessary fields of sw adapter located in right after hw's
  * one.  sw adapter attaches a pair of sw rings of the netmap-mode NIC.
  * It is always activated and deactivated at the same tie with the hw's one.
@@ -1948,7 +1935,6 @@ netmap_attach_sw(struct ifnet *ifp)
 	struct netmap_adapter *na = SWNA(ifp);
 
 	na->ifp = ifp;
-	na->nm_lock = netmap_swlock_wrapper;
 	na->num_rx_rings = na->num_tx_rings = 1;
 	na->num_tx_desc = hw_na->num_tx_desc;
 	na->num_rx_desc = hw_na->num_rx_desc;
@@ -2587,33 +2573,6 @@ out:
 
 
 /*
- * default lock wrapper.
- */
-static void
-netmap_lock_wrapper(struct ifnet *dev, int what, u_int queueid)
-{
-	struct netmap_adapter *na = NA(dev);
-
-	switch (what) {
-#ifdef linux	/* some systems do not need lock on register */
-	case NETMAP_REG_LOCK:
-	case NETMAP_REG_UNLOCK:
-		break;
-#endif /* linux */
-
-	case NETMAP_CORE_LOCK:
-		mtx_lock(&na->core_lock);
-		break;
-
-	case NETMAP_CORE_UNLOCK:
-		mtx_unlock(&na->core_lock);
-		break;
-
-	}
-}
-
-
-/*
  * Initialize a ``netmap_adapter`` object created by driver on attach.
  * We allocate a block of memory with room for a struct netmap_adapter
  * plus two sets of N+2 struct netmap_kring (where N is the number
@@ -2650,10 +2609,6 @@ netmap_attach(struct netmap_adapter *arg, u_int num_queues)
 	na->refcount = na->na_single = na->na_multi = 0;
 	/* Core lock initialized here, others after netmap_if_new. */
 	mtx_init(&na->core_lock, "netmap core lock", MTX_NETWORK_LOCK, MTX_DEF);
-	if (na->nm_lock == NULL) {
-		ND("using default locks for %s", ifp->if_xname);
-		na->nm_lock = netmap_lock_wrapper;
-	}
 #ifdef linux
 	if (ifp->netdev_ops) {
 		ND("netdev_ops %p", ifp->netdev_ops);
