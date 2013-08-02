@@ -73,7 +73,7 @@ Within the kernel, access to the netmap rings is protected as follows:
 
 - a spinlock on each ring, to handle producer/consumer races on
   RX rings attached to the host stack (against multiple host
-  threads writing fro the host stack to the same ring),
+  threads writing from the host stack to the same ring),
   and on 'destination' rings attached to a VALE switch
   (i.e. RX rings in VALE ports, and TX rings in NIC/host ports)
   protecting multiple active senders for the same destination)
@@ -98,26 +98,29 @@ Within the kernel, access to the netmap rings is protected as follows:
   On linux there is an external lock on the tx path, which probably
   also arbitrates access to the reset routine. XXX to be revised
 
-- a global lock protecting configuration of the interface
-  (to be revised)
+- a per-interface core_lock protecting access from the host stack
+  while interfaces may be detached from netmap mode.
+
 
 --- VALE SWITCH ---
 
-A spinlock protects requests to add/delete switches.
+NMG_LOCK() serializes all modifications to switches and ports.
 A switch cannot be deleted until all ports are gone.
 
 For each switch, an SX lock (RWlock on linux) protects
 deletion of ports. When configuring or deleting a new port, the
-lock is acquired in exclusive mode.
-When forwarding, the lock is acquired in shared mode.
+lock is acquired in exclusive mode (after holding NMG_LOCK).
+When forwarding, the lock is acquired in shared mode (without NMG_LOCK).
 The lock is held throughout the entire forwarding cycle,
 during which the thread may incur in a page fault.
 Hence it is important that sleepable shared locks are used.
 
-On the rx port, the lock is grabbed initially to reserve
+On the rx ring, the per-port lock is grabbed initially to reserve
 a number of slot in the ring, then the lock is released,
 packets are copied from source to destination, and then
 the lock is acquired again and the receive ring is updated.
+(A similar thing is done on the tx ring for NIC and host stack
+ports attached to the switch)
 
  */
 
@@ -274,10 +277,14 @@ if_rele(struct net_device *ifp)
 
 MALLOC_DEFINE(M_NETMAP, "netmap", "Network memory map");
 
-/* XXX the following variables must be deprecated and included in nm_mem */
+/*
+ * The following variables are used by the drivers and replicate
+ * fields in the global memory pool. They only refer to buffers
+ * used by physical interfaces.
+ */
 u_int netmap_total_buffers;
 u_int netmap_buf_size;
-char *netmap_buffer_base;	/* address of an invalid buffer */
+char *netmap_buffer_base;	/* also address of an invalid buffer */
 
 /* user-controlled variables */
 int netmap_verbose;
@@ -921,7 +928,9 @@ netmap_dtor_locked(void *data)
 		 * away. This means we cannot have any pending poll()
 		 * or interrupt routine operating on the structure.
 		 */
+		mtx_lock(&na->core_lock);
 		na->nm_register(ifp, 0); /* off, clear IFCAP_NETMAP */
+		mtx_unlock(&na->core_lock);
 		/* Wake up any sleeping threads. netmap_poll will
 		 * then return POLLERR
 		 */
@@ -1042,22 +1051,14 @@ netmap_dtor(void *data)
 	}
 #endif /* __FreeBSD__ */
 	if (ifp) {
-		struct netmap_adapter *na = NA(ifp);
-
-		// XXX why do we need these two locks ?
-		if (na->na_bdg)
-			BDG_WLOCK(na->na_bdg);
 		netmap_dtor_locked(data);
-		if (na->na_bdg)
-			BDG_WUNLOCK(na->na_bdg);
-
 		nm_if_rele(ifp); /* might also destroy *na */
 	}
 	if (priv->np_mref) {
 		netmap_mem_deref(priv->np_mref);
 	}
 	NMG_UNLOCK();
-	bzero(priv, sizeof(*priv));	/* XXX for safety */
+	bzero(priv, sizeof(*priv));	/* for safety */
 	free(priv, M_DEVBUF);
 }
 
@@ -1068,8 +1069,6 @@ netmap_dtor(void *data)
  * In order to track whether pages are still mapped, we hook into
  * the standard cdev_pager and intercept the constructor and
  * destructor.
- * XXX but then ? Do we really use the information ?
- * Need to investigate.
  */
 
 struct netmap_vm_handle_t {
@@ -1478,6 +1477,7 @@ netmap_sync_from_host(struct netmap_adapter *na, struct thread *td, void *pwait)
 
 	(void)pwait;	/* disable unused warnings */
 
+	/* XXX as an optimization we could reuse na->core_lock */
 	mtx_lock(&kring->q_lock);
 	if (k >= lim) {
 		netmap_ring_reinit(kring);
@@ -2662,75 +2662,31 @@ int
 nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n,
 	struct netmap_adapter *na, u_int ring_nr);
 
-/*
- * XXX this handles a packet from the host stack that goes
- * to the bridge. It might be possible to make it inline.
- * Also, if we support indirect buffers we can avoid the copy.
- *
- * XXX At the moment we protect this with NMG_LOCK(),
- * because we need to avoid that the interface is deleted
- * while we work on it.
- */
-
-/* XXX do we need locking ? is if_start() protected ? */
-static int
-bdg_netmap_start(struct ifnet *ifp, struct mbuf *m)
-{
-	u_int len = MBUF_LEN(m);
-	struct netmap_adapter *na;
-	struct nm_bdg_fwd *ft;
-	char *buf;
-
-	NMG_LOCK();
-	// XXX check that we are in netmap mode etc. etc. TODO
-	na = SWNA(ifp);
-	ft = na->rx_rings[0].nkr_ft;
-	buf = BDG_NMB(na->nm_mem, &na->rx_rings[0].ring->slot[0]);
-
-	/* use slot 0, there is nothing queued here */
-	if (!na->na_bdg) { /* SWNA is not configured to be attached */
-		NMG_UNLOCK();
-		return EBUSY;
-	}
-	/* XXX we can save the copy calling m_copydata in nm_bdg_flush,
-	 * need a special flag for this.
-	 */
-	m_copydata(m, 0, (int)len, buf);
-	ft->ft_flags = 0;
-	ft->ft_len = len;
-	ft->ft_buf = buf;
-	ft->ft_next = NM_FT_NULL;
-	ft->ft_frags = 1;
-	if (netmap_verbose & NM_VERB_HOST)
-		RD(5, "pkt %p size %d to bridge", buf, len);
-	nm_bdg_flush(ft, 1, na, 0);
-	NMG_UNLOCK();
-	/* release the mbuf in either cases of success or failure. As an
-	 * alternative, put the mbuf in a free list and free the list
-	 * only when really necessary.
-	 */
-	m_freem(m);
-
-	return (0);
-}
-
 
 /*
  * Intercept packets from the network stack and pass them
  * to netmap as incoming packets on the 'software' ring.
- * We are not locked when called.
+ * We are not locked when called. na is always there, so
+ * we can protect from deletions using a lock in the *na
  */
 int
 netmap_start(struct ifnet *ifp, struct mbuf *m)
 {
-	// XXX same problem as for bdg_netmap_start, TODO
-
 	struct netmap_adapter *na = NA(ifp);
-	struct netmap_kring *kring = &na->rx_rings[na->num_rx_rings];
+	struct netmap_kring *kring;
 	u_int i, len = MBUF_LEN(m);
-	u_int error = EBUSY, lim = kring->nkr_num_slots - 1;
+	u_int error = EBUSY, lim;
 	struct netmap_slot *slot;
 
+	mtx_lock(&na->core_lock);
+	if ( (ifp->if_capenable & IFCAP_NETMAP) == 0) {
+		/* interface not in netmap mode anymore */
+		error = ENXIO;
+		goto done;
+	}
+
+	kring = &na->rx_rings[na->num_rx_rings];
+	lim = kring->nkr_num_slots - 1;
 	if (netmap_verbose & NM_VERB_HOST)
 		D("%s packet %d len %d from the stack", ifp->if_xname,
 			kring->nr_hwcur + kring->nr_hwavail, len);
@@ -2738,33 +2694,54 @@ netmap_start(struct ifnet *ifp, struct mbuf *m)
 	if (len > NETMAP_BDG_BUF_SIZE(na->nm_mem)) { /* too long for us */
 		D("%s from_host, drop packet size %d > %d", ifp->if_xname,
 			len, NETMAP_BDG_BUF_SIZE(na->nm_mem));
-		m_freem(m);
-		return EINVAL;
+		goto done;
 	}
-	if (na->na_bdg)
-		return bdg_netmap_start(ifp, m);
+	if (na->na_bdg) {
+		struct nm_bdg_fwd *ft = na->rx_rings[0].nkr_ft;
+		char *dst = BDG_NMB(na->nm_mem, &na->rx_rings[0].ring->slot[0]);
 
-	/* possibly we don't need lock/unlock on linux */
+		/* use slot 0 in the ft, there is nothing queued here */
+		/* XXX we can save the copy calling m_copydata in nm_bdg_flush,
+		 * need a special flag for this.
+		 */
+		m_copydata(m, 0, (int)len, dst);
+		ft->ft_flags = 0;
+		ft->ft_len = len;
+		ft->ft_buf = dst;
+		ft->ft_next = NM_FT_NULL;
+		ft->ft_frags = 1;
+		if (netmap_verbose & NM_VERB_HOST)
+			RD(5, "pkt %p size %d to bridge", dst, len);
+		nm_bdg_flush(ft, 1, na, 0);
+
+		goto done;
+	}
+
+	/* protect against other instances of netmap_start,
+	 * and userspace invocations of rxsync().
+	 * XXX could reuse core_lock
+	 */
 	mtx_lock(&kring->q_lock);
 	if (kring->nr_hwavail >= lim) {
 		if (netmap_verbose)
 			D("stack ring %s full\n", ifp->if_xname);
-		goto done;	/* no space */
+	} else {
+		/* compute the insert position */
+		i = nm_kr_rxpos(kring);
+		slot = &kring->ring->slot[i];
+		m_copydata(m, 0, (int)len, BDG_NMB(na->nm_mem, slot));
+		slot->len = len;
+		slot->flags = kring->nkr_slot_flags;
+		kring->nr_hwavail++;
+		if (netmap_verbose  & NM_VERB_HOST)
+			D("wake up host ring %s %d", na->ifp->if_xname, na->num_rx_rings);
+		selwakeuppri(&kring->si, PI_NET);
+		error = 0;
 	}
-
-	/* compute the insert position */
-	i = nm_kr_rxpos(kring);
-	slot = &kring->ring->slot[i];
-	m_copydata(m, 0, (int)len, BDG_NMB(na->nm_mem, slot));
-	slot->len = len;
-	slot->flags = kring->nkr_slot_flags;
-	kring->nr_hwavail++;
-	if (netmap_verbose  & NM_VERB_HOST)
-		D("wake up host ring %s %d", na->ifp->if_xname, na->num_rx_rings);
-	selwakeuppri(&kring->si, PI_NET);
-	error = 0;
-done:
 	mtx_unlock(&kring->q_lock);
+
+done:
+	mtx_unlock(&na->core_lock);
 
 	/* release the mbuf in either cases of success or failure. As an
 	 * alternative, put the mbuf in a free list and free the list
@@ -2900,7 +2877,9 @@ nm_bdg_preflush(struct netmap_adapter *na, u_int ring_nr,
 
 /*
  * Pass packets from nic to the bridge.
- * XXX TODO check locking
+ * XXX TODO check locking: this is called from the interrupt
+ * handler so we should make sure that the interface is not
+ * disconnected while passing down an interrupt.
  *
  * Note, no user process can access this NIC so we can ignore
  * the info in the 'ring'.
@@ -2914,7 +2893,7 @@ netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
 	u_int j, k;
 
 	/* make sure that only one thread is ever in here,
-	 * after which we can unlock.
+	 * after which we can unlock. Probably unnecessary XXX.
 	 */
 	if (nm_kr_tryget(kring))
 		return;

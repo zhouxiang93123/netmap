@@ -124,6 +124,7 @@ ixgbe_netmap_reg(struct ifnet *ifp, int onoff)
 	if (na == NULL)
 		return EINVAL; /* no netmap support here */
 
+	IXGBE_CORE_LOCK(adapter);
 	ixgbe_disable_intr(adapter);
 
 	/* Tell the stack that the interface is no longer active */
@@ -155,6 +156,7 @@ fail:
 		ixgbe_init_locked(adapter);	/* also enables intr */
 	}
 	set_crcstrip(&adapter->hw, onoff);
+	IXGBE_CORE_UNLOCK(adapter);
 	return (error);
 }
 
