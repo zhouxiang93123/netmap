@@ -2711,7 +2711,8 @@ netmap_start(struct ifnet *ifp, struct mbuf *m)
 		ft->ft_next = NM_FT_NULL;
 		ft->ft_frags = 1;
 		if (netmap_verbose & NM_VERB_HOST)
-			RD(5, "pkt %p size %d to bridge", dst, len);
+			RD(5, "pkt %p size %d to bridge port %d",
+				dst, len, na->bdg_port);
 		nm_bdg_flush(ft, 1, na, 0);
 
 		goto done;
@@ -2950,7 +2951,8 @@ netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 
 	q &= NETMAP_RING_MASK;
 
-	RD(5, "received %s queue %d", work_done ? "RX" : "TX" , q);
+	if (netmap_verbose)
+		RD(5, "received %s queue %d", work_done ? "RX" : "TX" , q);
 	na = NA(ifp);
 	if (na->na_flags & NAF_SKIP_INTR) {
 		ND("use regular interrupt");
@@ -3714,7 +3716,6 @@ bdg_netmap_attach(struct netmap_adapter *arg)
 	bzero(&na, sizeof(na));
 
 	na.ifp = arg->ifp;
-	na.separate_locks = 1;
 	na.na_flags = NAF_BDG_MAYSLEEP;
 	na.num_tx_rings = arg->num_tx_rings;
 	na.num_rx_rings = arg->num_rx_rings;

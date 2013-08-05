@@ -361,9 +361,6 @@ struct netmap_adapter {
 	int na_single;	/* threads attached to a single hw queue */
 	int na_multi;	/* threads attached to multiple hw queues */
 
-	int separate_locks; /* set if the interface suports different
-			       locks for rx, tx and core. */
-
 	u_int num_rx_rings; /* number of adapter receive rings */
 	u_int num_tx_rings; /* number of adapter transmit rings */
 
