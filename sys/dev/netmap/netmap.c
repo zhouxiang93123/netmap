@@ -329,7 +329,33 @@ static __inline void nm_kr_put(struct netmap_kring *kr)
 	NM_ATOMIC_CLEAR(&kr->nr_busy);
 }
 
+/*
+ * generic bound_checking function
+ */
 
+u_int nm_bound_var(u_int *v, u_int dflt, u_int lo, u_int hi, const char *msg);
+
+u_int
+nm_bound_var(u_int *v, u_int dflt, u_int lo, u_int hi, const char *msg)
+{
+	u_int oldv = *v;
+	const char *op = NULL;
+
+	if (dflt < lo)
+		dflt = lo;
+	if (dflt > hi)
+		dflt = hi;
+	if (oldv < lo) {
+		*v = dflt;
+		op = "Bump";
+	} else if (oldv > hi) {
+		*v = hi;
+		op = "Clamp";
+	}
+	if (op && msg)
+		printf("%s %s to %d (was %d)\n", op, msg, *v, oldv);
+	return *v;
+}
 
 /*
  * system parameters (most of them in netmap_kern.h)
@@ -1590,7 +1616,7 @@ no_port:
 		*ifp = NULL;
 		return EINVAL;
 	}
-	ND("create new bridge port %s", name);
+	RD(5, "create new bridge port %s", name);
 	/*
 	 * create a struct ifnet for the new port.
 	 * The forwarding table is attached to the kring(s).
@@ -1611,25 +1637,17 @@ no_port:
 			goto no_port;
 		bzero(&tmp_na, sizeof(tmp_na));
 		/* bound checking */
-		if (nmr->nr_tx_rings < 1)
-			nmr->nr_tx_rings = 1;
-		if (nmr->nr_tx_rings > NM_BDG_MAXRINGS)
-			nmr->nr_tx_rings = NM_BDG_MAXRINGS;
 		tmp_na.num_tx_rings = nmr->nr_tx_rings;
-		if (nmr->nr_rx_rings < 1)
-			nmr->nr_rx_rings = 1;
-		if (nmr->nr_rx_rings > NM_BDG_MAXRINGS)
-			nmr->nr_rx_rings = NM_BDG_MAXRINGS;
+		nm_bound_var(&tmp_na.num_tx_rings, 1, 1, NM_BDG_MAXRINGS, NULL);
+		nmr->nr_tx_rings = tmp_na.num_tx_rings; // write back
 		tmp_na.num_rx_rings = nmr->nr_rx_rings;
-		if (nmr->nr_tx_slots < 1)
-			nmr->nr_tx_slots = NM_BRIDGE_RINGSIZE;
-		if (nmr->nr_tx_slots > NM_BDG_MAXSLOTS)
-			nmr->nr_tx_slots = NM_BDG_MAXSLOTS;
+		nm_bound_var(&tmp_na.num_rx_rings, 1, 1, NM_BDG_MAXRINGS, NULL);
+		nmr->nr_rx_rings = tmp_na.num_rx_rings; // write back
+		nm_bound_var(&nmr->nr_tx_slots, NM_BRIDGE_RINGSIZE,
+				1, NM_BDG_MAXSLOTS, NULL);
 		tmp_na.num_tx_desc = nmr->nr_tx_slots;
-		if (nmr->nr_rx_slots < 1)
-			nmr->nr_rx_slots = NM_BRIDGE_RINGSIZE;
-		if (nmr->nr_rx_slots > NM_BDG_MAXSLOTS)
-			nmr->nr_rx_slots = NM_BDG_MAXSLOTS;
+		nm_bound_var(&nmr->nr_rx_slots, NM_BRIDGE_RINGSIZE,
+				1, NM_BDG_MAXSLOTS, NULL);
 		tmp_na.num_rx_desc = nmr->nr_rx_slots;
 
 		/* XXX do we need M_NOWAIT ? */
@@ -1645,6 +1663,8 @@ no_port:
 		 * bridge already holds.
 		 */
 		if (NETMAP_OWNED_BY_ANY(iter) || cand2 == -1) {
+			D("NIC %s busy, cannot attach to bridge",
+				iter->if_xname);
 ifunit_rele:
 			if_rele(iter); /* don't detach from bridge */
 			goto no_port;
@@ -1654,12 +1674,14 @@ ifunit_rele:
 			b->bdg_ports[cand2] = SWNA(iter);
 			SWNA(iter)->bdg_port = cand2;
 			SWNA(iter)->na_bdg = b;
+			D("host %p to bridge port %d", SWNA(iter), cand2);
 		}
 	} else { /* not a netmap-capable NIC */
 		goto ifunit_rele;
 	}
 	na = NA(iter);
 	na->bdg_port = cand;
+	D("NIC %p to bridge port %d", NA(iter), cand);
 	/* bind the port to the bridge (virtual ports are not active) */
 	b->bdg_ports[cand] = na;
 	na->na_bdg = b;
@@ -2697,8 +2719,12 @@ netmap_start(struct ifnet *ifp, struct mbuf *m)
 		goto done;
 	}
 	if (na->na_bdg) {
-		struct nm_bdg_fwd *ft = na->rx_rings[0].nkr_ft;
-		char *dst = BDG_NMB(na->nm_mem, &na->rx_rings[0].ring->slot[0]);
+		struct nm_bdg_fwd *ft;
+		char *dst;
+
+		na = SWNA(ifp); /* we operate on the host port */
+		ft = na->rx_rings[0].nkr_ft;
+		dst = BDG_NMB(na->nm_mem, &na->rx_rings[0].ring->slot[0]);
 
 		/* use slot 0 in the ft, there is nothing queued here */
 		/* XXX we can save the copy calling m_copydata in nm_bdg_flush,
@@ -2714,7 +2740,7 @@ netmap_start(struct ifnet *ifp, struct mbuf *m)
 			RD(5, "pkt %p size %d to bridge port %d",
 				dst, len, na->bdg_port);
 		nm_bdg_flush(ft, 1, na, 0);
-
+		na = NA(ifp);	/* back to the regular object/lock */
 		goto done;
 	}
 
