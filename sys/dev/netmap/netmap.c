@@ -2741,6 +2741,7 @@ netmap_start(struct ifnet *ifp, struct mbuf *m)
 				dst, len, na->bdg_port);
 		nm_bdg_flush(ft, 1, na, 0);
 		na = NA(ifp);	/* back to the regular object/lock */
+		error = 0;
 		goto done;
 	}
 
