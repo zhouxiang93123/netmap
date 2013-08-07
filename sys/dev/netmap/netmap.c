@@ -358,6 +358,51 @@ nm_bound_var(u_int *v, u_int dflt, u_int lo, u_int hi, const char *msg)
 }
 
 /*
+ * packet-dump function, user-supplied or static buffer.
+ * The destination buffer must be at least 30+4*len
+ */
+const char *
+nm_dump_buf(char *p, int len, int lim, char *dst)
+{
+	static char _dst[8192];
+        int i, j, i0;
+	static char hex[] ="0123456789abcdef";
+	char *o;	/* output position */
+
+#define P_HI(x)	hex[((x) & 0xf0)>>4]
+#define P_LO(x)	hex[((x) & 0xf)]
+#define P_C(x)	((x) >= 0x20 && (x) <= 0x7e ? (x) : '.')
+	if (!dst)
+		dst = _dst;
+	if (lim <= 0 || lim > len)
+		lim = len;
+	o = dst;
+	sprintf(o, "buf 0x%x len %d lim %d\n", p, len, lim);
+	o += strlen(o);
+	/* hexdump routine */
+	for (i = 0; i < lim; ) {
+		sprintf(o, "%5d: ", i);
+		o += strlen(o);
+		memset(o, ' ', 48);
+		i0 = i;
+		for (j=0; j < 16 && i < lim; i++, j++) {
+			o[j*3] = P_HI(p[i]);
+			o[j*3+1] = P_LO(p[i]);
+		}
+		i = i0;
+		for (j=0; j < 16 && i < lim; i++, j++)
+			o[j + 48] = P_C(p[i]);
+		o[j+48] = '\n';
+		o += j+49;
+	}
+	*o = '\0';
+#undef P_HI
+#undef P_LO
+#undef P_C
+	return dst;
+}
+
+/*
  * system parameters (most of them in netmap_kern.h)
  * NM_NAME	prefix for switch port names, default "vale"
  * NM_MAXPORTS	number of ports
@@ -413,7 +458,7 @@ BDG_NMB(struct netmap_mem_d *nmd, struct netmap_slot *slot)
 
 static void bdg_netmap_attach(struct netmap_adapter *);
 static int bdg_netmap_reg(struct ifnet *ifp, int onoff);
-static int kern_netmap_regif(struct nmreq *nmr);
+int kern_netmap_regif(struct nmreq *nmr);
 
 /*
  * Each transmit queue accumulates a batch of packets into
@@ -689,7 +734,9 @@ nm_test(struct nmreq *nmr)
  * a ':' in the name terminates the bridge name. Otherwise, just NM_NAME.
  * We assume that this is called with a name of at least NM_NAME chars.
  */
-static struct nm_bridge *
+struct nm_bridge *
+nm_find_bridge(const char *name, int create);
+struct nm_bridge *
 nm_find_bridge(const char *name, int create)
 {
 	int i, l, namelen;
@@ -990,7 +1037,8 @@ netmap_dtor_locked(void *data)
 /* we assume netmap adapter exists
  * Called with NMG_LOCK held
  */
-static void
+void nm_if_rele(struct ifnet *ifp);
+void
 nm_if_rele(struct ifnet *ifp)
 {
 	int i, full = 0, is_hw;
@@ -1681,7 +1729,7 @@ ifunit_rele:
 	}
 	na = NA(iter);
 	na->bdg_port = cand;
-	D("NIC %p to bridge port %d", NA(iter), cand);
+	D("NIC  %p to bridge port %d", NA(iter), cand);
 	/* bind the port to the bridge (virtual ports are not active) */
 	b->bdg_ports[cand] = na;
 	na->na_bdg = b;
@@ -1880,7 +1928,7 @@ out:
 
 
 /* Process NETMAP_BDG_ATTACH and NETMAP_BDG_DETACH */
-static int
+int
 kern_netmap_regif(struct nmreq *nmr)
 {
 	struct ifnet *ifp;
@@ -2840,7 +2888,7 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
 
 #endif /* linux */
 	/*
-	 * Wakeup on the individual and global lock
+	 * Wakeup on the individual and global selwait
 	 * We do the wakeup here, but the ring is not yet reconfigured.
 	 * However, we are under lock so there are no races.
 	 */

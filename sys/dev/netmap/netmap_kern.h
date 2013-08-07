@@ -113,6 +113,8 @@ struct nm_bdg_fwd;
 struct nm_bridge;
 struct netmap_priv_d;
 
+const char *nm_dump_buf(char *p, int len, int lim, char *dst);
+
 /*
  * private, kernel view of a ring. Keeps track of the status of
  * a ring across system calls.
