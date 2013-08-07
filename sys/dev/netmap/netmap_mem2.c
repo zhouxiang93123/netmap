@@ -799,7 +799,7 @@ netmap_memory_config(struct netmap_mem_d *nmd)
 			goto out;
 	}
 
-	D("Have %d KB for interfaces, %d KB for rings and %d MB for buffers",
+	D("%d KB nifp, %d KB rings, %d MB buffers",
 	    nmd->pools[NETMAP_IF_POOL]._memtotal >> 10,
 	    nmd->pools[NETMAP_RING_POOL]._memtotal >> 10,
 	    nmd->pools[NETMAP_BUF_POOL]._memtotal >> 20);
@@ -950,8 +950,6 @@ netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
 	}
 
 	len = (ntx + nrx) * sizeof(struct netmap_kring);
-	D("VP %s allocate leases for %d rings %d slots",
-		ifname, na->num_rx_rings, na->num_rx_desc);
 	/*
 	 * Leases are attached to TX rings on NIC/host ports,
 	 * and to RX rings on VALE ports.
