@@ -52,6 +52,8 @@ lem_netmap_reg(struct ifnet *ifp, int onoff)
 	if (na == NULL)
 		return EINVAL;
 
+	EM_CORE_LOCK(adapter);
+
 	lem_disable_intr(adapter);
 
 	/* Tell the stack that the interface is no longer active */
@@ -84,6 +86,8 @@ fail:
 #ifndef EM_LEGACY_IRQ
 	taskqueue_unblock(adapter->tq); // XXX do we need this ?
 #endif /* !EM_LEGCY_IRQ */
+
+	EM_CORE_UNLOCK(adapter);
 
 	return (error);
 }
