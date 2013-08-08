@@ -108,9 +108,10 @@ lem_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 	/* generate an interrupt approximately every half ring */
 	int report_frequency = kring->nkr_num_slots >> 1;
 
-	D("%s: ofs %d, hwcur %d hwavail %d cur %d avail %d",
+	D("%s: hwofs %d, hwcur %d hwavail %d lease %d cur %d avail %d",
 		ifp->if_xname,
 		kring->nkr_hwofs, kring->nr_hwcur, kring->nr_hwavail,
+		kring->nkr_hwlease,
 		ring->cur, ring->avail);
 	/* take a copy of ring->cur now, and never read it again */
 	k = ring->cur;
@@ -127,7 +128,6 @@ lem_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 	if (netmap_verbose > 255)
 		RD(5, "device %s send %d->%d", ifp->if_xname, j, k);
 	if (j != k) {	/* we have new packets to send */
-		D("send packets [%d .. %d[", j, k);
 		l = netmap_idx_k2n(kring, j);
 		for (n = 0; j != k; n++) {
 			/* slot is the current slot in the netmap ring */
@@ -145,7 +145,7 @@ lem_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
 				return netmap_ring_reinit(kring);
 			}
-			D("\n%s", nm_dump_buf(addr, len, 128, NULL));
+			D("slot %d NIC %d %s", j, l, nm_dump_buf(addr, len, 128, NULL));
 
 			slot->flags &= ~NS_REPORT;
 			if (1 || slot->flags & NS_BUF_CHANGED) {
@@ -166,6 +166,7 @@ lem_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
 		}
+		D("sent %d packets from %d, TDT now %d", n, kring->nr_hwcur, l);
 		kring->nr_hwcur = k; /* the saved ring->cur */
 		kring->nr_hwavail -= n;
 
