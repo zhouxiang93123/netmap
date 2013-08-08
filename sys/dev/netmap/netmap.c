@@ -1651,11 +1651,10 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp)
 			ADD_BDG_REF(iter);
 			ND("found existing interface");
 			BDG_WUNLOCK(b);
-			break;
+			*ifp = iter;
+			goto port_found;
 		}
 	}
-	if (i < NM_BDG_MAXPORTS) /* already unlocked */
-		goto port_found;
 
 	if (cand == -1) {
 		D("bridge full, cannot create new port");
