@@ -332,9 +332,6 @@ static __inline void nm_kr_put(struct netmap_kring *kr)
 /*
  * generic bound_checking function
  */
-
-u_int nm_bound_var(u_int *v, u_int dflt, u_int lo, u_int hi, const char *msg);
-
 u_int
 nm_bound_var(u_int *v, u_int dflt, u_int lo, u_int hi, const char *msg)
 {

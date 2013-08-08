@@ -471,6 +471,8 @@ struct netmap_slot *netmap_reset(struct netmap_adapter *na,
 	enum txrx tx, u_int n, u_int new_cur);
 int netmap_ring_reinit(struct netmap_kring *);
 
+u_int nm_bound_var(u_int *v, u_int dflt, u_int lo, u_int hi, const char *msg);
+
 /*
  * The following bridge-related interfaces are used by other kernel modules
  * In the version that only supports unicast or broadcast, the lookup
