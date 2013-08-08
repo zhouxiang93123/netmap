@@ -28,9 +28,9 @@ device	acpi	# more frequencies ?
 # device	apic	# not for amd64
 device	cpufreq
 
-#option	INVARIANTS
-#option	INVARIANT_SUPPORT
-#options         WITNESS   
+option	INVARIANTS
+option	INVARIANT_SUPPORT
+options         WITNESS   
 
 # XXX i find that SCHED_4BSD+PREEMPTION seems to work better.
 #options		SCHED_ULE		# mandatory to have one scheduler
