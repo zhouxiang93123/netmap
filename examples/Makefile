@@ -30,6 +30,7 @@ pkt-gen: pkt-gen.o nm_util.o
 	$(CC) $(CFLAGS) -o pkt-gen pkt-gen.o nm_util.o $(LDFLAGS)
 
 bridge: bridge.o nm_util.o
+	$(CC) $(CFLAGS) -o bridge bridge.o nm_util.o
 
 vale-ctl: vale-ctl.o
 	$(CC) $(CFLAGS) -o vale-ctl vale-ctl.o
