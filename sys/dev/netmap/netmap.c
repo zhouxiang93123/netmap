@@ -1896,10 +1896,10 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 		 */
 		for (i = 0 ; i < na->num_tx_rings + 1; i++)
 			mtx_init(&na->tx_rings[i].q_lock, "nm_txq_lock",
-			    MTX_NETWORK_LOCK, MTX_DEF);
+			    NULL, MTX_DEF);
 		for (i = 0 ; i < na->num_rx_rings + 1; i++) {
 			mtx_init(&na->rx_rings[i].q_lock, "nm_rxq_lock",
-			    MTX_NETWORK_LOCK, MTX_DEF);
+			    NULL, MTX_DEF);
 		}
 		if (nma_is_hw(na)) {
 			SWNA(ifp)->tx_rings = &na->tx_rings[na->num_tx_rings];
@@ -2837,10 +2837,14 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
 	struct netmap_kring *kring;
 	int new_hwofs, lim;
 
-	if (na == NULL)
+	if (na == NULL) {
+		D("NULL na, should not happen");
 		return NULL;	/* no netmap support here */
-	if (!(na->ifp->if_capenable & IFCAP_NETMAP))
+	}
+	if (!(na->ifp->if_capenable & IFCAP_NETMAP)) {
+		D("interface not in netmap mode");
 		return NULL;	/* nothing to reinitialize */
+	}
 
 	/* XXX note- in the new scheme, we are not guaranteed to be
 	 * under lock (e.g. when called on a device reset).
@@ -2866,12 +2870,14 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
 		new_hwofs -= lim + 1;
 
 	/* Always set the new offset value and realign the ring. */
+	D("%s hwofs %d -> %d, hwavail %d -> %d",
+		tx == NR_TX ? "TX" : "RX",
+		kring->nkr_hwofs, new_hwofs,
+		kring->nr_hwavail,
+		tx == NR_TX ? kring->nr_hwavail : lim);
 	kring->nkr_hwofs = new_hwofs;
 	if (tx == NR_TX)
-		kring->nr_hwavail = kring->nkr_num_slots - 1;
-	ND(10, "new hwofs %d on %s %s[%d]",
-			kring->nkr_hwofs, na->ifp->if_xname,
-			tx == NR_TX ? "TX" : "RX", n);
+		kring->nr_hwavail = lim;
 
 #if 0 // def linux
 	/* XXX check that the mappings are correct */
@@ -3512,6 +3518,12 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		lim = kring->nkr_num_slots - 1;
 
 retry:
+
+		/* reserve the buffers in the queue and an entry
+		 * to report completion, and drop lock.
+		 * XXX this might become a helper function.
+		 */
+		mtx_lock(&kring->q_lock);
 		/* on physical interfaces, do a txsync to recover
 		 * slots for packets already transmitted.
 		 * XXX maybe we could be optimistic and rely on a retry
@@ -3520,12 +3532,6 @@ retry:
 		if (nma_is_hw(dst_na)) {
 			dst_na->nm_txsync(dst_ifp, dst_nr, 0);
 		}
-
-		/* reserve the buffers in the queue and an entry
-		 * to report completion, and drop lock.
-		 * XXX this might become a helper function.
-		 */
-		mtx_lock(&kring->q_lock);
 		my_start = j = kring->nkr_hwlease;
 		howmany = nm_kr_space(kring, is_vp);
 		if (needed < howmany)
@@ -3654,8 +3660,8 @@ retry:
 				ring->cur = j;
 				/* XXX update avail ? */
 				still_locked = 0;
-				mtx_unlock(&kring->q_lock);
 				dst_na->nm_txsync(dst_ifp, dst_nr, 0);
+				mtx_unlock(&kring->q_lock);
 
 				/* retry to send more packets */
 				if (nma_is_hw(dst_na) && retry--)
