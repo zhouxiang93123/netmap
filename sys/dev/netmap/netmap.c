@@ -190,6 +190,7 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 241723 2012-10-19 09:41:45Z gle
 #define NMG_LOCK_DESTROY()	mtx_destroy(&netmap_global_lock)
 #define NMG_LOCK()		mtx_lock(&netmap_global_lock)
 #define NMG_UNLOCK()		mtx_unlock(&netmap_global_lock)
+#define NMG_LOCK_ASSERT()	mtx_assert(&netmap_global_lock, MA_OWNED)
 
 
 /* atomic operations */
@@ -253,6 +254,7 @@ if_rele(struct net_device *ifp)
 #define NMG_LOCK_DESTROY()	
 #define NMG_LOCK()		down(&netmap_global_lock)
 #define NMG_UNLOCK()		up(&netmap_global_lock)
+#define NMG_LOCK_ASSERT()	//	XXX to be completed
 
 
 #elif defined(__APPLE__)
@@ -273,7 +275,6 @@ if_rele(struct net_device *ifp)
 #include <dev/netmap/netmap_kern.h>
 #include <dev/netmap/netmap_mem2.h>
 
-#define NMG_LOCK_ASSERT()	//	XXX to be completed
 
 MALLOC_DEFINE(M_NETMAP, "netmap", "Network memory map");
 
@@ -536,14 +537,6 @@ struct nm_bridge {
  */
 struct nm_bridge nm_bridges[NM_BRIDGES];
 
-#if 0 // use NMG_LOCK instead
-NM_LOCK_T	netmap_bridge_mutex;
-
-#define BDG_LOCK()		mtx_lock(&netmap_bridge_mutex)
-#define BDG_UNLOCK()		mtx_unlock(&netmap_bridge_mutex)
-#endif // use NMG_LOCK instead
-
-
 
 /*
  * A few function to tell which kind of port are we using.
@@ -731,9 +724,7 @@ nm_test(struct nmreq *nmr)
  * a ':' in the name terminates the bridge name. Otherwise, just NM_NAME.
  * We assume that this is called with a name of at least NM_NAME chars.
  */
-struct nm_bridge *
-nm_find_bridge(const char *name, int create);
-struct nm_bridge *
+static struct nm_bridge *
 nm_find_bridge(const char *name, int create)
 {
 	int i, l, namelen;
@@ -1034,8 +1025,7 @@ netmap_dtor_locked(void *data)
 /* we assume netmap adapter exists
  * Called with NMG_LOCK held
  */
-void nm_if_rele(struct ifnet *ifp);
-void
+static void
 nm_if_rele(struct ifnet *ifp)
 {
 	int i, full = 0, is_hw;
@@ -1050,12 +1040,17 @@ nm_if_rele(struct ifnet *ifp)
 		if_rele(ifp);
 		return;
 	}
-	if (!DROP_BDG_REF(ifp))
-		return;
-
 	na = NA(ifp);
 	b = na->na_bdg;
 	is_hw = nma_is_hw(na);
+
+	D("%s has %d references", ifp->if_xname, NA(ifp)->na_bdg_refcount);
+	/* if we attach the host port, we have one extra reference */
+	if (is_hw && SWNA(ifp)->na_bdg)
+		DROP_BDG_REF(ifp);
+
+	if (!DROP_BDG_REF(ifp))
+		return;
 
 	BDG_WLOCK(b);
 	ND("want to disconnect %s from the bridge", ifp->if_xname);
@@ -1472,13 +1467,13 @@ netmap_sw_to_nic(struct netmap_adapter *na)
 
 
 /*
- * netmap_sync_to_host() passes packets up. We are called from a
+ * netmap_txsync_to_host() passes packets up. We are called from a
  * system call in user process context, and the only contention
  * can be among multiple user threads erroneously calling
  * this routine concurrently.
  */
 static void
-netmap_sync_to_host(struct netmap_adapter *na)
+netmap_txsync_to_host(struct netmap_adapter *na)
 {
 	struct netmap_kring *kring = &na->tx_rings[na->num_tx_rings];
 	struct netmap_ring *ring = kring->ring;
@@ -1522,7 +1517,7 @@ netmap_bdg_to_host(struct ifnet *ifp, u_int ring_nr, int flags)
 	(void)flags;
 	if (netmap_verbose > 255)
 		RD(5, "sync to host %s ring %d", ifp->if_xname, ring_nr);
-	netmap_sync_to_host(NA(ifp));
+	netmap_txsync_to_host(NA(ifp));
 	return 0;
 }
 
@@ -1539,7 +1534,7 @@ netmap_bdg_to_host(struct ifnet *ifp, u_int ring_nr, int flags)
  *     as an additional hidden argument.
  */
 static void
-netmap_sync_from_host(struct netmap_adapter *na, struct thread *td, void *pwait)
+netmap_rxsync_from_host(struct netmap_adapter *na, struct thread *td, void *pwait)
 {
 	struct netmap_kring *kring = &na->rx_rings[na->num_rx_rings];
 	struct netmap_ring *ring = kring->ring;
@@ -1612,6 +1607,7 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp)
 	struct netmap_adapter *na;
 	int i, cand = -1, cand2 = -1;
 
+	NMG_LOCK_ASSERT();
 	if (strncmp(name, NM_NAME, sizeof(NM_NAME) - 1)) {
 		no_prefix = 1;
 		goto no_bridge_port;
@@ -1870,6 +1866,7 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 	struct netmap_if *nifp = NULL;
 	int error;
 
+	NMG_LOCK_ASSERT();
 	/* ring configuration may have changed, fetch from the card */
 	netmap_update_config(na);
 	priv->np_ifp = ifp;     /* store the reference */
@@ -1932,6 +1929,7 @@ kern_netmap_regif(struct nmreq *nmr)
 	struct netmap_priv_d *npriv;
 	int error;
 
+	/* allocate outside lock. Can actually wait */
 	npriv = malloc(sizeof(*npriv), M_DEVBUF, M_NOWAIT|M_ZERO);
 	if (npriv == NULL)
 		return ENOMEM;
@@ -1939,7 +1937,8 @@ kern_netmap_regif(struct nmreq *nmr)
 	error = get_ifp(nmr, &ifp);
 	if (error) { /* no device, or another bridge or user owns the device */
 		goto unlock_exit;
-	} else if (!NETMAP_OWNED_BY_KERN(ifp)) {
+	}
+	if (!NETMAP_OWNED_BY_KERN(ifp)) {
 		/* got reference to a virtual port or direct access to a NIC.
 		 * perhaps specified no bridge's prefix or wrong NIC's name
 		 */
@@ -1956,8 +1955,8 @@ kern_netmap_regif(struct nmreq *nmr)
 
 		netmap_dtor(NA(ifp)->na_kpriv); /* unregister */
 		NA(ifp)->na_kpriv = NULL;
-		nm_if_rele(ifp); /* detach from the bridge */
-		goto free_exit; /* this is a correct exit */
+		// nm_if_rele(ifp); /* detach from the bridge */
+		goto free_exit; /* this is a correct exit, error = 0 */
 	}
 	if (NA(ifp)->refcount > 0) { /* already registered */
 		error = EINVAL;
@@ -2315,9 +2314,9 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		na = NA(ifp); /* retrieve netmap adapter */
 		if (priv->np_qfirst == NETMAP_SW_RING) { /* host rings */
 			if (cmd == NIOCTXSYNC)
-				netmap_sync_to_host(na);
+				netmap_txsync_to_host(na);
 			else
-				netmap_sync_from_host(na, NULL, NULL);
+				netmap_rxsync_from_host(na, NULL, NULL);
 			break;
 		}
 		/* find the last ring to scan */
@@ -2449,13 +2448,13 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 		/* handle the host stack ring */
 		if (priv->np_txpoll || want_tx) {
 			/* push any packets up, then we are always ready */
-			netmap_sync_to_host(na);
+			netmap_txsync_to_host(na);
 			revents |= want_tx;
 		}
 		if (want_rx) {
 			kring = &na->rx_rings[lim_rx];
 			if (kring->ring->avail == 0)
-				netmap_sync_from_host(na, td, dev);
+				netmap_rxsync_from_host(na, td, dev);
 			if (kring->ring->avail > 0) {
 				revents |= want_rx;
 			}
@@ -2469,7 +2468,7 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 			&& want_rx
 			&& (netmap_fwd || kring->ring->flags & NR_FORWARD) ) {
 		if (kring->ring->avail == 0)
-			netmap_sync_from_host(na, td, dev);
+			netmap_rxsync_from_host(na, td, dev);
 		if (kring->ring->avail > 0)
 			revents |= want_rx;
 	}
@@ -2874,7 +2873,7 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
 		tx == NR_TX ? "TX" : "RX",
 		kring->nkr_hwofs, new_hwofs,
 		kring->nr_hwavail,
-		tx == NR_TX ? kring->nr_hwavail : lim);
+		tx == NR_TX ? lim : kring->nr_hwavail);
 	kring->nkr_hwofs = new_hwofs;
 	if (tx == NR_TX)
 		kring->nr_hwavail = lim;
