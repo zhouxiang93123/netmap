@@ -232,7 +232,7 @@ lem_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 	 */
 	l = adapter->next_rx_desc_to_check;
 	j = netmap_idx_n2k(kring, l);
-	D("%s: next NIC %d kring %d (ofs %d), hwcur %d hwavail %d cur %d avail %d",
+	ND("%s: next NIC %d kring %d (ofs %d), hwcur %d hwavail %d cur %d avail %d",
 		ifp->if_xname,
 		l, j,  kring->nkr_hwofs, kring->nr_hwcur, kring->nr_hwavail,
 		ring->cur, ring->avail);
@@ -251,7 +251,7 @@ lem_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 				D("bogus pkt size at %d", j);
 				len = 0;
 			}
-			D("\n%s", nm_dump_buf(NMB(&ring->slot[j]),
+			ND("\n%s", nm_dump_buf(NMB(&ring->slot[j]),
 				len, 128, NULL));
 			ring->slot[j].len = len;
 			ring->slot[j].flags = slot_flags;
