@@ -108,7 +108,7 @@ lem_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 	/* generate an interrupt approximately every half ring */
 	int report_frequency = kring->nkr_num_slots >> 1;
 
-	D("%s: hwofs %d, hwcur %d hwavail %d lease %d cur %d avail %d",
+	ND("%s: hwofs %d, hwcur %d hwavail %d lease %d cur %d avail %d",
 		ifp->if_xname,
 		kring->nkr_hwofs, kring->nr_hwcur, kring->nr_hwavail,
 		kring->nkr_hwlease,
@@ -145,7 +145,7 @@ lem_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
 				return netmap_ring_reinit(kring);
 			}
-			D("slot %d NIC %d %s", j, l, nm_dump_buf(addr, len, 128, NULL));
+			ND("slot %d NIC %d %s", j, l, nm_dump_buf(addr, len, 128, NULL));
 
 			slot->flags &= ~NS_REPORT;
 			if (1 || slot->flags & NS_BUF_CHANGED) {
@@ -159,14 +159,13 @@ lem_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 			    htole32( adapter->txd_cmd | len |
 				(E1000_TXD_CMD_EOP | flags) );
 
-			D("len %d kring %d nic %d",
-				len, j, l);
+			ND("len %d kring %d nic %d", len, j, l);
 			bus_dmamap_sync(adapter->txtag, txbuf->map,
 			    BUS_DMASYNC_PREWRITE);
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
 		}
-		D("sent %d packets from %d, TDT now %d", n, kring->nr_hwcur, l);
+		ND("sent %d packets from %d, TDT now %d", n, kring->nr_hwcur, l);
 		kring->nr_hwcur = k; /* the saved ring->cur */
 		kring->nr_hwavail -= n;
 
@@ -181,7 +180,7 @@ lem_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 
 		/* record completed transmissions using TDH */
 		l = E1000_READ_REG(&adapter->hw, E1000_TDH(0));
-		D("tdh is now %d", l);
+		ND("tdh is now %d", l);
 		if (l >= kring->nkr_num_slots) { /* XXX can it happen ? */
 			D("bad TDH %d", l);
 			l -= kring->nkr_num_slots;
