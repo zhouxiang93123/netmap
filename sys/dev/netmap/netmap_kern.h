@@ -241,90 +241,6 @@ nm_next(uint32_t i, uint32_t lim)
  */
 
 
-/*
- * Available space in the ring.
- */
-static inline uint32_t
-nm_kr_space(struct netmap_kring *k, int is_rx)
-{
-	int space;
-
-	if (is_rx) {
-		int busy = k->nkr_hwlease - k->nr_hwcur;
-		if (busy < 0)
-			busy += k->nkr_num_slots;
-		space = k->nkr_num_slots - 1 - busy;
-	} else {
-		space = k->nr_hwcur + k->nr_hwavail - k->nkr_hwlease;
-		if (space < 0)
-			space += k->nkr_num_slots;
-	}
-#if 0
-	// sanity check
-	if (k->nkr_hwlease >= k->nkr_num_slots ||
-		k->nr_hwcur >= k->nkr_num_slots ||
-		k->nr_hwavail >= k->nkr_num_slots ||
-		busy < 0 ||
-		busy >= k->nkr_num_slots) {
-		D("invalid kring, cur %d avail %d lease %d lease_idx %d lim %d",			k->nr_hwcur, k->nr_hwavail, k->nkr_hwlease,
-			k->nkr_lease_idx, k->nkr_num_slots);
-	}
-#endif
-	return space;
-}
-
-
-/* return update position */
-static inline uint32_t
-nm_kr_rxpos(struct netmap_kring *k)
-{
-	uint32_t pos = k->nr_hwcur + k->nr_hwavail;
-	if (pos >= k->nkr_num_slots)
-		pos -= k->nkr_num_slots;
-#if 0
-	if (pos >= k->nkr_num_slots ||
-		k->nkr_hwlease >= k->nkr_num_slots ||
-		k->nr_hwcur >= k->nkr_num_slots ||
-		k->nr_hwavail >= k->nkr_num_slots ||
-		k->nkr_lease_idx >= k->nkr_num_slots) {
-		D("invalid kring, cur %d avail %d lease %d lease_idx %d lim %d",			k->nr_hwcur, k->nr_hwavail, k->nkr_hwlease,
-			k->nkr_lease_idx, k->nkr_num_slots);
-	}
-#endif
-	return pos;
-}
-
-
-/* make a lease on the kring for N positions. return the
- * lease index
- */
-static inline uint32_t
-nm_kr_lease(struct netmap_kring *k, u_int n, int is_rx)
-{
-	uint32_t lim = k->nkr_num_slots - 1;
-	uint32_t lease_idx = k->nkr_lease_idx;
-
-	k->nkr_leases[lease_idx] = NR_NOSLOT;
-	k->nkr_lease_idx = nm_next(lease_idx, lim);
-
-	if (n > nm_kr_space(k, is_rx)) {
-		D("invalid request for %d slots", n);
-		panic("x");
-	}
-	/* XXX verify that there are n slots */
-	k->nkr_hwlease += n;
-	if (k->nkr_hwlease > lim)
-		k->nkr_hwlease -= lim + 1;
-
-	if (k->nkr_hwlease >= k->nkr_num_slots ||
-		k->nr_hwcur >= k->nkr_num_slots ||
-		k->nr_hwavail >= k->nkr_num_slots ||
-		k->nkr_lease_idx >= k->nkr_num_slots) {
-		D("invalid kring, cur %d avail %d lease %d lease_idx %d lim %d",			k->nr_hwcur, k->nr_hwavail, k->nkr_hwlease,
-			k->nkr_lease_idx, k->nkr_num_slots);
-	}
-	return lease_idx;
-}
 
 
 
@@ -426,6 +342,94 @@ struct netmap_adapter {
 	struct net_device_ops nm_ndo;
 #endif /* linux */
 };
+
+/*
+ * Available space in the ring.
+ */
+static inline uint32_t
+nm_kr_space(struct netmap_kring *k, int is_rx)
+{
+	int space;
+
+	if (is_rx) {
+		int busy = k->nkr_hwlease - k->nr_hwcur;
+		if (busy < 0)
+			busy += k->nkr_num_slots;
+		space = k->nkr_num_slots - 1 - busy;
+	} else {
+		space = k->nr_hwcur + k->nr_hwavail - k->nkr_hwlease;
+		if (space < 0)
+			space += k->nkr_num_slots;
+	}
+#if 0
+	// sanity check
+	if (k->nkr_hwlease >= k->nkr_num_slots ||
+		k->nr_hwcur >= k->nkr_num_slots ||
+		k->nr_hwavail >= k->nkr_num_slots ||
+		busy < 0 ||
+		busy >= k->nkr_num_slots) {
+		D("invalid kring, cur %d avail %d lease %d lease_idx %d lim %d",			k->nr_hwcur, k->nr_hwavail, k->nkr_hwlease,
+			k->nkr_lease_idx, k->nkr_num_slots);
+	}
+#endif
+	return space;
+}
+
+
+/* return update position */
+static inline uint32_t
+nm_kr_rxpos(struct netmap_kring *k)
+{
+	uint32_t pos = k->nr_hwcur + k->nr_hwavail;
+	if (pos >= k->nkr_num_slots)
+		pos -= k->nkr_num_slots;
+#if 0
+	if (pos >= k->nkr_num_slots ||
+		k->nkr_hwlease >= k->nkr_num_slots ||
+		k->nr_hwcur >= k->nkr_num_slots ||
+		k->nr_hwavail >= k->nkr_num_slots ||
+		k->nkr_lease_idx >= k->nkr_num_slots) {
+		D("invalid kring, cur %d avail %d lease %d lease_idx %d lim %d",			k->nr_hwcur, k->nr_hwavail, k->nkr_hwlease,
+			k->nkr_lease_idx, k->nkr_num_slots);
+	}
+#endif
+	return pos;
+}
+
+
+/* make a lease on the kring for N positions. return the
+ * lease index
+ */
+static inline uint32_t
+nm_kr_lease(struct netmap_kring *k, u_int n, int is_rx)
+{
+	uint32_t lim = k->nkr_num_slots - 1;
+	uint32_t lease_idx = k->nkr_lease_idx;
+
+	k->nkr_leases[lease_idx] = NR_NOSLOT;
+	k->nkr_lease_idx = nm_next(lease_idx, lim);
+
+	if (n > nm_kr_space(k, is_rx)) {
+		D("invalid request for %d slots", n);
+		panic("x");
+	}
+	/* XXX verify that there are n slots */
+	k->nkr_hwlease += n;
+	if (k->nkr_hwlease > lim)
+		k->nkr_hwlease -= lim + 1;
+
+	if (k->nkr_hwlease >= k->nkr_num_slots ||
+		k->nr_hwcur >= k->nkr_num_slots ||
+		k->nr_hwavail >= k->nkr_num_slots ||
+		k->nkr_lease_idx >= k->nkr_num_slots) {
+		D("invalid kring %s, cur %d avail %d lease %d lease_idx %d lim %d",
+			k->na->ifp->if_xname,
+			k->nr_hwcur, k->nr_hwavail, k->nkr_hwlease,
+			k->nkr_lease_idx, k->nkr_num_slots);
+	}
+	return lease_idx;
+}
+
 
 /*
  * XXX NETMAP_DELETING() is unused
