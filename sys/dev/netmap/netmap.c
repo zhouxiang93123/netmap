@@ -504,13 +504,20 @@ struct nm_hash_ent {
  * This is a rw lock (or equivalent).
  */
 struct nm_bridge {
-	int namelen;	/* 0 means free */
-
 	/* XXX what is the proper alignment/layout ? */
-	BDG_RWLOCK_T bdg_lock;	/* protects bdg_ports */
+	BDG_RWLOCK_T	bdg_lock;	/* protects bdg_ports */
+	int		bdg_namelen;	/* 0 means free */
+	uint32_t	bdg_active_ports;
+	char		bdg_basename[IFNAMSIZ];
+
+	/* Indexes of active ports (up to active_ports)
+	 * and all other remaining ports.
+	 */
+	uint8_t		bdg_port_index[NM_BDG_MAXPORTS];
+
 	struct netmap_adapter *bdg_ports[NM_BDG_MAXPORTS];
 
-	char basename[IFNAMSIZ];
+
 	/*
 	 * The function to decide the destination port.
 	 * It returns either of an index of the destination port,
@@ -752,20 +759,24 @@ nm_find_bridge(const char *name, int create)
 	for (i = 0; i < NM_BRIDGES; i++) {
 		struct nm_bridge *x = nm_bridges + i;
 
-		if (x->namelen == 0) {
+		if (x->bdg_namelen == 0) {
 			if (create && b == NULL)
 				b = x;	/* record empty slot */
-		} else if (x->namelen != namelen) {
+		} else if (x->bdg_namelen != namelen) {
 			continue;
-		} else if (strncmp(name, x->basename, namelen) == 0) {
+		} else if (strncmp(name, x->bdg_basename, namelen) == 0) {
 			ND("found '%.*s' at %d", namelen, name, i);
 			b = x;
 			break;
 		}
 	}
 	if (i == NM_BRIDGES && b) { /* name not found, can create entry */
-		strncpy(b->basename, name, namelen);
-		b->namelen = namelen;
+		/* initialize the bridge */
+		strncpy(b->bdg_basename, name, namelen);
+		b->bdg_namelen = namelen;
+		b->bdg_active_ports = 0;
+		for (i = 0; i < NM_BDG_MAXPORTS; i++)
+			b->bdg_port_index[i] = i;
 		/* set the default function */
 		b->nm_bdg_lookup = netmap_bdg_learning;
 		/* reset the MAC address table */
@@ -966,6 +977,9 @@ netmap_get_memory(struct netmap_priv_d* p)
  *
  * Call nm_register(ifp,0) to stop netmap mode on the interface and
  * revert to normal operation. We expect that np_ifp has not gone.
+ * The second argument is the nifp to work on. In some cases it is
+ * not attached yet to the netmap_priv_d so we need to pass it as
+ * a separate argument.
  */
 /* call with NMG_LOCK held */
 static void
@@ -1050,6 +1064,57 @@ nm_if_rele(struct ifnet *ifp)
 	if (!DROP_BDG_REF(ifp))
 		return;
 
+	/*
+	New algorithm:
+	make a copy of bdg_port_index;
+	lookup NA(ifp)->bdg_port and SWNA(ifp)->bdg_port
+	in the array of bdg_port_index, replacing them with
+	entries from the bottom of the array;
+	decrement bdg_active_ports;
+	acquire BDG_WLOCK() and copy back the array.
+	 */
+#if 0
+	{
+		uint8_t tmp[NM_BDG_MAXPORTS];
+		int hw = NA(ifp)->bdg_port;
+		int sw = (is_hw && SWNA(ifp)->na_bdg) ?
+				SWNA(ifp)->bdg_port : -1;
+		int lim = b->bdg_active_ports;
+
+		bcopy(b->bdg_port_index, tmp, sizeof(tmp));
+		for (i = 0; hw >= 0 && sw >= 0 && i < lim; ) {
+			if (hw >= 0 && tmp[i] == hw) {
+				tmp[i] = tmp[lim];
+				tmp[lim] = hw;
+				lim--;
+				hw = -1;
+			} else if (sw >= 0 && tmp[i] == sw) {
+				tmp[i] = tmp[lim];
+				tmp[lim] = sw;
+				lim--;
+				sw = -1;
+			} else {
+				i++;
+			}
+		}
+		BDG_WLOCK(b);
+		hw = NA(ifp)->bdg_port;
+		sw = (is_hw && SWNA(ifp)->na_bdg) ?
+				SWNA(ifp)->bdg_port : -1;
+		b->bdg_ports[hw] = NULL;
+		na->na_bdg = NULL;
+		if (sw >= 0) {
+			b->bdg_ports[sw] = NULL;
+			SWNA(ifp)->na_bdg = NULL;
+		}
+		
+		bcopy(tmp, b->bdg_port_index, sizeof(tmp));
+		b->bdg_active_ports = lim;
+		full = lim > 0;
+		BDG_WUNLOCK(b);
+
+	}
+#else /* old version */
 	BDG_WLOCK(b);
 	ND("want to disconnect %s from the bridge", ifp->if_xname);
 	full = 0;
@@ -1080,9 +1145,10 @@ nm_if_rele(struct ifnet *ifp)
 		}
 	}
 	BDG_WUNLOCK(b);
+#endif /* old version  */
 	if (full == 0) {
 		ND("marking bridge %d as free", b - nm_bridges);
-		b->namelen = 0;
+		b->bdg_namelen = 0;
 		b->nm_bdg_lookup = NULL;
 	}
 	if (na->na_bdg) { /* still attached to the bridge */
@@ -1652,8 +1718,8 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp)
 		iter = na->ifp;
 		/* XXX make sure the name only contains one : */
 		if (!strcmp(iter->if_xname, name) /* virtual port */ ||
-		    (namelen > b->namelen && !strcmp(iter->if_xname,
-		    name + b->namelen + 1)) /* NIC */) {
+		    (namelen > b->bdg_namelen && !strcmp(iter->if_xname,
+		    name + b->bdg_namelen + 1)) /* NIC */) {
 			ADD_BDG_REF(iter);
 			ND("found existing interface");
 			BDG_WUNLOCK(b);
@@ -1678,7 +1744,7 @@ no_port:
 	 * try see if there is a matching NIC with this name
 	 * (after the bridge's name)
 	 */
-	iter = ifunit_ref(name + b->namelen + 1);
+	iter = ifunit_ref(name + b->bdg_namelen + 1);
 	if (!iter) { /* this is a virtual port */
 		/* Create a temporary NA with arguments, then
 		 * bdg_netmap_attach() will allocate the real one
@@ -1915,12 +1981,15 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 			SWNA(ifp)->tx_rings = &na->tx_rings[na->num_tx_rings];
 			SWNA(ifp)->rx_rings = &na->rx_rings[na->num_rx_rings];
 		}
+		/*
+		 * do not core lock because the race is harmless here,
+		 * there cannot be any traffic to netmap_transmit()
+		 */
 		error = na->nm_register(ifp, 1); /* mode on */
 		// XXX do we need to nm_alloc_bdgfwd() in all cases ?
 		if (!error)
 			error = nm_alloc_bdgfwd(na);
 		if (error) {
-			/* nifp is not yet in priv */
 			netmap_do_unregif(priv, nifp);
 			nifp = NULL;
 		}
@@ -2112,9 +2181,9 @@ netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func)
 				 * virtual port and a NIC, respectively
 				 */
 				if (!strcmp(iter->if_xname, name) ||
-				    (namelen > b->namelen &&
+				    (namelen > b->bdg_namelen &&
 				    !strcmp(iter->if_xname,
-				    name + b->namelen + 1))) {
+				    name + b->bdg_namelen + 1))) {
 					/* bridge index */
 					nmr->nr_arg1 = b - nm_bridges;
 					nmr->nr_arg2 = i; /* port index */
@@ -2781,8 +2850,11 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n,
 /*
  * Intercept packets from the network stack and pass them
  * to netmap as incoming packets on the 'software' ring.
- * We are not locked when called. na is always there, so
- * we can protect from deletions using a lock in the *na
+ * We rely on the OS to make sure that the ifp and na do not go
+ * away (typically the caller checks for IFF_DRV_RUNNING or the like).
+ * In nm_register() or whenever there is a reinitialization,
+ * we make sure to access the core lock and per-ring locks
+ * so that IFCAP_NETMAP is visible here.
  */
 int
 netmap_transmit(struct ifnet *ifp, struct mbuf *m)
@@ -3053,18 +3125,19 @@ netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
 /*
  * Default functions to handle rx/tx interrupts from a physical device.
  * "work_done" is non-null on the RX path, NULL for the TX path.
+ * We rely on the OS to make sure that there is only one active
+ * instance per queue, and that there is appropriate locking.
  *
- * XXX we assume that there is only one instance ?
+ * If the card is not in netmap mode, simply return 0,
+ * so that the caller proceeds with regular processing.
  *
- * If the card is not in netmap mode it simply returns 0 with the
- * locking state unchanged.
  * If the card is connected to a netmap file descriptor,
- * it does a selwakeup on the individual queue, plus one on the global one
+ * do a selwakeup on the individual queue, plus one on the global one
  * if needed (multiqueue card _and_ there are multiqueue listeners),
- * and returns possibly releasing locks as specified by the calling
- * arguments.
- * Finally, if called from an interface connected to a switch,
- * calls the proper forwarding routine.
+ * and return 1.
+ *
+ * Finally, if called on rx from an interface connected to a switch,
+ * calls the proper forwarding routine, and return 1.
  */
 int
 netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
