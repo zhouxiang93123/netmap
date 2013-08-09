@@ -68,7 +68,7 @@ lem_netmap_reg(struct ifnet *ifp, int onoff)
 		ifp->if_capenable |= IFCAP_NETMAP;
 
 		na->if_transmit = ifp->if_transmit;
-		ifp->if_transmit = netmap_start;
+		ifp->if_transmit = netmap_transmit;
 
 		lem_init_locked(adapter);
 		if ((ifp->if_drv_flags & (IFF_DRV_RUNNING | IFF_DRV_OACTIVE)) == 0) {

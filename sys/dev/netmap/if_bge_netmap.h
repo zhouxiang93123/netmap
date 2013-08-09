@@ -42,7 +42,7 @@ bge_netmap_reg(struct ifnet *ifp, int onoff)
 		/* save if_transmit and restore it */
 		na->if_transmit = ifp->if_transmit;
 		/* XXX if_start and if_qflush ??? */
-		ifp->if_transmit = netmap_start;
+		ifp->if_transmit = netmap_transmit;
 
 		bge_init_locked(adapter);
 

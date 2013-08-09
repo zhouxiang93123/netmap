@@ -116,7 +116,7 @@ cxgbe_netmap_reg(struct ifnet *ifp, int onoff)
 
 		/* save if_transmit to restore it later */
 		na->if_transmit = ifp->if_transmit;
-		ifp->if_transmit = netmap_start;
+		ifp->if_transmit = netmap_transmit;
 
 		ixgbe_init_locked(adapter);
 		if ((ifp->if_drv_flags & (IFF_DRV_RUNNING | IFF_DRV_OACTIVE)) == 0) {

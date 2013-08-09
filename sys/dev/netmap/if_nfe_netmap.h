@@ -147,7 +147,7 @@ nfe_netmap_reg(struct ifnet *ifp, int onoff)
 		ifp->if_capenable |= IFCAP_NETMAP;
 
 		na->if_transmit = ifp->if_transmit;
-		ifp->if_transmit = netmap_start;
+		ifp->if_transmit = netmap_transmit;
 
 		nfe_init_locked(sc);
 	} else {

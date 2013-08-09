@@ -116,7 +116,7 @@ sfxge_netmap_reg(struct ifnet *ifp, int onoff)
 
 		/* save if_transmit and replace with our routine */
 		na->if_transmit = ifp->if_transmit;
-		ifp->if_transmit = netmap_start;
+		ifp->if_transmit = netmap_transmit;
 
 		/*
 		 * reinitialize the adapter, now with netmap flag set,

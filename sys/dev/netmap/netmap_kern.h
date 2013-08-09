@@ -454,7 +454,7 @@ struct netmap_adapter {
  *
  * netmap_detach() frees the memory allocated by netmap_attach().
  *
- * netmap_start() replaces the if_transmit routine of the interface,
+ * netmap_transmit() replaces the if_transmit routine of the interface,
  *	and is used to intercept packets coming from the stack.
  *
  * netmap_load_map/netmap_reload_map are helper routines to set/reset
@@ -465,7 +465,7 @@ struct netmap_adapter {
  */
 int netmap_attach(struct netmap_adapter *, u_int);
 void netmap_detach(struct ifnet *);
-int netmap_start(struct ifnet *, struct mbuf *);
+int netmap_transmit(struct ifnet *, struct mbuf *);
 enum txrx { NR_RX = 0, NR_TX = 1 };
 struct netmap_slot *netmap_reset(struct netmap_adapter *na,
 	enum txrx tx, u_int n, u_int new_cur);

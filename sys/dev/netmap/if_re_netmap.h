@@ -61,7 +61,7 @@ re_netmap_reg(struct ifnet *ifp, int onoff)
 
 		/* save if_transmit to restore it later */
 		na->if_transmit = ifp->if_transmit;
-		ifp->if_transmit = netmap_start;
+		ifp->if_transmit = netmap_transmit;
 
 		re_init_locked(adapter);
 

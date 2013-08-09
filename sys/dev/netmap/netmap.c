@@ -203,7 +203,7 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 241723 2012-10-19 09:41:45Z gle
 
 #include "bsd_glue.h"
 
-static netdev_tx_t linux_netmap_start(struct sk_buff *, struct net_device *);
+static netdev_tx_t linux_netmap_start_xmit(struct sk_buff *, struct net_device *);
 
 static struct device_driver*
 linux_netmap_find_driver(struct device *dev)
@@ -1425,7 +1425,7 @@ netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
  * The host ring has packets from nr_hwcur to (cur - reserved)
  * to be sent down to the NIC.
  * We need to use the queue lock on the source (host RX ring)
- * to protect against netmap_start.
+ * to protect against netmap_transmit.
  * If the user is well behaved we do not need to acquire locks
  * on the destination(s),
  * so we only need to make sure that there are no panics because
@@ -1537,7 +1537,7 @@ netmap_bdg_to_host(struct ifnet *ifp, u_int ring_nr, int flags)
 
 /*
  * rxsync backend for packets coming from the host stack.
- * They have been put in the queue by netmap_start() so we
+ * They have been put in the queue by netmap_transmit() so we
  * need to protect access to the kring using a lock.
  *
  * This routine also does the selrecord if called from the poll handler
@@ -2734,7 +2734,7 @@ netmap_attach(struct netmap_adapter *arg, u_int num_queues)
 		na->nm_ndo = *ifp->netdev_ops;
 #endif
 	}
-	na->nm_ndo.ndo_start_xmit = linux_netmap_start;
+	na->nm_ndo.ndo_start_xmit = linux_netmap_start_xmit;
 #endif /* linux */
 	na->nm_mem = arg->nm_mem ? arg->nm_mem : &nm_mem;
 	if (!nma_is_vp(arg))
@@ -2785,7 +2785,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n,
  * we can protect from deletions using a lock in the *na
  */
 int
-netmap_start(struct ifnet *ifp, struct mbuf *m)
+netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 {
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring;
@@ -2838,7 +2838,7 @@ netmap_start(struct ifnet *ifp, struct mbuf *m)
 		goto done;
 	}
 
-	/* protect against other instances of netmap_start,
+	/* protect against other instances of netmap_transmit,
 	 * and userspace invocations of rxsync().
 	 * XXX could reuse core_lock
 	 */
@@ -3182,9 +3182,9 @@ linux_netmap_mmap(struct file *f, struct vm_area_struct *vma)
  * This one is probably already protected by the netif lock XXX
  */
 static netdev_tx_t
-linux_netmap_start(struct sk_buff *skb, struct net_device *dev)
+linux_netmap_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
-	netmap_start(dev, skb);
+	netmap_transmit(dev, skb);
 	return (NETDEV_TX_OK);
 }
 
