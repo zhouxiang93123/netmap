@@ -51,18 +51,21 @@ e1000_netmap_reg(struct ifnet *ifp, int onoff)
 	if (na == NULL)
 		return EINVAL;
 
-	if (!(ifp->flags & IFF_UP)) {
+	rtnl_lock();
+
+	if (onoff && !(ifp->flags & IFF_UP)) {
 		/* e1000_open has not been called yet, so resources
 		 * are not allocated */
 		D("Interface is down!");
-		return EINVAL;
+		error = EINVAL;
+		goto unlock_exit;
 	}
 
 	while (test_and_set_bit(__E1000_RESETTING, &adapter->flags))
 		msleep(1);
 
-	//rtnl_lock(); // XXX do we need it ?
-	e1000_down(adapter);
+	if (netif_running(adapter->netdev))
+		e1000_down(adapter);
 
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
@@ -73,9 +76,17 @@ e1000_netmap_reg(struct ifnet *ifp, int onoff)
 		ifp->netdev_ops = (void *)na->if_transmit;
 	}
 
-	e1000_up(adapter);
-	//rtnl_unlock(); // XXX do we need it ?
+	if (netif_running(adapter->netdev))
+		e1000_up(adapter);
+	else
+		e1000_reset(adapter);
+
 	clear_bit(__E1000_RESETTING, &adapter->flags);
+
+unlock_exit:
+
+	rtnl_unlock();
+
 	return (error);
 }
 
