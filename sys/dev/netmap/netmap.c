@@ -375,7 +375,7 @@ nm_dump_buf(char *p, int len, int lim, char *dst)
 	if (lim <= 0 || lim > len)
 		lim = len;
 	o = dst;
-	sprintf(o, "buf 0x%x len %d lim %d\n", p, len, lim);
+	sprintf(o, "buf 0x%p len %d lim %d\n", p, len, lim);
 	o += strlen(o);
 	/* hexdump routine */
 	for (i = 0; i < lim; ) {
