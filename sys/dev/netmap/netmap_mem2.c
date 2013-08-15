@@ -448,6 +448,7 @@ netmap_reset_obj_allocator(struct netmap_obj_pool *p)
 #endif
 	}
 	p->lut = NULL;
+	p->_memtotal = p->_numclusters * p->_clustsize;
 }
 
 /*
@@ -665,6 +666,7 @@ netmap_mem_finalize_all(struct netmap_mem_d *nmd)
 	if (nmd->finalized)
 		return 0;
 	nmd->lasterr = 0;
+	nmd->nm_totalsize = 0;
 	for (i = 0; i < NETMAP_POOLS_NR; i++) {
 		if (netmap_finalize_obj_allocator(&nmd->pools[i]))
 			goto error;
