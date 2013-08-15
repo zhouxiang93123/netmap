@@ -267,6 +267,9 @@ struct netmap_adapter {
 				 * forwarding packets coming from this
 				 * interface
 				 */
+#define NAF_MEM_OWNER	8	/* the adapter is responsible for the
+				 * deallocation of the memory allocator
+				 */
 	int refcount; /* number of user-space descriptors using this
 			 interface, which is equal to the number of
 			 struct netmap_if objs in the mapped region. */

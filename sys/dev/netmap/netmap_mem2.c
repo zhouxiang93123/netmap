@@ -651,6 +651,7 @@ static void
 netmap_mem_reset_all(struct netmap_mem_d *nmd)
 {
 	int i;
+	D("resetting %p", nmd);
 	for (i = 0; i < NETMAP_POOLS_NR; i++) {
 		netmap_reset_obj_allocator(&nmd->pools[i]);
 	}
@@ -681,13 +682,14 @@ error:
 
 
 
-static void
+void
 netmap_mem_private_delete(struct netmap_mem_d *nmd)
 {
 	if (nmd == NULL)
 		return;
 	D("deleting %p", nmd);
-	netmap_mem_reset_all(nmd);
+	if (nmd->refcount > 0)
+		D("bug: deleting mem allocator with refcount=%d!", nmd->refcount);
 	D("done deleting %p", nmd);
 	NMA_LOCK_DESTROY(nmd);
 	free(nmd, M_DEVBUF);
@@ -708,12 +710,9 @@ netmap_mem_private_finalize(struct netmap_mem_d *nmd)
 static void netmap_mem_private_deref(struct netmap_mem_d *nmd)
 {
 	NMA_LOCK(nmd);
-	if (--nmd->refcount <= 0) {
-		NMA_UNLOCK(nmd);
-		netmap_mem_private_delete(nmd);
-	} else {
-		NMA_UNLOCK(nmd);
-	}
+	if (--nmd->refcount <= 0)
+		netmap_mem_reset_all(nmd);
+	NMA_UNLOCK(nmd);
 }
 
 struct netmap_mem_d *

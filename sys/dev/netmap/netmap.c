@@ -1128,6 +1128,8 @@ nm_if_rele(struct ifnet *ifp)
 	if (is_hw) {
 		if_rele(ifp);
 	} else {
+		if (na->na_flags & NAF_MEM_OWNER)
+			netmap_mem_private_delete(na->nm_mem);
 		bzero(na, sizeof(*na));
 		free(na, M_DEVBUF);
 		bzero(ifp, sizeof(*ifp));
@@ -1155,10 +1157,12 @@ netmap_dtor_locked(struct netmap_priv_d *priv)
 #endif /* __FreeBSD__ */
 	if (ifp) {
 		netmap_do_unregif(priv, priv->np_nifp);
-		nm_if_rele(ifp); /* might also destroy *na */
 	}
 	if (priv->np_mref) {
 		netmap_mem_deref(priv->np_mref);
+	}
+	if (ifp) {
+		nm_if_rele(ifp); /* might also destroy *na */
 	}
 	return 1;
 }
@@ -2817,6 +2821,8 @@ netmap_detach(struct ifnet *ifp)
 		D("freeing leftover tx_rings");
 		free(na->tx_rings, M_DEVBUF);
 	}
+	if (na->na_flags & NAF_MEM_OWNER)
+		netmap_mem_private_delete(na->nm_mem);
 	bzero(na, sizeof(*na));
 	WNA(ifp) = NULL;
 	free(na, M_DEVBUF);
@@ -3898,7 +3904,7 @@ bdg_netmap_attach(struct netmap_adapter *arg)
 	bzero(&na, sizeof(na));
 
 	na.ifp = arg->ifp;
-	na.na_flags = NAF_BDG_MAYSLEEP;
+	na.na_flags = NAF_BDG_MAYSLEEP | NAF_MEM_OWNER;
 	na.num_tx_rings = arg->num_tx_rings;
 	na.num_rx_rings = arg->num_rx_rings;
 	na.num_tx_desc = arg->num_tx_desc;
