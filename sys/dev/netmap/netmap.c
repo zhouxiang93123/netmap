@@ -2315,6 +2315,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 				break;
 			if (NETMAP_OWNED_BY_KERN(ifp)) {
 				nm_if_rele(ifp);
+				error = EBUSY;
 				break;
 			}
 			nifp = netmap_do_regif(priv, ifp, nmr->nr_ringid, &error);
