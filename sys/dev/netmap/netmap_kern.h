@@ -181,6 +181,8 @@ struct netmap_kring {
 	NM_SELINFO_T si;	/* poll/select wait queue */
 	NM_LOCK_T q_lock;	/* protects kring and ring. */
 	NM_ATOMIC_T nr_busy;	/* prevent concurrent syscalls */
+
+	volatile int nkr_stopped;
 } __attribute__((__aligned__(64)));
 
 
@@ -693,5 +695,9 @@ int netmap_rx_irq(struct ifnet *, u_int, u_int *);
 #ifdef __FreeBSD__
 MALLOC_DECLARE(M_NETMAP);
 #endif /* __FreeBSD__ */
+
+
+void netmap_disable_all_rings(struct ifnet *);
+void netmap_enable_all_rings(struct ifnet *);
 
 #endif /* _NET_NETMAP_KERN_H_ */

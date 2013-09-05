@@ -212,7 +212,7 @@ static inline void mtx_unlock(safe_spinlock_t *m)
 
 // #define knlist_destroy(x)	// XXX todo
 
-// #define	tsleep(a, b, c, t)	msleep(10)	// XXX unused
+#define	tsleep(a, b, c, t)	msleep(10)
 // #define	wakeup(sw)				// XXX double check
 
 #define microtime		do_gettimeofday		// debugging

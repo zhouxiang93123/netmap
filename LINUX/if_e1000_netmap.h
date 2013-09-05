@@ -107,6 +107,9 @@ e1000_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 	/* generate an interrupt approximately every half ring */
 	int report_frequency = kring->nkr_num_slots >> 1;
 
+	if (!netif_carrier_ok(ifp))
+		return 0;
+
 	/* take a copy of ring->cur now, and never read it again */
 	k = ring->cur;
 	if (k > lim)
