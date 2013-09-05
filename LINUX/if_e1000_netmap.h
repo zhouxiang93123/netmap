@@ -53,14 +53,6 @@ e1000_netmap_reg(struct ifnet *ifp, int onoff)
 
 	rtnl_lock();
 
-	if (onoff && !(ifp->flags & IFF_UP)) {
-		/* e1000_open has not been called yet, so resources
-		 * are not allocated */
-		D("Interface is down!");
-		error = EINVAL;
-		goto unlock_exit;
-	}
-
 	while (test_and_set_bit(__E1000_RESETTING, &adapter->flags))
 		msleep(1);
 
