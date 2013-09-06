@@ -1096,9 +1096,6 @@ nm_if_rele(struct ifnet *ifp)
 	is_hw = nma_is_hw(na);
 
 	ND("%s has %d references", ifp->if_xname, NA(ifp)->na_bdg_refcount);
-	/* if we attach the host port, we have one extra reference */
-	if (is_hw && SWNA(ifp)->na_bdg)
-		DROP_BDG_REF(ifp);
 
 	if (!DROP_BDG_REF(ifp))
 		return;
@@ -2024,8 +2021,9 @@ nm_bdg_attach(struct nmreq *nmr)
 	}
 
 	if (NA(ifp)->refcount > 0) { /* already registered */
-		error = EINVAL;
-		goto unref_exit;
+		error = EBUSY;
+		DROP_BDG_REF(ifp);
+		goto unlock_exit;
 	}
 
 	nifp = netmap_do_regif(npriv, ifp, nmr->nr_ringid, &error);
@@ -2073,6 +2071,9 @@ nm_bdg_detach(struct nmreq *nmr)
 		goto unref_exit;
 	}
 
+	/* drop the reference we obtained from get_ifp so that */
+	/* the only remaining reference should be from the bridge */
+	DROP_BDG_REF(ifp);
 	last_instance = netmap_dtor_locked(NA(ifp)->na_kpriv); /* unregister */
 	NMG_UNLOCK();
 	if (!last_instance) {
