@@ -2869,7 +2869,7 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 			len, NETMAP_BDG_BUF_SIZE(na->nm_mem));
 		goto done;
 	}
-	if (na->na_bdg) {
+	if (SWNA(ifp)->na_bdg) {
 		struct nm_bdg_fwd *ft;
 		char *dst;
 
