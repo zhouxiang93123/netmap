@@ -616,6 +616,7 @@ struct nm_bridge nm_bridges[NM_BRIDGES];
  * nma_is_host()	port connected to the host stack
  * nma_is_hw()		port connected to a NIC
  */
+int nma_is_vp(struct netmap_adapter *na);
 int
 nma_is_vp(struct netmap_adapter *na)
 {
