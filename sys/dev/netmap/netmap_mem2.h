@@ -116,9 +116,20 @@ struct netmap_obj_params {
 };
 struct netmap_obj_pool {
 	char name[NETMAP_POOL_MAX_NAMSZ];	/* name of the allocator */
+
+	/* ---------------------------------------------------*/
+	/* these are only meaningful if the pool is finalized */
+	/* (see 'finalized' field in netmap_mem_d)            */
 	u_int objtotal;         /* actual total number of objects. */
+	u_int memtotal;		/* actual total memory space */
+	u_int numclusters;	/* actual number of clusters */
+
 	u_int objfree;          /* number of free objects. */
-	u_int clustentries;	/* actual objects per cluster */
+
+	struct lut_entry *lut;  /* virt,phys addresses, objtotal entries */
+	uint32_t *bitmap;       /* one bit per buffer, 1 means free */
+	uint32_t bitmap_slots;	/* number of uint32 entries in bitmap */
+	/* ---------------------------------------------------*/
 
 	/* limits */
 	u_int objminsize;	/* minimum object size */
@@ -126,15 +137,16 @@ struct netmap_obj_pool {
 	u_int nummin;		/* minimum number of objects */
 	u_int nummax;		/* maximum number of objects */
 
-	/* the total memory space is _numclusters*_clustsize */
-	u_int _numclusters;	/* how many clusters */
-	u_int _clustsize;        /* cluster size */
-	u_int _objsize;		/* actual object size */
+	/* these are changed only by config */
+	u_int _objtotal;	/* total number of objects */
+	u_int _objsize;		/* object size */
+	u_int _clustsize;       /* cluster size */
+	u_int _clustentries;    /* objects per cluster */
+	u_int _numclusters;	/* number of clusters */
 
-	u_int _memtotal;	/* _numclusters*_clustsize */
-	struct lut_entry *lut;  /* virt,phys addresses, objtotal entries */
-	uint32_t *bitmap;       /* one bit per buffer, 1 means free */
-	uint32_t bitmap_slots;	/* number of uint32 entries in bitmap */
+	/* requested values */
+	u_int r_objtotal;
+	u_int r_objsize;
 };
 
 #ifdef linux

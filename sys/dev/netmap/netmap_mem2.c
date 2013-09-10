@@ -186,8 +186,8 @@ netmap_mem_ofstophys(struct netmap_mem_d* nmd, vm_ooffset_t offset)
 	NMA_LOCK(nmd);
 	p = nmd->pools;
 
-	for (i = 0; i < NETMAP_POOLS_NR; offset -= p[i]._memtotal, i++) {
-		if (offset >= p[i]._memtotal)
+	for (i = 0; i < NETMAP_POOLS_NR; offset -= p[i].memtotal, i++) {
+		if (offset >= p[i].memtotal)
 			continue;
 		// now lookup the cluster's address
 		pa = p[i].lut[offset / p[i]._objsize].paddr +
@@ -197,12 +197,12 @@ netmap_mem_ofstophys(struct netmap_mem_d* nmd, vm_ooffset_t offset)
 	}
 	/* this is only in case of errors */
 	D("invalid ofs 0x%x out of 0x%x 0x%x 0x%x", (u_int)o,
-		p[NETMAP_IF_POOL]._memtotal,
-		p[NETMAP_IF_POOL]._memtotal
-			+ p[NETMAP_RING_POOL]._memtotal,
-		p[NETMAP_IF_POOL]._memtotal
-			+ p[NETMAP_RING_POOL]._memtotal
-			+ p[NETMAP_BUF_POOL]._memtotal);
+		p[NETMAP_IF_POOL].memtotal,
+		p[NETMAP_IF_POOL].memtotal
+			+ p[NETMAP_RING_POOL].memtotal,
+		p[NETMAP_IF_POOL].memtotal
+			+ p[NETMAP_RING_POOL].memtotal
+			+ p[NETMAP_BUF_POOL].memtotal);
 	NMA_UNLOCK(nmd);
 	return 0;	// XXX bad address
 }
@@ -226,7 +226,7 @@ netmap_mem_get_totalsize(struct netmap_mem_d* nmd)
 static ssize_t
 netmap_obj_offset(struct netmap_obj_pool *p, const void *vaddr)
 {
-	int i, k = p->clustentries, n = p->objtotal;
+	int i, k = p->_clustentries, n = p->objtotal;
 	ssize_t ofs = 0;
 
 	for (i = 0; i < n; i += k, ofs += p->_clustsize) {
@@ -251,12 +251,12 @@ netmap_obj_offset(struct netmap_obj_pool *p, const void *vaddr)
 	netmap_obj_offset(&(n)->pools[NETMAP_IF_POOL], (v))
 
 #define netmap_ring_offset(n, v)				\
-    ((n)->pools[NETMAP_IF_POOL]._memtotal + 			\
+    ((n)->pools[NETMAP_IF_POOL].memtotal + 			\
 	netmap_obj_offset(&(n)->pools[NETMAP_RING_POOL], (v)))
 
 #define netmap_buf_offset(n, v)					\
-    ((n)->pools[NETMAP_IF_POOL]._memtotal +			\
-	(n)->pools[NETMAP_RING_POOL]._memtotal +		\
+    ((n)->pools[NETMAP_IF_POOL].memtotal +			\
+	(n)->pools[NETMAP_RING_POOL].memtotal +		\
 	netmap_obj_offset(&(n)->pools[NETMAP_BUF_POOL], (v)))
 
 
@@ -339,10 +339,10 @@ netmap_obj_free(struct netmap_obj_pool *p, uint32_t j)
 static void
 netmap_obj_free_va(struct netmap_obj_pool *p, void *vaddr)
 {
-	u_int i, j, n = p->_memtotal / p->_clustsize;
+	u_int i, j, n = p->numclusters;
 
-	for (i = 0, j = 0; i < n; i++, j += p->clustentries) {
-		void *base = p->lut[i * p->clustentries].vaddr;
+	for (i = 0, j = 0; i < n; i++, j += p->_clustentries) {
+		void *base = p->lut[i * p->_clustentries].vaddr;
 		ssize_t relofs = (ssize_t) vaddr - (ssize_t) base;
 
 		/* Given address, is out of the scope of the current cluster.*/
@@ -436,7 +436,7 @@ netmap_reset_obj_allocator(struct netmap_obj_pool *p)
 		u_int i;
 		size_t sz = p->_clustsize;
 
-		for (i = 0; i < p->objtotal; i += p->clustentries) {
+		for (i = 0; i < p->objtotal; i += p->_clustentries) {
 			if (p->lut[i].vaddr)
 				contigfree(p->lut[i].vaddr, sz, M_NETMAP);
 		}
@@ -448,7 +448,10 @@ netmap_reset_obj_allocator(struct netmap_obj_pool *p)
 #endif
 	}
 	p->lut = NULL;
-	p->_memtotal = p->_numclusters * p->_clustsize;
+	p->objtotal = 0;
+	p->memtotal = 0;
+	p->numclusters = 0;
+	p->objfree = 0;
 }
 
 /*
@@ -466,8 +469,7 @@ netmap_destroy_obj_allocator(struct netmap_obj_pool *p)
  * We receive a request for objtotal objects, of size objsize each.
  * Internally we may round up both numbers, as we allocate objects
  * in small clusters multiple of the page size.
- * In the allocator we don't need to store the objsize,
- * but we do need to keep track of objtotal' and clustentries,
+ * We need to keep track of objtotal and clustentries,
  * as they are needed when freeing memory.
  *
  * XXX note -- userspace needs the buffers to be contiguous,
@@ -479,16 +481,21 @@ netmap_destroy_obj_allocator(struct netmap_obj_pool *p)
 static int
 netmap_config_obj_allocator(struct netmap_obj_pool *p, u_int objtotal, u_int objsize)
 {
-	int i, n;
+	int i;
 	u_int clustsize;	/* the cluster size, multiple of page size */
 	u_int clustentries;	/* how many objects per entry */
+
+	/* we store the current request, so we can
+	 * detect configuration changes later */
+	p->r_objtotal = objtotal;
+	p->r_objsize = objsize;
 
 #define MAX_CLUSTSIZE	(1<<17)
 #define LINE_ROUND	64
 	if (objsize >= MAX_CLUSTSIZE) {
 		/* we could do it but there is no point */
 		D("unsupported allocation for %d bytes", objsize);
-		goto error;
+		return EINVAL;
 	}
 	/* make sure objsize is a multiple of LINE_ROUND */
 	i = (objsize & (LINE_ROUND - 1));
@@ -499,12 +506,12 @@ netmap_config_obj_allocator(struct netmap_obj_pool *p, u_int objtotal, u_int obj
 	if (objsize < p->objminsize || objsize > p->objmaxsize) {
 		D("requested objsize %d out of range [%d, %d]",
 			objsize, p->objminsize, p->objmaxsize);
-		goto error;
+		return EINVAL;
 	}
 	if (objtotal < p->nummin || objtotal > p->nummax) {
 		D("requested objtotal %d out of range [%d, %d]",
 			objtotal, p->nummin, p->nummax);
-		goto error;
+		return EINVAL;
 	}
 	/*
 	 * Compute number of objects using a brute-force approach:
@@ -538,22 +545,15 @@ netmap_config_obj_allocator(struct netmap_obj_pool *p, u_int objtotal, u_int obj
 	 * The number of clusters is n = ceil(objtotal/clustentries)
 	 * objtotal' = n * clustentries
 	 */
-	p->clustentries = clustentries;
+	p->_clustentries = clustentries;
 	p->_clustsize = clustsize;
-	n = (objtotal + clustentries - 1) / clustentries;
-	p->_numclusters = n;
-	p->objtotal = n * clustentries;
-	p->objfree = p->objtotal;
-	p->_memtotal = p->_numclusters * p->_clustsize;
+	p->_numclusters = (objtotal + clustentries - 1) / clustentries;
+
+	/* actual values (may be larger than requested) */
 	p->_objsize = objsize;
+	p->_objtotal = p->_numclusters * clustentries;
 
 	return 0;
-
-error:
-	p->_objsize = objsize;
-	p->objtotal = objtotal;
-
-	return EINVAL;
 }
 
 
@@ -563,6 +563,10 @@ netmap_finalize_obj_allocator(struct netmap_obj_pool *p)
 {
 	int i; /* must be signed */
 	size_t n;
+
+	/* optimistically assume we have enough memory */
+	p->numclusters = p->_numclusters;
+	p->objtotal = p->_objtotal;
 
 	n = sizeof(struct lut_entry) * p->objtotal;
 #ifdef linux
@@ -588,9 +592,10 @@ netmap_finalize_obj_allocator(struct netmap_obj_pool *p)
 	/*
 	 * Allocate clusters, init pointers and bitmap
 	 */
+
 	n = p->_clustsize;
 	for (i = 0; i < (int)p->objtotal;) {
-		int lim = i + p->clustentries;
+		int lim = i + p->_clustentries;
 		char *clust;
 
 		clust = contigmalloc(n, M_NETMAP, M_NOWAIT | M_ZERO,
@@ -606,14 +611,12 @@ netmap_finalize_obj_allocator(struct netmap_obj_pool *p)
 			lim = i / 2;
 			for (i--; i >= lim; i--) {
 				p->bitmap[ (i>>5) ] &=  ~( 1 << (i & 31) );
-				if (i % p->clustentries == 0 && p->lut[i].vaddr)
+				if (i % p->_clustentries == 0 && p->lut[i].vaddr)
 					contigfree(p->lut[i].vaddr,
 						n, M_NETMAP);
 			}
 			p->objtotal = i;
-			p->objfree = p->objtotal;
-			p->_numclusters = i / p->clustentries;
-			p->_memtotal = p->_numclusters * p->_clustsize;
+			p->numclusters = i / p->_clustentries;
 			break;
 		}
 		for (; i < lim; i++, clust += p->_objsize) {
@@ -622,10 +625,12 @@ netmap_finalize_obj_allocator(struct netmap_obj_pool *p)
 			p->lut[i].paddr = vtophys(clust);
 		}
 	}
+	p->objfree = p->objtotal;
+	p->memtotal = p->numclusters * p->_clustsize;
 	if (netmap_verbose)
 		D("Pre-allocated %d clusters (%d/%dKB) for '%s'",
-		    p->_numclusters, p->_clustsize >> 10,
-		    p->_memtotal >> 10, p->name);
+		    p->numclusters, p->_clustsize >> 10,
+		    p->memtotal >> 10, p->name);
 
 	return 0;
 
@@ -643,6 +648,8 @@ netmap_memory_config_changed(struct netmap_mem_d *nmd)
 	for (i = 0; i < NETMAP_POOLS_NR; i++) {
 		if (nmd->pools[i]._objsize != netmap_params[i].size ||
 		    nmd->pools[i].objtotal != netmap_params[i].num)
+		if (nmd->pools[i].r_objsize != netmap_params[i].size ||
+		    nmd->pools[i].r_objtotal != netmap_params[i].num)
 		    return 1;
 	}
 	return 0;
@@ -670,12 +677,21 @@ netmap_mem_finalize_all(struct netmap_mem_d *nmd)
 	for (i = 0; i < NETMAP_POOLS_NR; i++) {
 		if (netmap_finalize_obj_allocator(&nmd->pools[i]))
 			goto error;
-		nmd->nm_totalsize += nmd->pools[i]._memtotal;
+		nmd->nm_totalsize += nmd->pools[i].memtotal;
 	}
 	/* buffers 0 and 1 are reserved */
 	nmd->pools[NETMAP_BUF_POOL].objfree -= 2;
 	nmd->pools[NETMAP_BUF_POOL].bitmap[0] = ~3;
 	nmd->finalized = 1;
+
+	D("Have %d KB for interfaces, %d KB for rings and %d MB for buffers",
+	    nmd->pools[NETMAP_IF_POOL].memtotal >> 10,
+	    nmd->pools[NETMAP_RING_POOL].memtotal >> 10,
+	    nmd->pools[NETMAP_BUF_POOL].memtotal >> 20);
+
+	D("Free buffers: %d", nmd->pools[NETMAP_BUF_POOL].objfree);
+
+
 	return 0;
 error:
 	netmap_mem_reset_all(nmd);
@@ -800,11 +816,6 @@ netmap_memory_config(struct netmap_mem_d *nmd)
 			goto out;
 	}
 
-	D("%d KB nifp, %d KB rings, %d MB buffers",
-	    nmd->pools[NETMAP_IF_POOL]._memtotal >> 10,
-	    nmd->pools[NETMAP_RING_POOL]._memtotal >> 10,
-	    nmd->pools[NETMAP_BUF_POOL]._memtotal >> 20);
-
 out:
 
 	return nmd->lasterr;
@@ -813,7 +824,7 @@ out:
 static int
 netmap_mem_global_finalize(struct netmap_mem_d *nmd)
 {
-	int i, err;
+	int err;
 
 	NMA_LOCK(nmd);
 
@@ -844,12 +855,6 @@ netmap_mem_global_finalize(struct netmap_mem_d *nmd)
 	netmap_buffer_base = nmd->pools[NETMAP_BUF_POOL].lut[0].vaddr;
 
 	nmd->lasterr = 0;
-
-	/* make sysctl values match actual values in the pools */
-	for (i = 0; i < NETMAP_POOLS_NR; i++) {
-		netmap_params[i].size = nmd->pools[i]._objsize;
-		netmap_params[i].num  = nmd->pools[i].objtotal;
-	}
 
 out:
 	if (nmd->lasterr)
@@ -998,8 +1003,8 @@ netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
 		}
 		*(uint32_t *)(uintptr_t)&ring->num_slots = kring->nkr_num_slots = ndesc;
 		*(ssize_t *)(uintptr_t)&ring->buf_ofs =
-		    (na->nm_mem->pools[NETMAP_IF_POOL]._memtotal +
-			na->nm_mem->pools[NETMAP_RING_POOL]._memtotal) -
+		    (na->nm_mem->pools[NETMAP_IF_POOL].memtotal +
+			na->nm_mem->pools[NETMAP_RING_POOL].memtotal) -
 			netmap_ring_offset(na->nm_mem, ring);
 
 		/*
@@ -1040,8 +1045,8 @@ netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
 		}
 		*(uint32_t *)(uintptr_t)&ring->num_slots = kring->nkr_num_slots = ndesc;
 		*(ssize_t *)(uintptr_t)&ring->buf_ofs =
-		    (na->nm_mem->pools[NETMAP_IF_POOL]._memtotal +
-		        na->nm_mem->pools[NETMAP_RING_POOL]._memtotal) -
+		    (na->nm_mem->pools[NETMAP_IF_POOL].memtotal +
+		        na->nm_mem->pools[NETMAP_RING_POOL].memtotal) -
 			netmap_ring_offset(na->nm_mem, ring);
 
 		ring->cur = kring->nr_hwcur = 0;
