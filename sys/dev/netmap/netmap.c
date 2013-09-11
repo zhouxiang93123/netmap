@@ -1148,7 +1148,7 @@ nm_if_rele(struct ifnet *ifp)
 	/* make a copy of the list of active ports, update it,
 	 * and then copy back within BDG_WLOCK().
 	 */
-	bcopy(b->bdg_port_index, tmp, sizeof(tmp));
+	memcpy(tmp, b->bdg_port_index, sizeof(tmp));
 	for (i = 0; (hw >= 0 || sw >= 0) && i < lim; ) {
 		if (hw >= 0 && tmp[i] == hw) {
 			ND("detach hw %d at %d", hw, i);
@@ -1179,7 +1179,7 @@ nm_if_rele(struct ifnet *ifp)
 		b->bdg_ports[sw] = NULL;
 		SWNA(ifp)->na_bdg = NULL;
 	}
-	bcopy(tmp, b->bdg_port_index, sizeof(tmp));
+	memcpy(b->bdg_port_index, tmp, sizeof(tmp));
 	b->bdg_active_ports = lim;
 	BDG_WUNLOCK(b);
 
