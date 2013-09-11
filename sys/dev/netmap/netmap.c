@@ -324,13 +324,74 @@ NMG_LOCK_T	netmap_global_lock;
 /* return 1 on failure */
 static __inline int nm_kr_tryget(struct netmap_kring *kr)
 {
-	return NM_ATOMIC_TEST_AND_SET(&kr->nr_busy);
+	if (unlikely(kr->nkr_stopped)) {
+		D("ring %p stopped (%d)", kr, kr->nkr_stopped);
+		return 1;
+	}
+	return NM_ATOMIC_TEST_AND_SET(&kr->nr_busy) || kr->nkr_stopped;
 }
 
 static __inline void nm_kr_put(struct netmap_kring *kr)
 {
 	NM_ATOMIC_CLEAR(&kr->nr_busy);
 }
+
+static void nm_kr_get(struct netmap_kring *kr)
+{
+	while (NM_ATOMIC_TEST_AND_SET(&kr->nr_busy))
+		tsleep(kr, 0, "NM_KR_GET", 4);
+}
+
+static void nm_disable_ring(struct netmap_kring *kr)
+{
+	kr->nkr_stopped = 1;
+	nm_kr_get(kr);
+	mtx_lock(&kr->q_lock);
+	mtx_unlock(&kr->q_lock);
+	nm_kr_put(kr);
+}
+
+void netmap_disable_all_rings(struct ifnet *ifp)
+{
+	struct netmap_adapter *na;
+	int i;
+
+	if (!(ifp->if_capenable & IFCAP_NETMAP))
+		return;
+
+	na = NA(ifp);
+
+	for (i = 0; i < na->num_tx_rings + 1; i++) {
+		nm_disable_ring(na->tx_rings + i);
+		selwakeuppri(&na->tx_rings[i].si, PI_NET);
+	}
+	for (i = 0; i < na->num_rx_rings + 1; i++) {
+		nm_disable_ring(na->rx_rings + i);
+		selwakeuppri(&na->rx_rings[i].si, PI_NET);
+	}
+	selwakeuppri(&na->tx_si, PI_NET);
+	selwakeuppri(&na->rx_si, PI_NET);
+}
+
+void netmap_enable_all_rings(struct ifnet *ifp)
+{
+	struct netmap_adapter *na;
+	int i;
+
+	if (!(ifp->if_capenable & IFCAP_NETMAP))
+		return;
+
+	na = NA(ifp);
+	for (i = 0; i < na->num_tx_rings + 1; i++) {
+		D("enabling %p", na->tx_rings + i);
+		na->tx_rings[i].nkr_stopped = 0;
+	}
+	for (i = 0; i < na->num_rx_rings + 1; i++) {
+		D("enabling %p", na->rx_rings + i);
+		na->rx_rings[i].nkr_stopped = 0;
+	}
+}
+
 
 /*
  * generic bound_checking function
@@ -377,7 +438,7 @@ nm_dump_buf(char *p, int len, int lim, char *dst)
 	if (lim <= 0 || lim > len)
 		lim = len;
 	o = dst;
-	sprintf(o, "buf 0x%x len %d lim %d\n", p, len, lim);
+	sprintf(o, "buf 0x%p len %d lim %d\n", p, len, lim);
 	o += strlen(o);
 	/* hexdump routine */
 	for (i = 0; i < lim; ) {
@@ -1004,19 +1065,21 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 		 * when the last reference to this file descriptor goes
 		 * away. This means we cannot have any pending poll()
 		 * or interrupt routine operating on the structure.
+		 * XXX The file may be closed in a thread while
+		 * another thread is using it.
+		 * Linux keeps the file opened until the last reference
+		 * by any outstanding ioctl/poll or mmap is gone.
+		 * FreeBSD does not track mmap()s (but we do) and
+		 * wakes up any sleeping poll(). Need to check what
+		 * happens if the close() occurs while a concurrent
+		 * syscall is running.
 		 */
-		mtx_lock(&na->core_lock);
 		na->nm_register(ifp, 0); /* off, clear IFCAP_NETMAP */
-		mtx_unlock(&na->core_lock);
 		/* Wake up any sleeping threads. netmap_poll will
 		 * then return POLLERR
+		 * XXX The wake up now happens during *_down(), when
+		 * we order all activities to stop. -gl
 		 */
-		for (i = 0; i < na->num_tx_rings + 1; i++)
-			selwakeuppri(&na->tx_rings[i].si, PI_NET);
-		for (i = 0; i < na->num_rx_rings + 1; i++)
-			selwakeuppri(&na->rx_rings[i].si, PI_NET);
-		selwakeuppri(&na->tx_si, PI_NET);
-		selwakeuppri(&na->rx_si, PI_NET);
 		nm_free_bdgfwd(na);
 		for (i = 0; i < na->num_tx_rings + 1; i++) {
 			mtx_destroy(&na->tx_rings[i].q_lock);
@@ -1599,6 +1662,9 @@ netmap_rxsync_from_host(struct netmap_adapter *na, struct thread *td, void *pwai
 
 	(void)pwait;	/* disable unused warnings */
 
+	if (kring->nkr_stopped)
+		return;
+
 	/* XXX as an optimization we could reuse na->core_lock */
 	mtx_lock(&kring->q_lock);
 	if (k >= lim) {
@@ -2019,8 +2085,9 @@ nm_bdg_attach(struct nmreq *nmr)
 	}
 
 	if (NA(ifp)->refcount > 0) { /* already registered */
-		error = EINVAL;
-		goto unref_exit;
+		error = EBUSY;
+		DROP_BDG_REF(ifp);
+		goto unlock_exit;
 	}
 
 	nifp = netmap_do_regif(npriv, ifp, nmr->nr_ringid, &error);
@@ -2369,6 +2436,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 				break;
 			if (NETMAP_OWNED_BY_KERN(ifp)) {
 				nm_if_rele(ifp);
+				error = EBUSY;
 				break;
 			}
 			nifp = netmap_do_regif(priv, ifp, nmr->nr_ringid, &error);
@@ -2852,6 +2920,8 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	u_int error = EBUSY, lim;
 	struct netmap_slot *slot;
 
+	// XXX [Linux] we do not need this lock
+	// if we follow the down/configure/up protocol -gl
 	mtx_lock(&na->core_lock);
 	if ( (ifp->if_capenable & IFCAP_NETMAP) == 0) {
 		/* interface not in netmap mode anymore */
@@ -2870,7 +2940,7 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 			len, NETMAP_BDG_BUF_SIZE(na->nm_mem));
 		goto done;
 	}
-	if (na->na_bdg) {
+	if (SWNA(ifp)->na_bdg) {
 		struct nm_bdg_fwd *ft;
 		char *dst;
 
@@ -2901,6 +2971,8 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	 * and userspace invocations of rxsync().
 	 * XXX could reuse core_lock
 	 */
+	// XXX [Linux] there can be no other instances of netmap_transmit
+	// on this same ring -gl
 	mtx_lock(&kring->q_lock);
 	if (kring->nr_hwavail >= lim) {
 		if (netmap_verbose)
@@ -3081,17 +3153,17 @@ netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
 	/* make sure that only one thread is ever in here,
 	 * after which we can unlock. Probably unnecessary XXX.
 	 */
-	if (nm_kr_tryget(kring))
+	if (nm_kr_tryget(kring)) 
 		return;
 	/* fetch packets that have arrived.
 	 * XXX maybe do this in a loop ?
 	 */
-	na->nm_rxsync(ifp, ring_nr, 0);
+	if (na->nm_rxsync(ifp, ring_nr, 0))
+		goto put_out;
 	if (kring->nr_hwavail == 0 && netmap_verbose) {
 		D("how strange, interrupt with no packets on %s",
 			ifp->if_xname);
-		nm_kr_put(kring);
-		return;
+		goto put_out;
 	}
 	k = nm_kr_rxpos(kring);
 
@@ -3105,7 +3177,9 @@ netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
 	ring->avail = 0;
 	na->nm_rxsync(ifp, ring_nr, 0);
 
+put_out:
 	nm_kr_put(kring);
+	return;
 }
 
 
@@ -3340,6 +3414,8 @@ EXPORT_SYMBOL(netmap_rx_irq);		// default irq handler
 EXPORT_SYMBOL(netmap_no_pendintr);	// XXX mitigation - should go away
 EXPORT_SYMBOL(netmap_bdg_ctl);		// bridge configuration routine
 EXPORT_SYMBOL(netmap_bdg_learning);	// the default lookup function
+EXPORT_SYMBOL(netmap_disable_all_rings);
+EXPORT_SYMBOL(netmap_enable_all_rings);
 
 
 MODULE_AUTHOR("http://info.iet.unipi.it/~luigi/netmap/");
@@ -3597,8 +3673,10 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		 * - when na is attached but not activated yet;
 		 * - when na is being deactivated but is still attached.
 		 */
-		if (unlikely(!(dst_ifp->if_capenable & IFCAP_NETMAP)))
+		if (unlikely(!(dst_ifp->if_capenable & IFCAP_NETMAP))) {
+			ND("not in netmap mode!");
 			continue;
+		}
 
 		/* there is at least one either unicast or broadcast packet */
 		brd_next = brddst->bq_head;
@@ -3635,6 +3713,10 @@ retry:
 		 * XXX this might become a helper function.
 		 */
 		mtx_lock(&kring->q_lock);
+		if (kring->nkr_stopped) {
+			mtx_unlock(&kring->q_lock);
+			continue;
+		}
 		/* on physical interfaces, do a txsync to recover
 		 * slots for packets already transmitted.
 		 * XXX maybe we could be optimistic and rely on a retry
@@ -3722,10 +3804,10 @@ retry:
 			 * i can recover the slots, otherwise must
 			 * fill them with 0 to mark empty packets.
 			 */
-			D("leftover %d bufs", howmany);
+			ND("leftover %d bufs", howmany);
 			if (nm_next(lease_idx, lim) == kring->nkr_lease_idx) {
 			    /* yes i am the last one */
-			    D("roll back nkr_hwlease to %d", j);
+			    ND("roll back nkr_hwlease to %d", j);
 			    kring->nkr_hwlease = j;
 			} else {
 			    while (howmany-- > 0) {
