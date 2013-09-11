@@ -1047,10 +1047,20 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 		 * when the last reference to this file descriptor goes
 		 * away. This means we cannot have any pending poll()
 		 * or interrupt routine operating on the structure.
+		 * XXX The file may be closed in a thread while
+		 * another thread is using it.
+		 * Linux keeps the file opened until the last reference
+		 * by any outstanding ioctl/poll or mmap is gone.
+		 * FreeBSD does not track mmap()s (but we do) and
+		 * wakes up any sleeping poll(). Need to check what
+		 * happens if the close() occurs while a concurrent
+		 * syscall is running.
 		 */
 		na->nm_register(ifp, 0); /* off, clear IFCAP_NETMAP */
 		/* Wake up any sleeping threads. netmap_poll will
 		 * then return POLLERR
+		 * XXX The wake up now happens during *_down(), when
+		 * we order all activities to stop. -gl
 		 */
 		nm_free_bdgfwd(na);
 		for (i = 0; i < na->num_tx_rings + 1; i++) {
@@ -2851,6 +2861,8 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	u_int error = EBUSY, lim;
 	struct netmap_slot *slot;
 
+	// XXX [Linux] we do not need this lock
+	// if we follow the down/configure/up protocol -gl
 	mtx_lock(&na->core_lock);
 	if ( (ifp->if_capenable & IFCAP_NETMAP) == 0) {
 		/* interface not in netmap mode anymore */
@@ -2900,6 +2912,8 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	 * and userspace invocations of rxsync().
 	 * XXX could reuse core_lock
 	 */
+	// XXX [Linux] there can be no other instances of netmap_transmit
+	// on this same ring -gl
 	mtx_lock(&kring->q_lock);
 	if (kring->nr_hwavail >= lim) {
 		if (netmap_verbose)
