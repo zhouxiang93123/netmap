@@ -2077,7 +2077,11 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 		u_int i;
 		/* Otherwise set the card in netmap mode
 		 * and make it use the shared buffers.
+		 *
+		 * If the interface is attached to a bridge, lock it.
 		 */
+		if (NETMAP_OWNED_BY_KERN(ifp))
+			BDG_WLOCK(NA(ifp)->na_bdg);
 		for (i = 0 ; i < na->num_tx_rings + 1; i++)
 			mtx_init(&na->tx_rings[i].q_lock, "nm_txq_lock",
 			    NULL, MTX_DEF);
@@ -2101,6 +2105,8 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 			netmap_do_unregif(priv, nifp);
 			nifp = NULL;
 		}
+		if (NETMAP_OWNED_BY_KERN(ifp))
+			BDG_WUNLOCK(NA(ifp)->na_bdg);
 
 	}
 out:
@@ -3545,18 +3551,14 @@ nm_bridge_rthash(const uint8_t *addr)
 static int
 bdg_netmap_reg(struct ifnet *ifp, int onoff)
 {
-	struct nm_bridge *b = NA(ifp)->na_bdg;
-
 	/* the interface is already attached to the bridge,
 	 * so we only need to toggle IFCAP_NETMAP.
 	 */
-	BDG_WLOCK(b); // XXX maybe just atomic ?
 	if (onoff) {
 		ifp->if_capenable |= IFCAP_NETMAP;
 	} else {
 		ifp->if_capenable &= ~IFCAP_NETMAP;
 	}
-	BDG_WUNLOCK(b);
 	return 0;
 }
 
