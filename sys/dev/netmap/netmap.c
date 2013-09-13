@@ -1551,7 +1551,15 @@ netmap_sw_to_nic(struct netmap_adapter *na)
 	struct netmap_kring *k1 = &na->tx_rings[0];
 	u_int i, howmany, src_lim, dst_lim;
 
+	/* XXX we should also check that the carrier is on */
+	if (kring->nkr_stopped)
+		return;
+
 	mtx_lock(&kring->q_lock);
+
+	if (kring->nkr_stopped)
+		goto out;
+
 	howmany = kring->nr_hwavail;	/* XXX otherwise cur - reserved - nr_hwcur */
 
 	src_lim = kring->nkr_num_slots - 1;
@@ -1582,6 +1590,7 @@ netmap_sw_to_nic(struct netmap_adapter *na)
 		kring->ring->cur = kring->nr_hwcur; // XXX
 		k1++;
 	}
+out:
 	mtx_unlock(&kring->q_lock);
 }
 
