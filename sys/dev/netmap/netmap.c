@@ -100,6 +100,8 @@ Within the kernel, access to the netmap rings is protected as follows:
 
 - a per-interface core_lock protecting access from the host stack
   while interfaces may be detached from netmap mode.
+  XXX there should be no need for this lock if we detach the interfaces
+  only while they are down.
 
 
 --- VALE SWITCH ---
@@ -1078,7 +1080,7 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 		na->nm_register(ifp, 0); /* off, clear IFCAP_NETMAP */
 		/* Wake up any sleeping threads. netmap_poll will
 		 * then return POLLERR
-		 * XXX The wake up now happens during *_down(), when
+		 * XXX The wake up now must happen during *_down(), when
 		 * we order all activities to stop. -gl
 		 */
 		nm_free_bdgfwd(na);
@@ -1588,7 +1590,7 @@ netmap_sw_to_nic(struct netmap_adapter *na)
 			k1->ring->avail--;
 		}
 		kring->ring->cur = kring->nr_hwcur; // XXX
-		k1++;
+		k1++; // XXX why?
 	}
 out:
 	mtx_unlock(&kring->q_lock);
@@ -1672,15 +1674,18 @@ netmap_rxsync_from_host(struct netmap_adapter *na, struct thread *td, void *pwai
 
 	(void)pwait;	/* disable unused warnings */
 
-	if (kring->nkr_stopped)
+	if (kring->nkr_stopped) /* check a first time without lock */
 		return;
 
 	/* XXX as an optimization we could reuse na->core_lock */
 	mtx_lock(&kring->q_lock);
+
+	if (kring->nkr_stopped)  /* check again with lock held */
+		goto unlock_out;
+
 	if (k >= lim) {
 		netmap_ring_reinit(kring);
-		mtx_unlock(&kring->q_lock);
-		return;
+		goto unlock_out;
 	}
 	/* new packets are already set in nr_hwavail */
 	/* skip past packets that userspace has released */
@@ -1702,6 +1707,8 @@ netmap_rxsync_from_host(struct netmap_adapter *na, struct thread *td, void *pwai
 		selrecord(td, &kring->si);
 	if (k && (netmap_verbose & NM_VERB_HOST))
 		D("%d pkts from stack", k);
+unlock_out:
+
 	mtx_unlock(&kring->q_lock);
 }
 
@@ -2795,7 +2802,7 @@ do_retry_rx:
 	}
 
 	/* forward host to the netmap ring.
-	 * I am accessing nr_hwavail without lock, but netmap start
+	 * I am accessing nr_hwavail without lock, but netmap_transmit
 	 * can only increment it, so the operation is safe.
 	 */
 	kring = &na->rx_rings[lim_rx];
@@ -2932,7 +2939,7 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 
 	// XXX [Linux] we do not need this lock
 	// if we follow the down/configure/up protocol -gl
-	mtx_lock(&na->core_lock);
+	// mtx_lock(&na->core_lock);
 	if ( (ifp->if_capenable & IFCAP_NETMAP) == 0) {
 		/* interface not in netmap mode anymore */
 		error = ENXIO;
@@ -2982,7 +2989,8 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	 * XXX could reuse core_lock
 	 */
 	// XXX [Linux] there can be no other instances of netmap_transmit
-	// on this same ring -gl
+	// on this same ring, but we still need this lock to protect
+	// concurrent access from netmap_sw_to_nic() -gl
 	mtx_lock(&kring->q_lock);
 	if (kring->nr_hwavail >= lim) {
 		if (netmap_verbose)
@@ -3003,7 +3011,7 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	mtx_unlock(&kring->q_lock);
 
 done:
-	mtx_unlock(&na->core_lock);
+	// mtx_unlock(&na->core_lock);
 
 	/* release the mbuf in either cases of success or failure. As an
 	 * alternative, put the mbuf in a free list and free the list
