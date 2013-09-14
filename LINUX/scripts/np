@@ -77,7 +77,6 @@ function extend()
 		patch -p1 < $patch2 >/dev/null 2>&1
 	)
 	diff -qbBr $tmpdir1 $tmpdir2 || return 1
-	#scripts/vers $1 -s -p $v -i -c -S4
 	rm -rf $tmpdir1 $tmpdir2
 	return 0
 } 
@@ -86,10 +85,11 @@ function minimize()
 {
 	mkdir -p final-patches
 	local drv=$1
-	local patches=$(ls tmp-patches/diff--$1--*)
+	local patches=$(ls tmp-patches/diff--$1--* 2>/dev/null)
+	[ -n "$patches" ] || return 1
 	set $patches
 	local pivot=$1
-	[ -n "$pivot" ] || return
+	[ -n "$pivot" -a -e "$pivot" ] || return 1
 	local ple=$(scripts/vers $pivot -s -p -C)
 	local pre=$(scripts/vers $pivot -s -C)
 	while [ -n "$pivot" ]; do
@@ -107,6 +107,15 @@ function minimize()
 		pivot=$1
 		pre=$nre
 		ple=$nle
+	done
+	return 0
+}
+
+function minimize-all()
+{
+	local driver
+	for driver in $DRIVER_SRCS; do
+		minimize $driver
 	done
 }
 
