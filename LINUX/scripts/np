@@ -76,11 +76,39 @@ function extend()
 		cd $tmpdir2
 		patch -p1 < $patch2 >/dev/null 2>&1
 	)
-	diff -bBr $tmpdir1 $tmpdir2 || return 1
-	scripts/vers $1 -s -p $v -i -c -S4
-	#rm -rf $tmpdir1 $tmpdir2
+	diff -qbBr $tmpdir1 $tmpdir2 || return 1
+	#scripts/vers $1 -s -p $v -i -c -S4
+	rm -rf $tmpdir1 $tmpdir2
 	return 0
 } 
+
+function minimize()
+{
+	mkdir -p final-patches
+	local drv=$1
+	local patches=$(ls tmp-patches/diff--$1--*)
+	set $patches
+	local pivot=$1
+	[ -n "$pivot" ] || return
+	local ple=$(scripts/vers $pivot -s -p -C)
+	local pre=$(scripts/vers $pivot -s -C)
+	while [ -n "$pivot" ]; do
+		shift
+		if [ -n "$1" ]; then 
+			local nle=$(scripts/vers $1 -s -p -C)
+			local nre=$(scripts/vers $1 -s -C)
+			if [ $pre = $nle ] && extend $pivot $nle; then
+				pre=$nre
+				continue
+			fi
+		fi
+		out=$(scripts/vers diff $drv $ple -c $pre -c -S4)
+		cp $pivot final-patches/$out
+		pivot=$1
+		pre=$nre
+		ple=$nle
+	done
+}
 
 mkdir -p tmp-patches
 
