@@ -8,14 +8,15 @@ function get-patch()
 	local v2=$(scripts/vers $1 -i -c)
 	local drvname=$(basename $2)
 	local patchname=diff--$drvname--$v1--$v2
+	local out=tmp-patches/$patchname
 	(
 		cd $GITDIR
 		local currbranch=$(git branch | sed -n 's/^\* *//p')
 		[ "$currbranch" != netmap-$1 ] && git checkout netmap-$1 2>&1 >/dev/null
 		local drvpath=$(find drivers/net -name $drvname)
 	  	git diff v$1..netmap-$1 -- $drvpath
-	) > tmp-patches/$patchname
-	[ -s tmp-patches/$patchname ] || rm tmp-patches/$patchname
+	) > $out
+	[ -s $out ] || rm $out
 }
 
 function get-all-patches()
