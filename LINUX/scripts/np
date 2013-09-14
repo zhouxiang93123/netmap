@@ -4,10 +4,7 @@ DRIVER_SRCS=$(make +DRIVER_SRCS)
 
 function driver-path()
 {
-	[ -f driver-paths/$1/$2 ] &&  {
-		cat driver-paths/$1/$2
-		return
-	}
+	cat driver-paths/$1/$2 2>/dev/null && return
 	mkdir -p driver-paths/$1
 	(
 		cd $GITDIR
