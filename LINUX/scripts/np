@@ -23,6 +23,7 @@ function get-patch()
 
 function get-all-patches()
 {
+	local driver
 	for driver in $DRIVER_SRCS; do
 		get-patch $1 $driver
 	done
