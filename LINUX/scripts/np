@@ -4,14 +4,14 @@ DRIVER_SRCS=$(make +DRIVER_SRCS)
 
 function driver-path()
 {
-	cat driver-paths/$1/$2 2>/dev/null && return
-	mkdir -p driver-paths/$1
+	cat cache/$1/$2/path 2>/dev/null && return
+	mkdir -p cache/$1/$2
 	(
 		cd $GITDIR
 		git checkout netmap-$1 >/dev/null 2>&1
 		git clean -fdx >/dev/null 2>&1
 		find drivers/net -name $2
-	) | tee driver-paths/$1/$2
+	) | tee cache/$1/$2/path
 
 }
 
@@ -52,6 +52,24 @@ function get-range()
 	done
 }
 
+function get-src()
+{
+	cache=cache/$1/$2/src
+	[ -d $cache ] || {
+		mkdir -p $cache
+		(
+			local _cache=$(realpath $cache)
+			local src=$(driver-path $1 $2)
+			cd $GITDIR
+			git checkout v$1 >/dev/null 2>&1
+			git reset --hard
+			git clean -fdx
+			cp -r $src $_cache
+		)
+	}
+	cp -r $cache/* $3
+}
+
 function extend()
 {
 	local patch=$(realpath $1)
@@ -59,13 +77,8 @@ function extend()
 	local drv=$(scripts/vers $1 -s -p -p)
 	local tmpdir1=$(mktemp -d)
 	local tmpdir2=$(mktemp -d)
-	local src=$(driver-path $v $drv)
-	(
-		cd $GITDIR
-		git checkout v$v >/dev/null 2>&1
-		cp -r $src $tmpdir1
-		cp -r $src $tmpdir2
-	)
+	get-src $v $drv $tmpdir1
+	get-src $v $drv $tmpdir2
 	(
 		cd $tmpdir1
 		patch --no-backup-if-mismatch -p1 < $patch >/dev/null 2>&1
@@ -84,8 +97,8 @@ function extend()
 function minimize()
 {
 	mkdir -p final-patches
-	local drv=$1
-	local patches=$(ls tmp-patches/diff--$1--* 2>/dev/null)
+	local drv=$(basename $1)
+	local patches=$(ls tmp-patches/diff--$drv--* 2>/dev/null)
 	[ -n "$patches" ] || return 1
 	set $patches
 	local pivot=$1
