@@ -9,6 +9,7 @@ function get-patch()
 	local drvname=$(basename $2)
 	local patchname=diff--$drvname--$v1--$v2
 	local out=tmp-patches/$patchname
+	[ -s $out ] && return;
 	(
 		cd $GITDIR
 		local currbranch=$(git branch | sed -n 's/^\* *//p')
