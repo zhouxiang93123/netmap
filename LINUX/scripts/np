@@ -25,9 +25,10 @@ function get-patch()
 	[ -s $out ] && return;
 	local drvpath=$(driver-path $1 $drvname)
 	[ -n "$drvpath" ] || return
+	local drvdir=$(dirname $drvpath)
 	(
 		cd $GITDIR
-	  	git diff v$1..netmap-$1 -- $drvpath
+		git diff --relative=$drvdir v$1..netmap-$1 -- $drvpath
 	) > $out
 	[ -s $out ] || rm $out
 }
