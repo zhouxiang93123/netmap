@@ -89,7 +89,7 @@ function extend()
 		cd $tmpdir2
 		patch -p1 < $patch2 >/dev/null 2>&1
 	)
-	diff -qbBr $tmpdir1 $tmpdir2 || return 1
+	diff -qbBr $tmpdir1 $tmpdir2 >/dev/null || return 1
 	rm -rf $tmpdir1 $tmpdir2
 	return 0
 } 
