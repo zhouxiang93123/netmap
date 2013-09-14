@@ -1,0 +1,44 @@
+#!/bin/bash
+
+DRIVER_SRCS=$(make +DRIVER_SRCS)
+
+function get-patch()
+{
+	local v1=$(scripts/vers $1 -c)
+	local v2=$(scripts/vers $1 -i -c)
+	local drvname=$(basename $2)
+	local patchname=diff--$drvname--$v1--$v2
+	(
+		cd $GITDIR
+		local currbranch=$(git branch | sed -n 's/^\* *//p')
+		[ "$currbranch" != netmap-$1 ] && git checkout netmap-$1 2>&1 >/dev/null
+		local drvpath=$(find drivers/net -name $drvname)
+	  	git diff v$1..netmap-$1 -- $drvpath
+	) > tmp-patches/$patchname
+	[ -s tmp-patches/$patchname ] || rm tmp-patches/$patchname
+}
+
+function get-all-patches()
+{
+	for driver in $DRIVER_SRCS; do
+		get-patch $1 $driver
+	done
+}
+
+function get-range()
+{
+	local v=$1
+	while scripts/vers -b $v $2 -L; do
+		get-all-patches $v
+		v=$(scripts/vers $v -i)
+	done
+}
+
+
+mkdir -p tmp-patches
+
+[ -n "$1" ] && {
+	cmd=$1
+	shift
+	$cmd "$@"
+}

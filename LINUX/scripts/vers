@@ -1,0 +1,79 @@
+#!/usr/bin/perl
+
+sub badversion
+{
+	my $v = shift;
+	die "Bad version $v";
+}
+
+sub conv
+{
+	my $v = shift;
+
+	return sprintf "%d%02d%02d", (split /\./, $v);
+}
+
+sub next
+{
+	my $v = shift;
+	my ($may, $min, $sub) = split /\./, $v;
+
+	if ($may < 2 || ($may == 2 && $min != 6)) {
+		&badversion($v);
+	}
+	if ($may == 2) {
+	       	if ($sub < 39) {
+			return "2.6." . ($sub + 1);
+		} elsif ($sub == 39) {
+			return "3.0";
+		} else {
+			&badversion($v);
+		}
+	} else {
+		return "$may." . ($min + 1);
+	}
+}
+
+for (@ARGV) {
+	/^-b$/  && do {
+		$silent=1;
+		next;
+	};
+	/^-c$/	&& do {
+		$v = pop @stack;
+		push @stack, &conv($v);
+		next;
+	};
+	/^-i$/ && do {
+		$v = pop @stack;
+		push @stack, &next($v);
+		next;
+	};
+	/^-[lL]$/ && do {
+		$v1 = pop @stack;
+		$v2 = pop @stack;
+		/^-L$/ && do {
+			$v1 = &conv($v1);
+			$v2 = &conv($v2);
+		};
+		push @stack, (($v2 lt $v1) ? "true" : "false");
+		next;
+	};
+	/^-a$/ && do {
+		$v1 = pop @stack;
+		$v2 = pop @stack;
+		push @stack, (($v1 eq "true" && $v2 eq "true") ? "true" : "false");
+		next;
+	};
+	/^-n$/ && do {
+		$v1 = pop @stack;
+		push @stack, (($v1 eq "true") ? "false" : "true");
+		next;
+	};
+	push @stack, $_;
+}
+$v = pop @stack;
+if ($silent) {
+	exit ($v eq "false");
+}
+print "$v\n";

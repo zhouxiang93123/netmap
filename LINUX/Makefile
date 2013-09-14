@@ -137,3 +137,6 @@ diffs:
 
 apps:
 	(cd ../examples; $(MAKE))
+
++%:
+	@echo $($*)
