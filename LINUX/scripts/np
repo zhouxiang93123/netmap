@@ -4,13 +4,17 @@ DRIVER_SRCS=$(make +DRIVER_SRCS)
 
 function driver-path()
 {
+	[ -f driver-paths/$1/$2 ] &&  {
+		cat driver-paths/$1/$2
+		return
+	}
+	mkdir -p driver-paths/$1
 	(
 		cd $GITDIR
 		git checkout netmap-$1 >/dev/null 2>&1
 		git clean -fdx >/dev/null 2>&1
-		local drvpath=$(find drivers/net -name $2)
-		echo $drvpath
-	)
+		find drivers/net -name $2
+	) | tee driver-paths/$1/$2
 
 }
 
