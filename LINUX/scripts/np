@@ -14,6 +14,7 @@ function get-patch()
 		local currbranch=$(git branch | sed -n 's/^\* *//p')
 		[ "$currbranch" != netmap-$1 ] && git checkout netmap-$1 >/dev/null 2>&1
 		local drvpath=$(find drivers/net -name $drvname)
+		[ -n "$drvpath" ] || return
 	  	git diff v$1..netmap-$1 -- $drvpath
 	) > $out
 	[ -s $out ] || rm $out
