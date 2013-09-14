@@ -13,6 +13,18 @@ sub conv
 	return sprintf "%d%02d%02d", (split /\./, $v);
 }
 
+
+sub rconv
+{
+	my $v = shift;
+
+	$v =~ /(.*)(..)(..)$/;
+	if ($1 > 2 && $3 == 0) {
+		return sprintf "%d.%d", $1, $2;
+	}
+	return sprintf "%d.%d.%d", $1, $2, $3;
+}
+
 sub next
 {
 	my $v = shift;
@@ -42,6 +54,11 @@ for (@ARGV) {
 	/^-c$/	&& do {
 		$v = pop @stack;
 		push @stack, &conv($v);
+		next;
+	};
+	/^-C$/	&& do {
+		$v = pop @stack;
+		push @stack, &rconv($v);
 		next;
 	};
 	/^-i$/ && do {
