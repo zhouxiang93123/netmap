@@ -119,7 +119,8 @@ function minimize()
 function infty()
 {
 	local drv=$(basename $1)
-	local last=$(ls final-patches/diff--$drv--* 2>/dev/null|tail -n1)
+	local v=$(scripts/vers $2 -c)
+	local last=$(ls final-patches/diff--$drv--*--$v 2>/dev/null|tail -n1)
 	[ -n "$last" ] || return 1
 	mv -n $last $(scripts/vers $last -s -p 99999 -S4) 2>/dev/null
 }
