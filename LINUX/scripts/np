@@ -4,64 +4,56 @@ DRIVER_SRCS=$(make +DRIVER_SRCS)
 
 function driver-path()
 {
-	cat cache/$1/$2/path 2>/dev/null && return
-	mkdir -p cache/$1/$2
+	cat cache/$2/$1/path 2>/dev/null && return
+	mkdir -p cache/$2/$1
 	(
 		cd $GITDIR
-		git checkout netmap-$1 >/dev/null 2>&1
+		git checkout netmap-$2 >/dev/null 2>&1
 		git clean -fdx >/dev/null 2>&1
-		find drivers/net -name $2
-	) | tee cache/$1/$2/path
+		find drivers/net -name $1
+	) | tee cache/$2/$1/path
 
 }
 
 function get-patch()
 {
-	local v1=$(scripts/vers $1 -c)
-	local v2=$(scripts/vers $1 -i -c)
-	local drvname=$(basename $2)
+	local v1=$(scripts/vers $2 -c)
+	local v2=$(scripts/vers $2 -i -c)
+	local drvname=$1
 	local patchname=diff--$drvname--$v1--$v2
 	local out=tmp-patches/$patchname
 	[ -s $out ] && { echo $out; return; }
-	local drvpath=$(driver-path $1 $drvname)
+	local drvpath=$(driver-path $drvname $2)
 	[ -n "$drvpath" ] || return
 	local drvdir=$(dirname $drvpath)
 	(
 		cd $GITDIR
-		git diff --relative=$drvdir v$1..netmap-$1 -- $drvpath
+		git diff --relative=$drvdir v$2..netmap-$2 -- $drvpath
 	) > $out
 	[ -s $out ] || { rm $out; return 1; }
 	echo $out
 	return 0;
 }
 
-function get-all-patches()
-{
-	local driver
-	for driver in $DRIVER_SRCS; do
-		get-patch $1 $driver
-	done
-}
-
 function get-range()
 {
 	local v=$1
 	while scripts/vers -b $v $2 -L; do
-		get-all-patches $v
+		forall get-patch $v
 		v=$(scripts/vers $v -i)
 	done
 }
 
 function get-src()
 {
-	cache=cache/$1/$2/src
+	cache=cache/$2/$1/src
 	[ -d $cache ] || {
 		mkdir -p $cache
 		(
 			local _cache=$(realpath $cache)
 			local src=$(driver-path $1 $2)
 			cd $GITDIR
-			git checkout v$1 >/dev/null 2>&1
+			git checkout v$2 >/dev/null 2>&1
 			git reset --hard
 			git clean -fdx
 			cp -r $src $_cache
@@ -77,13 +69,13 @@ function extend()
 	local drv=$(scripts/vers $1 -s -p -p)
 	local tmpdir1=$(mktemp -d)
 	local tmpdir2=$(mktemp -d)
-	get-src $v $drv $tmpdir1
-	get-src $v $drv $tmpdir2
+	get-src $drv $v $tmpdir1
+	get-src $drv $v $tmpdir2
 	(
 		cd $tmpdir1
 		patch --no-backup-if-mismatch -p1 < $patch >/dev/null 2>&1
 	) || return 1
-	local patch2=$(get-patch $v $drv)
+	local patch2=$(get-patch $drv $v)
 	patch2=$(realpath $patch2)
 	(
 		cd $tmpdir2
@@ -124,14 +116,6 @@ function minimize()
 	return 0
 }
 
-function minimize-all()
-{
-	local driver
-	for driver in $DRIVER_SRCS; do
-		minimize $driver
-	done
-}
-
 function infty()
 {
 	local drv=$(basename $1)
@@ -140,11 +124,13 @@ function infty()
 	mv -n $last $(scripts/vers $last -s -p 99999 -S4) 2>/dev/null
 }
 
-function infty-all()
+function forall()
 {
+	local cmd=$1
+	shift
 	local driver
 	for driver in $DRIVER_SRCS; do
-		infty $driver
+		$cmd $(basename $driver) "$@"
 	done
 }
 
@@ -153,5 +139,12 @@ mkdir -p tmp-patches
 [ -n "$1" ] && {
 	cmd=$1
 	shift
-	$cmd "$@"
+	case $cmd in
+	*-all)
+		forall ${cmd%-all} "$@"
+		;;
+	*)
+		$cmd "$@"
+		;;
+	esac
 }
