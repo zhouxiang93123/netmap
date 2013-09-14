@@ -132,6 +132,22 @@ function minimize-all()
 	done
 }
 
+function infty()
+{
+	local drv=$(basename $1)
+	local last=$(ls final-patches/diff--$drv--* 2>/dev/null|tail -n1)
+	[ -n "$last" ] || return 1
+	mv -n $last $(scripts/vers $last -s -p 99999 -S4) 2>/dev/null
+}
+
+function infty-all()
+{
+	local driver
+	for driver in $DRIVER_SRCS; do
+		infty $driver
+	done
+}
+
 mkdir -p tmp-patches
 
 [ -n "$1" ] && {
