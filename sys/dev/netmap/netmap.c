@@ -321,16 +321,30 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, fwd, CTLFLAG_RW, &netmap_fwd, 0 , "");
 NMG_LOCK_T	netmap_global_lock;
 
 /*
- * protect against multiple threads using the same ring
+ * protect against multiple threads using the same ring.
+ * also check that the ring has not been stopped.
  */
-/* return 1 on failure */
+#define NM_KR_BUSY	1
+#define NM_KR_STOPPED	2
+static void nm_kr_put(struct netmap_kring *kr);
 static __inline int nm_kr_tryget(struct netmap_kring *kr)
 {
+	/* check a first time without taking the lock 
+	 * to avoid starvation for nm_kr_get()
+	 */
 	if (unlikely(kr->nkr_stopped)) {
 		D("ring %p stopped (%d)", kr, kr->nkr_stopped);
-		return 1;
+		return NM_KR_STOPPED;
 	}
-	return NM_ATOMIC_TEST_AND_SET(&kr->nr_busy) || kr->nkr_stopped;
+	if (unlikely(NM_ATOMIC_TEST_AND_SET(&kr->nr_busy)))
+		return NM_KR_BUSY;
+	/* check a second time with lock held */
+	if (unlikely(kr->nkr_stopped)) {
+		D("ring %p stopped (%d)", kr, kr->nkr_stopped);
+		nm_kr_put(kr);
+		return NM_KR_STOPPED;
+	}
+	return 0;
 }
 
 static __inline void nm_kr_put(struct netmap_kring *kr)
