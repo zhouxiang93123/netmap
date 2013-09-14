@@ -22,7 +22,7 @@ function get-patch()
 	local drvname=$(basename $2)
 	local patchname=diff--$drvname--$v1--$v2
 	local out=tmp-patches/$patchname
-	[ -s $out ] && return;
+	[ -s $out ] && { echo $out; return; }
 	local drvpath=$(driver-path $1 $drvname)
 	[ -n "$drvpath" ] || return
 	local drvdir=$(dirname $drvpath)
@@ -30,7 +30,9 @@ function get-patch()
 		cd $GITDIR
 		git diff --relative=$drvdir v$1..netmap-$1 -- $drvpath
 	) > $out
-	[ -s $out ] || rm $out
+	[ -s $out ] || { rm $out; return 1; }
+	echo $out
+	return 0;
 }
 
 function get-all-patches()
@@ -49,6 +51,36 @@ function get-range()
 		v=$(scripts/vers $v -i)
 	done
 }
+
+function extend()
+{
+	local patch=$(realpath $1)
+	local v=$2
+	local drv=$(scripts/vers $1 -s -p -p)
+	local tmpdir1=$(mktemp -d)
+	local tmpdir2=$(mktemp -d)
+	local src=$(driver-path $v $drv)
+	(
+		cd $GITDIR
+		git checkout v$v >/dev/null 2>&1
+		cp -r $src $tmpdir1
+		cp -r $src $tmpdir2
+	)
+	(
+		cd $tmpdir1
+		patch --no-backup-if-mismatch -p1 < $patch >/dev/null 2>&1
+	) || return 1
+	local patch2=$(get-patch $v $drv)
+	patch2=$(realpath $patch2)
+	(
+		cd $tmpdir2
+		patch -p1 < $patch2 >/dev/null 2>&1
+	)
+	diff -bBr $tmpdir1 $tmpdir2 || return 1
+	scripts/vers $1 -s -p $v -i -c -S4
+	#rm -rf $tmpdir1 $tmpdir2
+	return 0
+} 
 
 mkdir -p tmp-patches
 

@@ -66,6 +66,24 @@ for (@ARGV) {
 		push @stack, &next($v);
 		next;
 	};
+	/^-s$/ && do {
+		$v = pop @stack;
+		push @stack, split /--/, $v;
+		next;
+	};
+	/^-S(\d+)$/ && do {
+		$n = $1;
+		@t = @stack[-$n..-1];
+		while ($n--) {
+			pop @stack;
+		}
+		push @stack, (join '--', @t);
+		next;
+	};
+	/^-p$/ && do {
+		pop @stack;
+		next;
+	};
 	/^-[lL]$/ && do {
 		$v1 = pop @stack;
 		$v2 = pop @stack;
