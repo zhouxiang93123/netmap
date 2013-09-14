@@ -2,6 +2,18 @@
 
 DRIVER_SRCS=$(make +DRIVER_SRCS)
 
+function driver-path()
+{
+	(
+		cd $GITDIR
+		git checkout netmap-$1 >/dev/null 2>&1
+		git clean -fdx >/dev/null 2>&1
+		local drvpath=$(find drivers/net -name $2)
+		echo $drvpath
+	)
+
+}
+
 function get-patch()
 {
 	local v1=$(scripts/vers $1 -c)
@@ -10,12 +22,10 @@ function get-patch()
 	local patchname=diff--$drvname--$v1--$v2
 	local out=tmp-patches/$patchname
 	[ -s $out ] && return;
+	local drvpath=$(driver-path $1 $2)
+	[ -n "$drvpath" ] || return
 	(
 		cd $GITDIR
-		local currbranch=$(git branch | sed -n 's/^\* *//p')
-		[ "$currbranch" != netmap-$1 ] && git checkout netmap-$1 >/dev/null 2>&1
-		local drvpath=$(find drivers/net -name $drvname)
-		[ -n "$drvpath" ] || return
 	  	git diff v$1..netmap-$1 -- $drvpath
 	) > $out
 	[ -s $out ] || rm $out
@@ -37,7 +47,6 @@ function get-range()
 		v=$(scripts/vers $v -i)
 	done
 }
-
 
 mkdir -p tmp-patches
 
