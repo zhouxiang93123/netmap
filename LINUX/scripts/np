@@ -26,7 +26,7 @@ function get-patch()
 	local patchname=diff--$drvname--$v1--$v2
 	local out=tmp-patches/$patchname
 	[ -s $out ] && return;
-	local drvpath=$(driver-path $1 $2)
+	local drvpath=$(driver-path $1 $drvname)
 	[ -n "$drvpath" ] || return
 	(
 		cd $GITDIR
