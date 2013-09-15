@@ -1062,6 +1062,12 @@ netmap_get_memory(struct netmap_priv_d* p)
 	return error;
 }
 
+static int
+netmap_have_memory_locked(struct netmap_priv_d* p)
+{
+	return p->np_mref != NULL;
+}
+
 static void
 netmap_drop_memory_locked(struct netmap_priv_d* p)
 {
@@ -2037,7 +2043,7 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 {
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_if *nifp = NULL;
-	int error;
+	int error, need_mem;
 
 	NMG_LOCK_ASSERT();
 	/* ring configuration may have changed, fetch from the card */
@@ -2047,12 +2053,20 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 	if (error)
 		goto out;
 	/* ensure allocators are ready */
-	error = netmap_get_memory_locked(priv);
-	ND("get_memory returned %d", error);
-	if (error)
-		goto out;
+	need_mem = !netmap_have_memory_locked(priv);
+	if (need_mem) {
+		error = netmap_get_memory_locked(priv);
+		ND("get_memory returned %d", error);
+		if (error)
+			goto out;
+	}
 	nifp = netmap_if_new(ifp->if_xname, na);
 	if (nifp == NULL) { /* allocation failed */
+		/* we should drop the allocator, but only
+		 * if we were the ones who grabbed it
+		 */
+		if (need_mem)
+			netmap_drop_memory_locked(priv);
 		error = ENOMEM;
 		goto out;
 	}
