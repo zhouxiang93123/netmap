@@ -22,12 +22,14 @@ function driver-path()
 
 function get-patch()
 {
+	local use_cache
+	[ "$1" = -c ] && { use_cache=1; shift; }
 	local v1=$(scripts/vers $2 -c)
 	local v2=$(scripts/vers $2 -i -c)
 	local drvname=$1
 	local patchname=diff--$drvname--$v1--$v2
 	local out=tmp-patches/$patchname
-	[ -s $out ] && { echo $out; return; }
+	[ -n "$use_cache" -a -s $out ] && { echo $out; return; }
 	local drvpath=$(driver-path $drvname $2)
 	[ -n "$drvpath" ] || return
 	local drvdir=$(dirname $drvpath)
@@ -80,7 +82,7 @@ function extend()
 		cd $tmpdir1
 		patch --no-backup-if-mismatch -p1 < $patch >/dev/null 2>&1
 	) || return 1
-	local patch2=$(get-patch $drv $v)
+	local patch2=$(get-patch -c $drv $v)
 	patch2=$(realpath $patch2)
 	(
 		cd $tmpdir2
