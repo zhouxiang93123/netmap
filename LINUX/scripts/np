@@ -100,6 +100,7 @@ function minimize()
 	local patches=$(ls tmp-patches/diff--$drv--* 2>/dev/null)
 	[ -n "$patches" ] || return 1
 	set $patches
+	rm -f final-patches/diff--$drv--*
 	local pivot=$1
 	[ -n "$pivot" -a -e "$pivot" ] || return 1
 	local ple=$(scripts/vers $pivot -s -p -C)
