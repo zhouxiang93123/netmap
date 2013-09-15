@@ -1023,6 +1023,16 @@ struct netmap_priv_d {
 #endif /* __FreeBSD__ */
 };
 
+/* grab a reference to the memory allocator, if we don't have one already.  The
+ * reference is taken from the netmap_adapter registered with the priv.
+ *
+ * Before the introduction of private allocators for VALE ports, netmap API
+ * allowed userspace to call mmap() and ioctl(NIOCGINFO) before ioctl(NIOCREGIF). 
+ * For compatibility with this behaviour, we grab the global allocator if
+ * the priv doesn't point to a netmap_adapter. The allocator cannot be
+ * changed later on, therefore applications that behave in this way cannot
+ * register VALE ports.
+ */
 static int
 netmap_get_memory_locked(struct netmap_priv_d* p)
 {
@@ -1032,14 +1042,12 @@ netmap_get_memory_locked(struct netmap_priv_d* p)
 
 	na = p->np_ifp ? NA(p->np_ifp) : NULL;
 	nmd = na ? na->nm_mem : &nm_mem;
-	if (!p->np_mref || nmd != p->np_mref) {
-		if (p->np_mref) {
-			netmap_mem_deref(p->np_mref);
-			p->np_mref = NULL;
-		}
+	if (!p->np_mref) {
 		error = netmap_mem_finalize(nmd);
 		if (!error)
 			p->np_mref = nmd;
+	} else if (p->np_mref != nmd) {
+		error = EINVAL;
 	}
 	return error;
 }
@@ -1052,6 +1060,21 @@ netmap_get_memory(struct netmap_priv_d* p)
 	error = netmap_get_memory_locked(p);
 	NMG_UNLOCK();
 	return error;
+}
+
+static int
+netmap_have_memory_locked(struct netmap_priv_d* p)
+{
+	return p->np_mref != NULL;
+}
+
+static void
+netmap_drop_memory_locked(struct netmap_priv_d* p)
+{
+	if (p->np_mref) {
+		netmap_mem_deref(p->np_mref);
+		p->np_mref = NULL;
+	}
 }
 
 /*
@@ -1238,9 +1261,7 @@ netmap_dtor_locked(struct netmap_priv_d *priv)
 	if (ifp) {
 		netmap_do_unregif(priv, priv->np_nifp);
 	}
-	if (priv->np_mref) {
-		netmap_mem_deref(priv->np_mref);
-	}
+	netmap_drop_memory_locked(priv);
 	if (ifp) {
 		nm_if_rele(ifp); /* might also destroy *na */
 	}
@@ -2022,7 +2043,7 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 {
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_if *nifp = NULL;
-	int error;
+	int error, need_mem;
 
 	NMG_LOCK_ASSERT();
 	/* ring configuration may have changed, fetch from the card */
@@ -2032,12 +2053,20 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 	if (error)
 		goto out;
 	/* ensure allocators are ready */
-	error = netmap_get_memory_locked(priv);
-	ND("get_memory returned %d", error);
-	if (error)
-		goto out;
+	need_mem = !netmap_have_memory_locked(priv);
+	if (need_mem) {
+		error = netmap_get_memory_locked(priv);
+		ND("get_memory returned %d", error);
+		if (error)
+			goto out;
+	}
 	nifp = netmap_if_new(ifp->if_xname, na);
 	if (nifp == NULL) { /* allocation failed */
+		/* we should drop the allocator, but only
+		 * if we were the ones who grabbed it
+		 */
+		if (need_mem)
+			netmap_drop_memory_locked(priv);
 		error = ENOMEM;
 		goto out;
 	}
