@@ -1062,6 +1062,15 @@ netmap_get_memory(struct netmap_priv_d* p)
 	return error;
 }
 
+static void
+netmap_drop_memory_locked(struct netmap_priv_d* p)
+{
+	if (p->np_mref) {
+		netmap_mem_deref(p->np_mref);
+		p->np_mref = NULL;
+	}
+}
+
 /*
  * File descriptor's private data destructor.
  *
@@ -1246,9 +1255,7 @@ netmap_dtor_locked(struct netmap_priv_d *priv)
 	if (ifp) {
 		netmap_do_unregif(priv, priv->np_nifp);
 	}
-	if (priv->np_mref) {
-		netmap_mem_deref(priv->np_mref);
-	}
+	netmap_drop_memory_locked(priv);
 	if (ifp) {
 		nm_if_rele(ifp); /* might also destroy *na */
 	}
