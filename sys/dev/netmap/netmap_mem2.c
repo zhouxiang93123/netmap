@@ -892,12 +892,16 @@ netmap_free_rings(struct netmap_adapter *na)
 	if (!na->tx_rings)
 		return;
 	for (i = 0; i < na->num_tx_rings + 1; i++) {
-		netmap_ring_free(na->nm_mem, na->tx_rings[i].ring);
-		na->tx_rings[i].ring = NULL;
+		if (na->tx_rings[i].ring) {
+			netmap_ring_free(na->nm_mem, na->tx_rings[i].ring);
+			na->tx_rings[i].ring = NULL;
+		}
 	}
 	for (i = 0; i < na->num_rx_rings + 1; i++) {
-		netmap_ring_free(na->nm_mem, na->rx_rings[i].ring);
-		na->rx_rings[i].ring = NULL;
+		if (na->rx_rings[i].ring) {
+			netmap_ring_free(na->nm_mem, na->rx_rings[i].ring);
+			na->rx_rings[i].ring = NULL;
+		}
 	}
 	free(na->tx_rings, M_DEVBUF);
 	na->tx_rings = na->rx_rings = NULL;
