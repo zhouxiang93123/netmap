@@ -44,9 +44,10 @@ function get-patch()
 
 function get-range()
 {
-	local v=$1
-	while scripts/vers -b $v $2 -L; do
-		forall get-patch $v
+	local drv=$1
+	local v=$2
+	while scripts/vers -b $v $3 -L; do
+		get-patch $drv $v
 		v=$(scripts/vers $v -i)
 	done
 }
