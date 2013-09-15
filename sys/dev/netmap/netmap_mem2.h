@@ -160,6 +160,22 @@ typedef int (*netmap_mem_finalize_t)(struct netmap_mem_d*);
 typedef void (*netmap_mem_deref_t)(struct netmap_mem_d*);
 
 
+/* We implement two kinds of netmap_mem_d structures:
+ *
+ * - global: used by hardware NICS;
+ *
+ * - private: used by VALE ports.
+ *
+ * In both cases, the netmap_mem_d structure has the same lifetime as the
+ * netmap_adapter of the corresponding NIC or port. It is the responsibility of
+ * the client code to delete the private allocator when the associated
+ * netmap_adapter is freed (this is implemented by the NAF_MEM_OWNER flag in
+ * netmap.c).  The 'refcount' field counts the number of active users of the
+ * structure. The global allocator uses this information to prevent/allow
+ * reconfiguration. The private allocators release all their memory when there
+ * are no active users.  By 'active user' we mean an existing netmap_priv
+ * structure holding a reference to the allocator.
+ */
 struct netmap_mem_d {
 	NMA_LOCK_T nm_mtx;  /* protect the allocator */
 	u_int nm_totalsize; /* shorthand */
