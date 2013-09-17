@@ -102,7 +102,7 @@
  * is extended with a "struct netmap_adapter" containing netmap-related
  * info (see description in dev/netmap/netmap_kernel.h.
  * Among other things, tx_rings and rx_rings point to the arrays of
- * "struct netmap_kring" which in turn reache the various
+ * "struct netmap_kring" which in turn reach the various
  * "struct netmap_ring", shared with userspace.
 
  * The NETMAP_RING is the userspace-visible replica of the NIC ring.
