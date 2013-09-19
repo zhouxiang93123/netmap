@@ -69,12 +69,12 @@ ixgbe_netmap_reg(struct ifnet *ifp, int onoff)
 	if (na == NULL)
 		return EINVAL;	/* no netmap support here */
 
-	// XXX do a reinit_locked or something else ?
 	/* Tell the stack that the interface is no longer active */
 	while (test_and_set_bit(__IXGBE_RESETTING, &adapter->state))
 		usleep_range(1000, 2000);
-	//rtnl_lock(); // XXX do we need it ?
-	ixgbe_down(adapter);
+	rtnl_lock();
+	if (netif_running(adapter->netdev))
+		ixgbe_down(adapter);
 
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
@@ -83,19 +83,14 @@ ixgbe_netmap_reg(struct ifnet *ifp, int onoff)
 		na->if_transmit = (void *)ifp->netdev_ops;
 		ifp->netdev_ops = &na->nm_ndo;
 
-		/*
-		 * reinitialize the adapter, now with netmap flag set,
-		 * so the rings will be set accordingly.
-		 */
-		ixgbe_up(adapter);
 	} else { /* reset normal mode (explicit request or netmap failed) */
 		/* restore if_transmit */
 		ifp->netdev_ops = (void *)na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
-		/* initialize the card, this time in standard mode */
-		ixgbe_up(adapter);	/* also enables intr */
 	}
-	//rtnl_unlock(); // XXX do we need it ?
+	if (netif_running(adapter->netdev))
+		ixgbe_up(adapter);	/* also enables intr */
+	rtnl_unlock();
 	clear_bit(__IXGBE_RESETTING, &adapter->state);
 	return (error);
 }
