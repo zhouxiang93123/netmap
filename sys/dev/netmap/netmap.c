@@ -333,14 +333,14 @@ static __inline int nm_kr_tryget(struct netmap_kring *kr)
 	 * to avoid starvation for nm_kr_get()
 	 */
 	if (unlikely(kr->nkr_stopped)) {
-		D("ring %p stopped (%d)", kr, kr->nkr_stopped);
+		ND("ring %p stopped (%d)", kr, kr->nkr_stopped);
 		return NM_KR_STOPPED;
 	}
 	if (unlikely(NM_ATOMIC_TEST_AND_SET(&kr->nr_busy)))
 		return NM_KR_BUSY;
 	/* check a second time with lock held */
 	if (unlikely(kr->nkr_stopped)) {
-		D("ring %p stopped (%d)", kr, kr->nkr_stopped);
+		ND("ring %p stopped (%d)", kr, kr->nkr_stopped);
 		nm_kr_put(kr);
 		return NM_KR_STOPPED;
 	}
@@ -2768,7 +2768,7 @@ flush_tx:
 				continue;
 			/* make sure only one user thread is doing this */
 			if (nm_kr_tryget(kring)) {
-				D("ring %p busy is %d", kring, (int)kring->nr_busy);
+				ND("ring %p busy is %d", kring, (int)kring->nr_busy);
 				revents |= POLLERR;
 				goto out;
 			}
@@ -3083,7 +3083,7 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
 		return NULL;	/* no netmap support here */
 	}
 	if (!(na->ifp->if_capenable & IFCAP_NETMAP)) {
-		ND("interface not in netmap mode");
+		D("interface not in netmap mode");
 		return NULL;	/* nothing to reinitialize */
 	}
 
