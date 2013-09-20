@@ -3307,6 +3307,87 @@ netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 
 #ifdef linux	/* linux-specific routines */
 
+#include <linux/rtnetlink.h>  /* rtnl_[un]lock() */
+
+static int
+generic_netmap_reg(struct ifnet *ifp, int enable)
+{
+    struct netmap_adapter *na = NA(ifp);
+    int error;
+
+    if (!na)
+        return EINVAL;
+
+    if ((error = ifp->netdev_ops->ndo_stop(ifp)))
+        return error;
+
+    rtnl_lock();
+
+    if (enable) { /* Enable netmap mode. */
+        ifp->if_capenable |= IFCAP_NETMAP;
+        na->if_transmit = (void *)ifp->netdev_ops;
+        ifp->netdev_ops = &na->nm_ndo;
+    } else { /* Disable netmap mode. */
+        ifp->if_capenable &= ~IFCAP_NETMAP;
+        ifp->netdev_ops = (void *)na->if_transmit;
+    }
+
+    rtnl_unlock();
+
+    error = ifp->netdev_ops->ndo_open(ifp);
+
+    return error;
+}
+
+static int
+generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
+{
+    struct netmap_adapter *na = NA(ifp);
+    struct netmap_kring *kring = &na->tx_rings[ring_nr];
+    struct netmap_ring *ring = kring->ring;
+    u_int j, k, n = 0, lim = kring->nkr_num_slots - 1;
+
+    if (!netif_carrier_ok(ifp))
+        return 0;
+
+    /* Take a copy of ring->cur now, and never read it again. */
+    k = ring->cur;
+    if (k > lim)
+        return netmap_ring_reinit(kring);
+
+    rmb();
+    j = kring->nr_hwcur;
+    if (j != k) {
+        /* Process new packets to send: j is the current index in the netmap ring. */
+        for (; j != k; n++) {
+            /* slot is the current slot in the netmap ring */
+            struct netmap_slot *slot = &ring->slot[j];
+            void *addr = NMB(slot);
+            u_int len = slot->len;
+
+            if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
+                return netmap_ring_reinit(kring);
+            }
+            /* TODO create a sk_buff and send it through start_xmit */
+            //ifp->netdev_ops->ndo_start_xmit(...)
+
+            slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
+            if (unlikely(++j == lim))
+                j = 0;
+        }
+        kring->nr_hwcur = k; /* the saved ring->cur */
+        kring->nr_hwavail -= n;
+    }
+
+    /* We don't have any informations about how many slots have been freed.
+       Pretend to have instantaneous TX operation. */
+    kring->nr_hwavail += n;
+
+    /* Update avail to what the kernel knows */
+    ring->avail = kring->nr_hwavail;
+
+    return 0;
+}
 
 /*
  * Remap linux arguments into the FreeBSD call.
