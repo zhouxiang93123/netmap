@@ -1,7 +1,8 @@
-diff -pur net/ixgbe/ixgbe_main.c ixgbe/ixgbe_main.c
---- net/ixgbe/ixgbe_main.c	2012-09-11 14:57:18.389789803 +0200
-+++ ixgbe/ixgbe_main.c	2012-09-11 15:03:55.961796755 +0200
-@@ -249,6 +249,22 @@ static const struct ixgbe_reg_info ixgbe
+diff --git a/ixgbe/ixgbe_main.c b/ixgbe/ixgbe_main.c
+index 08e8e25..8070930 100644
+--- a/ixgbe/ixgbe_main.c
++++ b/ixgbe/ixgbe_main.c
+@@ -247,6 +247,22 @@ static const struct ixgbe_reg_info ixgbe_reg_info_tbl[] = {
  	{}
  };
  
@@ -24,7 +25,7 @@ diff -pur net/ixgbe/ixgbe_main.c ixgbe/ixgbe_main.c
  
  /*
   * ixgbe_regdump - register printout routine
-@@ -801,6 +817,17 @@ static bool ixgbe_clean_tx_irq(struct ix
+@@ -864,6 +880,16 @@ static bool ixgbe_clean_tx_irq(struct ixgbe_q_vector *q_vector,
  	unsigned int total_bytes = 0, total_packets = 0;
  	u16 i, eop, count = 0;
  
@@ -38,11 +39,10 @@ diff -pur net/ixgbe/ixgbe_main.c ixgbe/ixgbe_main.c
 +	if (netmap_tx_irq(adapter->netdev, tx_ring->queue_index))
 +		return 1; /* seems to be ignored */
 +#endif /* DEV_NETMAP */
-+
  	i = tx_ring->next_to_clean;
  	eop = tx_ring->tx_buffer_info[i].next_to_watch;
  	eop_desc = IXGBE_TX_DESC_ADV(tx_ring, eop);
-@@ -1303,6 +1330,13 @@ static void ixgbe_clean_rx_irq(struct ix
+@@ -1348,6 +1374,13 @@ static void ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
  	u16 cleaned_count = 0;
  	bool pkt_is_rsc = false;
  
@@ -56,7 +56,7 @@ diff -pur net/ixgbe/ixgbe_main.c ixgbe/ixgbe_main.c
  	i = rx_ring->next_to_clean;
  	rx_desc = IXGBE_RX_DESC_ADV(rx_ring, i);
  	staterr = le32_to_cpu(rx_desc->wb.upper.status_error);
-@@ -2676,6 +2710,9 @@ void ixgbe_configure_tx_ring(struct ixgb
+@@ -2808,6 +2841,9 @@ void ixgbe_configure_tx_ring(struct ixgbe_adapter *adapter,
  	} while (--wait_loop && !(txdctl & IXGBE_TXDCTL_ENABLE));
  	if (!wait_loop)
  		e_err(drv, "Could not enable Tx Queue %d\n", reg_idx);
@@ -66,7 +66,7 @@ diff -pur net/ixgbe/ixgbe_main.c ixgbe/ixgbe_main.c
  }
  
  static void ixgbe_setup_mtqc(struct ixgbe_adapter *adapter)
-@@ -3039,6 +3076,10 @@ void ixgbe_configure_rx_ring(struct ixgb
+@@ -3183,6 +3219,10 @@ void ixgbe_configure_rx_ring(struct ixgbe_adapter *adapter,
  	IXGBE_WRITE_REG(hw, IXGBE_RXDCTL(reg_idx), rxdctl);
  
  	ixgbe_rx_desc_queue_enable(adapter, ring);
@@ -74,16 +74,40 @@ diff -pur net/ixgbe/ixgbe_main.c ixgbe/ixgbe_main.c
 +	if (ixgbe_netmap_configure_rx_ring(adapter, reg_idx))
 +		return;
 +#endif /* DEV_NETMAP */
- 	ixgbe_alloc_rx_buffers(ring, ixgbe_desc_unused(ring));
+ 	ixgbe_alloc_rx_buffers(ring, IXGBE_DESC_UNUSED(ring));
  }
  
-@@ -5448,6 +5489,9 @@ static int ixgbe_open(struct net_device
- 		goto err_up;
+@@ -3976,6 +4016,10 @@ static int ixgbe_up_complete(struct ixgbe_adapter *adapter)
+ 	/* enable transmits */
+ 	netif_tx_start_all_queues(adapter->netdev);
  
- 	netif_tx_start_all_queues(netdev);
++#ifdef DEV_NETMAP
++	netmap_enable_all_rings(adapter->netdev);
++#endif
++
+ 	/* bring the link up in the watchdog, this could race with our first
+ 	 * link up interrupt but shouldn't be a problem */
+ 	adapter->flags |= IXGBE_FLAG_NEED_LINK_UPDATE;
+@@ -4212,6 +4256,10 @@ void ixgbe_down(struct ixgbe_adapter *adapter)
+ 
+ 	ixgbe_napi_disable_all(adapter);
+ 
++#ifdef DEV_NETMAP
++	netmap_disable_all_rings(netdev);
++#endif
++
+ 	adapter->flags2 &= ~(IXGBE_FLAG2_FDIR_REQUIRES_REINIT |
+ 			     IXGBE_FLAG2_RESET_REQUESTED);
+ 	adapter->flags &= ~IXGBE_FLAG_NEED_LINK_UPDATE;
+@@ -7683,6 +7731,11 @@ static int __devinit ixgbe_probe(struct pci_dev *pdev,
+ 
+ 	e_dev_info("Intel(R) 10 Gigabit Network Connection\n");
+ 	cards_found++;
++
 +#ifdef DEV_NETMAP
 +	ixgbe_netmap_attach(adapter);
 +#endif /* DEV_NETMAP */
- 
++
  	return 0;
  
+ err_register:

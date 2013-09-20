@@ -1,5 +1,7 @@
---- old/bnx2x/bnx2x_cmn.c	2012-09-11 20:50:55.812622063 -0700
-+++ new/bnx2x/bnx2x_cmn.c	2012-09-19 11:53:47.395311293 -0700
+diff --git a/bnx2x/bnx2x_cmn.c b/bnx2x/bnx2x_cmn.c
+index 580b44e..7b5a7ae 100644
+--- a/bnx2x/bnx2x_cmn.c
++++ b/bnx2x/bnx2x_cmn.c
 @@ -30,6 +30,9 @@
  #include "bnx2x_sp.h"
  
@@ -9,8 +11,8 @@
 +#endif /* CONFIG_NETMAP */
  
  /**
-  * bnx2x_move_fp - move content of the fastpath structure.
-@@ -1981,6 +1984,9 @@ int bnx2x_nic_load(struct bnx2x *bp, int
+  * bnx2x_bz_fp - zero content of the fastpath structure.
+@@ -1904,6 +1907,9 @@ int bnx2x_nic_load(struct bnx2x *bp, int load_mode)
  
  	/* Start fast path */
  
@@ -20,7 +22,7 @@
  	/* Initialize Rx filter. */
  	netif_addr_lock_bh(bp->dev);
  	bnx2x_set_rx_mode(bp->dev);
-@@ -2252,6 +2258,50 @@ int bnx2x_poll(struct napi_struct *napi,
+@@ -2169,6 +2175,50 @@ int bnx2x_poll(struct napi_struct *napi, int budget)
  						 napi);
  	struct bnx2x *bp = fp->bp;
  
@@ -71,9 +73,11 @@
  	while (1) {
  #ifdef BNX2X_STOP_ON_ERROR
  		if (unlikely(bp->panic)) {
---- /usr/local/google/home/lrizzo/work-kernel-new/drivers/net/ethernet/broadcom/bnx2x/bnx2x_main.c	2012-09-11 20:50:55.822622214 -0700
-+++ new/bnx2x/bnx2x_main.c	2012-09-18 15:39:52.089289293 -0700
-@@ -599,6 +599,22 @@ static u64 bnx2x_wb_rd(struct bnx2x *bp,
+diff --git a/bnx2x/bnx2x_main.c b/bnx2x/bnx2x_main.c
+index 2f6361e..4536107 100644
+--- a/bnx2x/bnx2x_main.c
++++ b/bnx2x/bnx2x_main.c
+@@ -588,6 +588,22 @@ static u64 bnx2x_wb_rd(struct bnx2x *bp, int reg)
  }
  #endif
  
@@ -96,8 +100,8 @@
  static int bnx2x_mc_assert(struct bnx2x *bp)
  {
  	char last_idx;
-@@ -11227,6 +11243,9 @@ static int __devinit bnx2x_init_one(stru
- 	            pcie_speed == 2 ? "5GHz (Gen2)" : "2.5GHz",
+@@ -10863,6 +10879,9 @@ static int __devinit bnx2x_init_one(struct pci_dev *pdev,
+ 		    "5GHz (Gen2)" : "2.5GHz",
  		    dev->base_addr, bp->pdev->irq, dev->dev_addr);
  
 +#ifdef DEV_NETMAP

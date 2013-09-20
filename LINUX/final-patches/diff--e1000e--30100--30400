@@ -1,6 +1,8 @@
---- e1000e/netdev.c.orig	2009-12-03 04:51:21.000000000 +0100
-+++ net/e1000e/netdev.c	2013-03-25 22:13:23.000000000 +0100
-@@ -87,6 +87,10 @@ static int e1000_desc_unused(struct e100
+diff --git a/e1000e/netdev.c b/e1000e/netdev.c
+index 2198e61..588f1ec 100644
+--- a/e1000e/netdev.c
++++ b/e1000e/netdev.c
+@@ -452,6 +452,10 @@ static int e1000_desc_unused(struct e1000_ring *ring)
  	return ring->count + ring->next_to_clean - ring->next_to_use - 1;
  }
  
@@ -11,7 +13,7 @@
  /**
   * e1000_receive_skb - helper function to handle Rx indications
   * @adapter: board private structure
-@@ -446,6 +450,10 @@ static bool e1000_clean_rx_irq(struct e1
+@@ -849,6 +853,10 @@ static bool e1000_clean_rx_irq(struct e1000_adapter *adapter,
  	bool cleaned = 0;
  	unsigned int total_rx_bytes = 0, total_rx_packets = 0;
  
@@ -22,7 +24,7 @@
  	i = rx_ring->next_to_clean;
  	rx_desc = E1000_RX_DESC(*rx_ring, i);
  	buffer_info = &rx_ring->buffer_info[i];
-@@ -624,6 +632,10 @@ static bool e1000_clean_tx_irq(struct e1
+@@ -1066,6 +1074,10 @@ static bool e1000_clean_tx_irq(struct e1000_adapter *adapter)
  	unsigned int count = 0;
  	unsigned int total_tx_bytes = 0, total_tx_packets = 0;
  
@@ -33,7 +35,7 @@
  	i = tx_ring->next_to_clean;
  	eop = tx_ring->buffer_info[i].next_to_watch;
  	eop_desc = E1000_TX_DESC(*tx_ring, eop);
-@@ -2632,6 +2644,10 @@ static void e1000_configure(struct e1000
+@@ -3177,6 +3189,10 @@ static void e1000_configure(struct e1000_adapter *adapter)
  	e1000_configure_tx(adapter);
  	e1000_setup_rctl(adapter);
  	e1000_configure_rx(adapter);
@@ -41,10 +43,10 @@
 +	if (e1000e_netmap_init_buffers(adapter))
 +		return;
 +#endif /* DEV_NETMAP */
- 	adapter->alloc_rx_buf(adapter, e1000_desc_unused(adapter->rx_ring));
+ 	adapter->alloc_rx_buf(adapter, e1000_desc_unused(adapter->rx_ring),
+ 			      GFP_KERNEL);
  }
- 
-@@ -5227,6 +5243,9 @@ static int __devinit e1000_probe(struct
+@@ -6147,6 +6163,9 @@ static int __devinit e1000_probe(struct pci_dev *pdev,
  	if (err)
  		goto err_register;
  
@@ -54,7 +56,7 @@
  	/* carrier off reporting is important to ethtool even BEFORE open */
  	netif_carrier_off(netdev);
  
-@@ -5300,6 +5319,10 @@ static void __devexit e1000_remove(struc
+@@ -6234,6 +6253,10 @@ static void __devexit e1000_remove(struct pci_dev *pdev)
  	kfree(adapter->tx_ring);
  	kfree(adapter->rx_ring);
  

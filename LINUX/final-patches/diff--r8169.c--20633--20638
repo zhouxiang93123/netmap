@@ -1,6 +1,8 @@
---- /home/giuseppe/Compile/linux/drivers/net/r8169.c	2012-08-01 09:46:24.029831945 +0200
-+++ net/r8169.c	2012-08-01 10:00:12.381853666 +0200
-@@ -537,6 +538,10 @@ static int rtl8169_poll(struct napi_stru
+diff --git a/r8169.c b/r8169.c
+index 60f96c4..e6b844d 100644
+--- a/r8169.c
++++ b/r8169.c
+@@ -537,6 +537,10 @@ static int rtl8169_poll(struct napi_struct *napi, int budget);
  static const unsigned int rtl8169_rx_config =
  	(RX_FIFO_THRESH << RxCfgFIFOShift) | (RX_DMA_BURST << RxCfgDMAShift);
  
@@ -11,7 +13,7 @@
  static void mdio_write(void __iomem *ioaddr, int reg_addr, int value)
  {
  	int i;
-@@ -3210,6 +3215,10 @@ rtl8169_init_one(struct pci_dev *pdev, c
+@@ -3210,6 +3214,10 @@ rtl8169_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
  
  	device_set_wakeup_enable(&pdev->dev, tp->features & RTL_FEATURE_WOL);
  
@@ -22,7 +24,7 @@
  out:
  	return rc;
  
-@@ -3236,6 +3245,10 @@ static void __devexit rtl8169_remove_one
+@@ -3236,6 +3244,10 @@ static void __devexit rtl8169_remove_one(struct pci_dev *pdev)
  
  	unregister_netdev(dev);
  
@@ -33,7 +35,7 @@
  	/* restore original MAC address */
  	rtl_rar_set(tp, dev->perm_addr);
  
-@@ -3993,6 +4006,11 @@ err_out:
+@@ -3993,6 +4005,11 @@ err_out:
  static void rtl8169_rx_clear(struct rtl8169_private *tp)
  {
  	unsigned int i;
@@ -45,7 +47,7 @@
  
  	for (i = 0; i < NUM_RX_DESC; i++) {
  		if (tp->Rx_skbuff[i]) {
-@@ -4372,6 +4390,11 @@ static void rtl8169_tx_interrupt(struct
+@@ -4372,6 +4389,11 @@ static void rtl8169_tx_interrupt(struct net_device *dev,
  {
  	unsigned int dirty_tx, tx_left;
  
@@ -57,7 +59,7 @@
  	dirty_tx = tp->dirty_tx;
  	smp_rmb();
  	tx_left = tp->cur_tx - dirty_tx;
-@@ -4468,6 +4491,11 @@ static int rtl8169_rx_interrupt(struct n
+@@ -4467,6 +4489,11 @@ static int rtl8169_rx_interrupt(struct net_device *dev,
  	unsigned int cur_rx, rx_left;
  	unsigned int delta, count;
  

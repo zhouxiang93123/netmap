@@ -1,6 +1,8 @@
---- /home/giuseppe/Compile/linux/drivers/net/r8169.c	2012-07-31 20:58:22.186820244 +0200
-+++ net/r8169.c	2012-07-31 21:18:35.382821132 +0200
-@@ -704,6 +704,10 @@ static int rtl8169_poll(struct napi_stru
+diff --git a/r8169.c b/r8169.c
+index 7ffdb80..fc92723 100644
+--- a/r8169.c
++++ b/r8169.c
+@@ -590,6 +590,10 @@ static int rtl8169_poll(struct napi_struct *napi, int budget);
  static const unsigned int rtl8169_rx_config =
  	(RX_FIFO_THRESH << RxCfgFIFOShift) | (RX_DMA_BURST << RxCfgDMAShift);
  
@@ -11,7 +13,7 @@
  static u32 ocp_read(struct rtl8169_private *tp, u8 mask, u16 reg)
  {
  	void __iomem *ioaddr = tp->mmio_addr;
-@@ -3466,6 +3470,10 @@ rtl8169_init_one(struct pci_dev *pdev, c
+@@ -3207,6 +3211,10 @@ rtl8169_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
  	if (pci_dev_run_wake(pdev))
  		pm_runtime_put_noidle(&pdev->dev);
  
@@ -22,17 +24,17 @@
  	netif_carrier_off(dev);
  
  out:
-@@ -3500,6 +3508,9 @@ static void __devexit rtl8169_remove_one
- 	unregister_netdev(dev);
+@@ -3238,6 +3246,9 @@ static void __devexit rtl8169_remove_one(struct pci_dev *pdev)
+ 	cancel_delayed_work_sync(&tp->task);
  
  	rtl_release_firmware(tp);
 +#ifdef DEV_NETMAP
 +	netmap_detach(dev);
 +#endif /* DEV_NETMAP */
  
- 	if (pci_dev_run_wake(pdev))
- 		pm_runtime_get_noresume(&pdev->dev);
-@@ -4437,6 +4448,11 @@ static inline void rtl8169_mark_as_last_
+ 	unregister_netdev(dev);
+ 
+@@ -4074,6 +4085,11 @@ static inline void rtl8169_mark_as_last_descriptor(struct RxDesc *desc)
  static int rtl8169_rx_fill(struct rtl8169_private *tp)
  {
  	unsigned int i;
@@ -44,7 +46,7 @@
  
  	for (i = 0; i < NUM_RX_DESC; i++) {
  		void *data;
-@@ -4820,6 +4836,11 @@ static void rtl8169_tx_interrupt(struct
+@@ -4452,6 +4468,11 @@ static void rtl8169_tx_interrupt(struct net_device *dev,
  {
  	unsigned int dirty_tx, tx_left;
  
@@ -56,9 +58,9 @@
  	dirty_tx = tp->dirty_tx;
  	smp_rmb();
  	tx_left = tp->cur_tx - dirty_tx;
-@@ -4907,6 +4928,11 @@ static int rtl8169_rx_interrupt(struct n
- 	unsigned int cur_rx, rx_left;
+@@ -4547,6 +4568,11 @@ static int rtl8169_rx_interrupt(struct net_device *dev,
  	unsigned int count;
+ 	int polling = (budget != ~(u32)0) ? 1 : 0;
  
 +#ifdef DEV_NETMAP
 +	if (netmap_rx_irq(dev, 0, &count))

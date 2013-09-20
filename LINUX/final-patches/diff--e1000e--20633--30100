@@ -1,18 +1,20 @@
---- /home/giuseppe/Compile/linux-build-3.4/source/drivers/net/ethernet/intel/e1000e/netdev.c	2012-07-30 17:58:54.000000000 +0200
-+++ net/e1000e/netdev.c	2012-07-30 19:03:04.000000000 +0200
-@@ -145,6 +145,10 @@ static const struct e1000_reg_info e1000
- 	{0, NULL}
- };
+diff --git a/e1000e/netdev.c b/e1000e/netdev.c
+index 57f149b..602f024 100644
+--- a/e1000e/netdev.c
++++ b/e1000e/netdev.c
+@@ -76,6 +76,10 @@ static int e1000_desc_unused(struct e1000_ring *ring)
+ 	return ring->count + ring->next_to_clean - ring->next_to_use - 1;
+ }
  
 +#if defined(CONFIG_NETMAP) || defined(CONFIG_NETMAP_MODULE)
 +#include <if_e1000e_netmap.h>
 +#endif
 +
- /*
-  * e1000_regdump - register printout routine
-  */
-@@ -875,6 +879,10 @@ static bool e1000_clean_rx_irq(struct e1
- 	bool cleaned = false;
+ /**
+  * e1000_receive_skb - helper function to handle Rx indications
+  * @adapter: board private structure
+@@ -414,6 +418,10 @@ static bool e1000_clean_rx_irq(struct e1000_adapter *adapter,
+ 	bool cleaned = 0;
  	unsigned int total_rx_bytes = 0, total_rx_packets = 0;
  
 +#ifdef DEV_NETMAP
@@ -20,11 +22,11 @@
 +		return 1; /* seems to be ignored */
 +#endif /* DEV_NETMAP */
  	i = rx_ring->next_to_clean;
- 	rx_desc = E1000_RX_DESC_EXT(*rx_ring, i);
- 	staterr = le32_to_cpu(rx_desc->wb.upper.status_error);
-@@ -1129,6 +1137,10 @@ static bool e1000_clean_tx_irq(struct e1
+ 	rx_desc = E1000_RX_DESC(*rx_ring, i);
+ 	buffer_info = &rx_ring->buffer_info[i];
+@@ -629,6 +637,10 @@ static bool e1000_clean_tx_irq(struct e1000_adapter *adapter)
+ 	unsigned int count = 0;
  	unsigned int total_tx_bytes = 0, total_tx_packets = 0;
- 	unsigned int bytes_compl = 0, pkts_compl = 0;
  
 +#ifdef DEV_NETMAP
 +	if (netmap_tx_irq(netdev, 0))
@@ -33,18 +35,18 @@
  	i = tx_ring->next_to_clean;
  	eop = tx_ring->buffer_info[i].next_to_watch;
  	eop_desc = E1000_TX_DESC(*tx_ring, eop);
-@@ -3358,6 +3370,10 @@ static void e1000_configure(struct e1000
- 		e1000e_setup_rss_hash(adapter);
+@@ -2640,6 +2652,10 @@ static void e1000_configure(struct e1000_adapter *adapter)
+ 	e1000_configure_tx(adapter);
  	e1000_setup_rctl(adapter);
  	e1000_configure_rx(adapter);
 +#ifdef DEV_NETMAP
 +	if (e1000e_netmap_init_buffers(adapter))
 +		return;
 +#endif /* DEV_NETMAP */
- 	adapter->alloc_rx_buf(rx_ring, e1000_desc_unused(rx_ring), GFP_KERNEL);
+ 	adapter->alloc_rx_buf(adapter, e1000_desc_unused(adapter->rx_ring));
  }
  
-@@ -6417,6 +6433,9 @@ static int __devinit e1000_probe(struct
+@@ -5227,6 +5243,9 @@ static int __devinit e1000_probe(struct pci_dev *pdev,
  	if (err)
  		goto err_register;
  
@@ -54,7 +56,7 @@
  	/* carrier off reporting is important to ethtool even BEFORE open */
  	netif_carrier_off(netdev);
  
-@@ -6504,6 +6523,10 @@ static void __devexit e1000_remove(struc
+@@ -5305,6 +5324,10 @@ static void __devexit e1000_remove(struct pci_dev *pdev)
  	kfree(adapter->tx_ring);
  	kfree(adapter->rx_ring);
  

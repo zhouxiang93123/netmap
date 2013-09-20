@@ -1,8 +1,10 @@
---- a/igb/igb_main.c	2013-03-18 17:43:04.000000000 +0100
-+++ b/igb/igb_main.c	2013-06-21 10:40:35.000000000 +0200
-@@ -246,6 +246,10 @@ static int debug = -1;
- module_param(debug, int, 0);
- MODULE_PARM_DESC(debug, "Debug level (0=none,...,16=all)");
+diff --git a/igb/igb_main.c b/igb/igb_main.c
+index ced5444..6b2357e 100644
+--- a/igb/igb_main.c
++++ b/igb/igb_main.c
+@@ -225,6 +225,10 @@ MODULE_DESCRIPTION("Intel(R) Gigabit Ethernet Network Driver");
+ MODULE_LICENSE("GPL");
+ MODULE_VERSION(DRV_VERSION);
  
 +#if defined(CONFIG_NETMAP) || defined(CONFIG_NETMAP_MODULE)
 +#include <if_igb_netmap.h>
@@ -11,7 +13,7 @@
  struct igb_reg_info {
  	u32 ofs;
  	char *name;
-@@ -2142,6 +2146,10 @@ static int __devinit igb_probe(struct pc
+@@ -2073,6 +2077,10 @@ static int __devinit igb_probe(struct pci_dev *pdev,
  	/* carrier off reporting is important to ethtool even BEFORE open */
  	netif_carrier_off(netdev);
  
@@ -22,7 +24,7 @@
  #ifdef CONFIG_IGB_DCA
  	if (dca_add_requester(&pdev->dev) == 0) {
  		adapter->flags |= IGB_FLAG_DCA_ENABLED;
-@@ -2280,6 +2288,10 @@ static void __devexit igb_remove(struct
+@@ -2199,6 +2207,10 @@ static void __devexit igb_remove(struct pci_dev *pdev)
  		dev_info(&pdev->dev, "IOV Disabled\n");
  	}
  #endif
@@ -33,7 +35,7 @@
  
  	iounmap(hw->hw_addr);
  	if (hw->flash_address)
-@@ -2754,6 +2766,9 @@ void igb_configure_tx_ring(struct igb_ad
+@@ -2711,6 +2723,9 @@ void igb_configure_tx_ring(struct igb_adapter *adapter,
  
  	txdctl |= E1000_TXDCTL_QUEUE_ENABLE;
  	wr32(E1000_TXDCTL(reg_idx), txdctl);
@@ -43,7 +45,7 @@
  }
  
  /**
-@@ -3129,6 +3144,19 @@ void igb_configure_rx_ring(struct igb_ad
+@@ -3088,6 +3103,19 @@ void igb_configure_rx_ring(struct igb_adapter *adapter,
  	/* Only set Drop Enable if we are supporting multiple queues */
  	if (adapter->vfs_allocated_count || adapter->num_rx_queues > 1)
  		srrctl |= E1000_SRRCTL_DROP_EN;
@@ -63,7 +65,7 @@
  
  	wr32(E1000_SRRCTL(reg_idx), srrctl);
  
-@@ -5699,6 +5727,10 @@ static bool igb_clean_tx_irq(struct igb_
+@@ -5705,6 +5733,10 @@ static bool igb_clean_tx_irq(struct igb_q_vector *q_vector)
  
  	if (test_bit(__IGB_DOWN, &adapter->state))
  		return true;
@@ -74,7 +76,7 @@
  
  	tx_buffer = &tx_ring->tx_buffer_info[i];
  	tx_desc = IGB_TX_DESC(tx_ring, i);
-@@ -5937,6 +5969,12 @@ static bool igb_clean_rx_irq(struct igb_
+@@ -5980,6 +6012,12 @@ static bool igb_clean_rx_irq(struct igb_q_vector *q_vector, int budget)
  	u16 cleaned_count = igb_desc_unused(rx_ring);
  	u16 i = rx_ring->next_to_clean;
  
@@ -87,7 +89,7 @@
  	rx_desc = IGB_RX_DESC(rx_ring, i);
  
  	while (igb_test_staterr(rx_desc, E1000_RXD_STAT_DD)) {
-@@ -6130,6 +6168,11 @@ void igb_alloc_rx_buffers(struct igb_rin
+@@ -6170,6 +6208,11 @@ void igb_alloc_rx_buffers(struct igb_ring *rx_ring, u16 cleaned_count)
  	struct igb_rx_buffer *bi;
  	u16 i = rx_ring->next_to_use;
  

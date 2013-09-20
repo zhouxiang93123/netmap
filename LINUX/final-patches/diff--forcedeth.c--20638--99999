@@ -1,6 +1,8 @@
---- net/forcedeth.c	2011-08-05 06:59:21.000000000 +0200
-+++ net/forcedeth.c	2012-02-17 11:16:41.404764449 +0100
-@@ -1865,12 +1865,25 @@ static void nv_init_tx(struct net_device
+diff --git a/forcedeth.c b/forcedeth.c
+index 9c0b1ba..b081d6b 100644
+--- a/forcedeth.c
++++ b/forcedeth.c
+@@ -1865,12 +1865,25 @@ static void nv_init_tx(struct net_device *dev)
  	}
  }
  
@@ -26,7 +28,7 @@
  
  	if (!nv_optimized(np))
  		return nv_alloc_rx(dev);
-@@ -3386,6 +3399,11 @@ static irqreturn_t nv_nic_irq_tx(int foo
+@@ -3386,6 +3399,11 @@ static irqreturn_t nv_nic_irq_tx(int foo, void *data)
  	int i;
  	unsigned long flags;
  
@@ -38,7 +40,7 @@
  	for (i = 0;; i++) {
  		events = readl(base + NvRegMSIXIrqStatus) & NVREG_IRQ_TX_ALL;
  		writel(NVREG_IRQ_TX_ALL, base + NvRegMSIXIrqStatus);
-@@ -3497,6 +3515,11 @@ static irqreturn_t nv_nic_irq_rx(int foo
+@@ -3497,6 +3515,11 @@ static irqreturn_t nv_nic_irq_rx(int foo, void *data)
  	int i;
  	unsigned long flags;
  
@@ -50,7 +52,7 @@
  	for (i = 0;; i++) {
  		events = readl(base + NvRegMSIXIrqStatus) & NVREG_IRQ_RX_ALL;
  		writel(NVREG_IRQ_RX_ALL, base + NvRegMSIXIrqStatus);
-@@ -5615,6 +5638,10 @@ static int __devinit nv_probe(struct pci
+@@ -5645,6 +5668,10 @@ static int __devinit nv_probe(struct pci_dev *pci_dev, const struct pci_device_i
  		goto out_error;
  	}
  
@@ -61,7 +63,7 @@
  	netif_carrier_off(dev);
  
  	dev_info(&pci_dev->dev, "ifname %s, PHY OUI 0x%x @ %d, addr %pM\n",
-@@ -5698,6 +5725,10 @@ static void __devexit nv_remove(struct p
+@@ -5728,6 +5755,10 @@ static void __devexit nv_remove(struct pci_dev *pci_dev)
  
  	unregister_netdev(dev);
  

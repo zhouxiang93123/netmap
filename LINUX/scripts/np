@@ -1,0 +1,160 @@
+#!/bin/bash
+
+DRIVER_SRCS=$(make +DRIVER_SRCS)
+
+[ -n "$GITDIR" -a -d "$GITDIR/.git" ] || {
+	echo "GITDIR not set or not valid" >&2
+	exit 1
+}
+
+function driver-path()
+{
+	cat cache/$2/$1/path 2>/dev/null && return
+	mkdir -p cache/$2/$1
+	(
+		cd $GITDIR
+		git checkout netmap-$2 >/dev/null 2>&1
+		git clean -fdx >/dev/null 2>&1
+		find drivers/net -name $1
+	) | tee cache/$2/$1/path
+
+}
+
+function get-patch()
+{
+	local use_cache
+	[ "$1" = -c ] && { use_cache=1; shift; }
+	local v1=$(scripts/vers $2 -c)
+	local v2=$(scripts/vers $2 -i -c)
+	local drvname=$1
+	local patchname=diff--$drvname--$v1--$v2
+	local out=tmp-patches/$patchname
+	[ -n "$use_cache" -a -s $out ] && { echo $out; return; }
+	local drvpath=$(driver-path $drvname $2)
+	[ -n "$drvpath" ] || return
+	local drvdir=$(dirname $drvpath)
+	(
+		cd $GITDIR
+		git diff --relative=$drvdir v$2..netmap-$2 -- $drvpath
+	) > $out
+	[ -s $out ] || { rm $out; return 1; }
+	echo $out
+	return 0;
+}
+
+function get-range()
+{
+	local drv=$1
+	local v=$2
+	while scripts/vers -b $v $3 -L; do
+		get-patch $drv $v
+		v=$(scripts/vers $v -i)
+	done
+}
+
+function get-src()
+{
+	cache=cache/$2/$1/src
+	[ -d $cache ] || {
+		mkdir -p $cache
+		(
+			local _cache=$(realpath $cache)
+			local src=$(driver-path $1 $2)
+			cd $GITDIR
+			git checkout v$2 >/dev/null 2>&1
+			git reset --hard
+			git clean -fdx
+			cp -r $src $_cache
+		)
+	}
+	cp -r $cache/* $3
+}
+
+function extend()
+{
+	local patch=$(realpath $1)
+	local v=$2
+	local drv=$(scripts/vers $1 -s -p -p)
+	local tmpdir1=$(mktemp -d)
+	local tmpdir2=$(mktemp -d)
+	get-src $drv $v $tmpdir1
+	get-src $drv $v $tmpdir2
+	(
+		cd $tmpdir1
+		patch --no-backup-if-mismatch -p1 < $patch >/dev/null 2>&1
+	) || return 1
+	local patch2=$(get-patch -c $drv $v)
+	patch2=$(realpath $patch2)
+	(
+		cd $tmpdir2
+		patch -p1 < $patch2 >/dev/null 2>&1
+	)
+	diff -qbBr $tmpdir1 $tmpdir2 >/dev/null || return 1
+	rm -rf $tmpdir1 $tmpdir2
+	return 0
+} 
+
+function minimize()
+{
+	mkdir -p final-patches
+	local drv=$(basename $1)
+	local patches=$(ls tmp-patches/diff--$drv--* 2>/dev/null)
+	[ -n "$patches" ] || return 1
+	set $patches
+	rm -f final-patches/diff--$drv--*
+	local pivot=$1
+	[ -n "$pivot" -a -e "$pivot" ] || return 1
+	local ple=$(scripts/vers $pivot -s -p -C)
+	local pre=$(scripts/vers $pivot -s -C)
+	while [ -n "$pivot" ]; do
+		shift
+		if [ -n "$1" ]; then 
+			local nle=$(scripts/vers $1 -s -p -C)
+			local nre=$(scripts/vers $1 -s -C)
+			if [ $pre = $nle ] && extend $pivot $nle; then
+				pre=$nre
+				continue
+			fi
+		fi
+		out=$(scripts/vers diff $drv $ple -c $pre -c -S4)
+		cp $pivot final-patches/$out
+		pivot=$1
+		pre=$nre
+		ple=$nle
+	done
+	return 0
+}
+
+function infty()
+{
+	local drv=$(basename $1)
+	local v=$(scripts/vers $2 -c)
+	local last=$(ls final-patches/diff--$drv--*--$v 2>/dev/null|tail -n1)
+	[ -n "$last" ] || return 1
+	mv -n $last $(scripts/vers $last -s -p 99999 -S4) 2>/dev/null
+}
+
+function forall()
+{
+	local cmd=$1
+	shift
+	local driver
+	for driver in $DRIVER_SRCS; do
+		$cmd $(basename $driver) "$@"
+	done
+}
+
+mkdir -p tmp-patches
+
+[ -n "$1" ] && {
+	cmd=$1
+	shift
+	case $cmd in
+	*-all)
+		forall ${cmd%-all} "$@"
+		;;
+	*)
+		$cmd "$@"
+		;;
+	esac
+}
