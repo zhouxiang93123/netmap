@@ -134,6 +134,9 @@ ixgbe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 	 */
 	int report_frequency = kring->nkr_num_slots >> 1;
 
+	if (!netif_carrier_ok(ifp))
+		return 0;
+
 	/* if cur is invalid reinitialize the ring. */
 	if (k > lim)
 		return netmap_ring_reinit(kring);
@@ -320,6 +323,9 @@ ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 	u_int k = ring->cur, resvd = ring->reserved;
+
+	if (!netif_carrier_ok(ifp))
+		return 0;
 
 	if (k > lim) /* userspace is cheating */
 		return netmap_ring_reinit(kring);
