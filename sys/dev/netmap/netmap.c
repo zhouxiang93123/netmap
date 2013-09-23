@@ -3347,8 +3347,8 @@ generic_mbuf_destructor(struct sk_buff *skb)
 {
     struct netmap_adapter *na = (struct netmap_adapter *)(skb_shinfo(skb)->destructor_arg);
 
-    na->tx_completed++;
-D("destroy --> %d\n", na->tx_completed);
+    NM_ATOMIC_INC(&na->tx_completed);
+D("destroy --> %d\n", atomic_read(&na->tx_completed));
 }
 
 static int
@@ -3413,10 +3413,8 @@ D("hwavail = %d\n", kring->nr_hwavail);
 
     if (n==0 || kring->nr_hwavail < 1) {
         /* Record completed transmissions using na->tx_completed and update hwavail. */
-        // TODO tx_completed must be an atomic variable
-        kring->nr_hwavail += na->tx_completed;
-D("tx compl %d, hwavail %d\n", na->tx_completed, kring->nr_hwavail);
-        na->tx_completed = 0;
+        kring->nr_hwavail += NM_ATOMIC_READ_AND_CLEAR(&na->tx_completed);
+D("tx completed -> hwavail %d [%d]\n", kring->nr_hwavail, atomic_read(&na->tx_completed));
     }
     /* Update avail to what the kernel knows */
     ring->avail = kring->nr_hwavail;
@@ -3442,7 +3440,7 @@ generic_netmap_attach(struct ifnet *ifp)
     na.nm_register = &generic_netmap_register;
     na.nm_txsync = &generic_netmap_txsync;
     na.nm_rxsync = &generic_netmap_rxsync;
-    na.tx_completed = 0;
+    NM_ATOMIC_SET(&na.tx_completed, 0);
 
     return netmap_attach(&na, 1);
 }
