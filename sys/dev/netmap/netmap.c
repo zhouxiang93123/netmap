@@ -3440,8 +3440,8 @@ generic_netmap_attach(struct ifnet *ifp)
 
     bzero(&na, sizeof(na));
     na.ifp = ifp;
-    na.num_tx_desc = 256;
-    na.num_rx_desc = 256;
+    na.num_tx_desc = 128;
+    na.num_rx_desc = 128;
     na.nm_register = &generic_netmap_register;
     na.nm_txsync = &generic_netmap_txsync;
     na.nm_rxsync = &generic_netmap_rxsync;
