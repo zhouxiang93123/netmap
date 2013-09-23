@@ -343,6 +343,11 @@ struct netmap_adapter {
 
 	/* memory allocator */
  	struct netmap_mem_d *nm_mem;
+
+        /* Generic netmap adapter support. This allows to use netmap with a device driver
+           which doesn't support netmap. */
+        unsigned int tx_completed;  /* Completed transmissions. */
+
 #ifdef linux
 	struct net_device_ops nm_ndo;
 #endif /* linux */

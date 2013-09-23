@@ -3310,7 +3310,7 @@ netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 #include <linux/rtnetlink.h>  /* rtnl_[un]lock() */
 
 static int
-generic_netmap_reg(struct ifnet *ifp, int enable)
+generic_netmap_register(struct ifnet *ifp, int enable)
 {
     struct netmap_adapter *na = NA(ifp);
     int error;
@@ -3339,6 +3339,14 @@ generic_netmap_reg(struct ifnet *ifp, int enable)
     return error;
 }
 
+static void
+generic_mbuf_destructor(struct sk_buff *skb)
+{
+    struct netmap_adapter *na = (struct netmap_adapter *)(skb_shinfo(skb)->destructor_arg);
+
+    na->tx_completed++;
+}
+
 static int
 generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
@@ -3360,16 +3368,33 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
     if (j != k) {
         /* Process new packets to send: j is the current index in the netmap ring. */
         for (; j != k; n++) {
-            /* slot is the current slot in the netmap ring */
-            struct netmap_slot *slot = &ring->slot[j];
+            struct netmap_slot *slot = &ring->slot[j]; /* Current slot in the netmap ring */
             void *addr = NMB(slot);
             u_int len = slot->len;
+            struct sk_buff *skb;
+            netdev_tx_t tx_ret;
 
             if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
                 return netmap_ring_reinit(kring);
             }
-            /* TODO create a sk_buff and send it through start_xmit */
-            //ifp->netdev_ops->ndo_start_xmit(...)
+            /* Allocate a new mbuf for transmission and copy in the user packet. */
+            skb = alloc_skb(len, GFP_ATOMIC);
+            if (unlikely(!skb)) {
+                D("mbuf allocation failed\n");
+                return netmap_ring_reinit(kring);
+            }
+            /* TODO Support the slot flags (NS_FRAG, NS_INDIRECT). */
+            if (unlikely(copy_from_user(skb_put(skb, len), addr, len))) {
+                D("copyin() failed\n");
+                return netmap_ring_reinit(kring);
+            }
+            skb->destructor = &generic_mbuf_destructor;
+            skb_shinfo(skb)->destructor_arg = na;
+            tx_ret = ifp->netdev_ops->ndo_start_xmit(skb, ifp);
+            if (unlikely(tx_ret != NETDEV_TX_OK)) {
+                D("start_xmit failed: error %d\n", tx_ret);
+                return netmap_ring_reinit(kring);
+            }
 
             slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
             if (unlikely(++j == lim))
@@ -3379,15 +3404,40 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
         kring->nr_hwavail -= n;
     }
 
-    /* We don't have any informations about how many slots have been freed.
-       Pretend to have instantaneous TX operation. */
-    kring->nr_hwavail += n;
-
+    if (n==0 || kring->nr_hwavail < 1) {
+        /* Record completed transmissions using na->tx_completed and update hwavail. */
+        // TODO tx_completed must be an atomic variable
+        kring->nr_hwavail += na->tx_completed;
+        na->tx_completed = 0;
+    }
     /* Update avail to what the kernel knows */
     ring->avail = kring->nr_hwavail;
 
     return 0;
 }
+
+static int
+generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
+{
+    return 0;
+}
+
+static void
+generic_netmap_attach(struct ifnet *ifp)
+{
+    struct netmap_adapter na;
+
+    bzero(&na, sizeof(na));
+    na.ifp = ifp;
+    na.num_tx_desc = 256;
+    na.num_rx_desc = 256;
+    na.nm_register = &generic_netmap_register;
+    na.nm_txsync = &generic_netmap_txsync;
+    na.nm_rxsync = &generic_netmap_rxsync;
+    na.tx_completed = 0;
+    netmap_attach(&na, 1);
+}
+
 
 /*
  * Remap linux arguments into the FreeBSD call.
