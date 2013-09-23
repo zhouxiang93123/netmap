@@ -1748,6 +1748,8 @@ unlock_out:
 }
 
 
+static int generic_netmap_attach(struct ifnet *ifp);
+
 /*
  * MUST BE CALLED UNDER NMG_LOCK()
  *
@@ -1927,8 +1929,9 @@ no_bridge_port:
 		} else
 			return 0;	/* valid pointer, we hold the refcount */
 	}
-	nm_if_rele(*ifp);
-	return EINVAL;	// not NETMAP capable
+        /* If the interface is not netmap capable, we fall back to the generic netmap
+           adapter, which doesn't require driver support. */
+        return generic_netmap_attach(*ifp);
 }
 
 
@@ -3325,11 +3328,11 @@ generic_netmap_register(struct ifnet *ifp, int enable)
 
     if (enable) { /* Enable netmap mode. */
         ifp->if_capenable |= IFCAP_NETMAP;
-        na->if_transmit = (void *)ifp->netdev_ops;
-        ifp->netdev_ops = &na->nm_ndo;
+        //na->if_transmit = (void *)ifp->netdev_ops;
+        //ifp->netdev_ops = &na->nm_ndo;
     } else { /* Disable netmap mode. */
         ifp->if_capenable &= ~IFCAP_NETMAP;
-        ifp->netdev_ops = (void *)na->if_transmit;
+        //ifp->netdev_ops = (void *)na->if_transmit;
     }
 
     rtnl_unlock();
@@ -3345,6 +3348,7 @@ generic_mbuf_destructor(struct sk_buff *skb)
     struct netmap_adapter *na = (struct netmap_adapter *)(skb_shinfo(skb)->destructor_arg);
 
     na->tx_completed++;
+D("destroy --> %d\n", na->tx_completed);
 }
 
 static int
@@ -3384,10 +3388,11 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
                 return netmap_ring_reinit(kring);
             }
             /* TODO Support the slot flags (NS_FRAG, NS_INDIRECT). */
-            if (unlikely(copy_from_user(skb_put(skb, len), addr, len))) {
-                D("copyin() failed\n");
-                return netmap_ring_reinit(kring);
-            }
+            skb_copy_to_linear_data(skb, addr, len); // skb_store_bits(skb, 0, addr, len);
+            skb_put(skb, len);
+if (unlikely(skb->len != len)) {
+    D("WTF!? %d %d\n", skb->len, len);
+}
             skb->destructor = &generic_mbuf_destructor;
             skb_shinfo(skb)->destructor_arg = na;
             tx_ret = ifp->netdev_ops->ndo_start_xmit(skb, ifp);
@@ -3395,6 +3400,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
                 D("start_xmit failed: error %d\n", tx_ret);
                 return netmap_ring_reinit(kring);
             }
+D("tx %d\n", len);
 
             slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
             if (unlikely(++j == lim))
@@ -3402,12 +3408,14 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
         }
         kring->nr_hwcur = k; /* the saved ring->cur */
         kring->nr_hwavail -= n;
+D("hwavail = %d\n", kring->nr_hwavail);
     }
 
     if (n==0 || kring->nr_hwavail < 1) {
         /* Record completed transmissions using na->tx_completed and update hwavail. */
         // TODO tx_completed must be an atomic variable
         kring->nr_hwavail += na->tx_completed;
+D("tx compl %d, hwavail %d\n", na->tx_completed, kring->nr_hwavail);
         na->tx_completed = 0;
     }
     /* Update avail to what the kernel knows */
@@ -3422,7 +3430,7 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
     return 0;
 }
 
-static void
+static int
 generic_netmap_attach(struct ifnet *ifp)
 {
     struct netmap_adapter na;
@@ -3435,7 +3443,8 @@ generic_netmap_attach(struct ifnet *ifp)
     na.nm_txsync = &generic_netmap_txsync;
     na.nm_rxsync = &generic_netmap_rxsync;
     na.tx_completed = 0;
-    netmap_attach(&na, 1);
+
+    return netmap_attach(&na, 1);
 }
 
 
