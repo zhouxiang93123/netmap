@@ -3390,9 +3390,6 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
             /* TODO Support the slot flags (NS_FRAG, NS_INDIRECT). */
             skb_copy_to_linear_data(skb, addr, len); // skb_store_bits(skb, 0, addr, len);
             skb_put(skb, len);
-if (unlikely(skb->len != len)) {
-    D("WTF!? %d %d\n", skb->len, len);
-}
             skb->destructor = &generic_mbuf_destructor;
             skb_shinfo(skb)->destructor_arg = na;
             tx_ret = ifp->netdev_ops->ndo_start_xmit(skb, ifp);
@@ -3400,7 +3397,6 @@ if (unlikely(skb->len != len)) {
                 D("start_xmit failed: error %d\n", tx_ret);
                 return netmap_ring_reinit(kring);
             }
-D("tx %d\n", len);
 
             slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
             if (unlikely(++j == lim))
@@ -3408,7 +3404,7 @@ D("tx %d\n", len);
         }
         kring->nr_hwcur = k; /* the saved ring->cur */
         kring->nr_hwavail -= n;
-D("hwavail = %d\n", kring->nr_hwavail);
+D("tx #%d, hwavail = %d\n", n, kring->nr_hwavail);
     }
 
     if (n==0 || kring->nr_hwavail < 1) {
