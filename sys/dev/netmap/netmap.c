@@ -3328,11 +3328,11 @@ generic_netmap_register(struct ifnet *ifp, int enable)
 
     if (enable) { /* Enable netmap mode. */
         ifp->if_capenable |= IFCAP_NETMAP;
-        //na->if_transmit = (void *)ifp->netdev_ops;
-        //ifp->netdev_ops = &na->nm_ndo;
+        na->if_transmit = (void *)ifp->netdev_ops;
+        ifp->netdev_ops = &na->nm_ndo;
     } else { /* Disable netmap mode. */
         ifp->if_capenable &= ~IFCAP_NETMAP;
-        //ifp->netdev_ops = (void *)na->if_transmit;
+        ifp->netdev_ops = (void *)na->if_transmit;
     }
 
     rtnl_unlock();
@@ -3355,6 +3355,7 @@ static int
 generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
     struct netmap_adapter *na = NA(ifp);
+    struct net_device_ops * ops = (struct net_device_ops *)na->if_transmit;
     struct netmap_kring *kring = &na->tx_rings[ring_nr];
     struct netmap_ring *ring = kring->ring;
     u_int j, k, n = 0, lim = kring->nkr_num_slots - 1;
@@ -3392,7 +3393,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
             skb_put(skb, len);
             skb->destructor = &generic_mbuf_destructor;
             skb_shinfo(skb)->destructor_arg = na;
-            tx_ret = ifp->netdev_ops->ndo_start_xmit(skb, ifp);
+            tx_ret = ops->ndo_start_xmit(skb, ifp);
             if (unlikely(tx_ret != NETDEV_TX_OK)) {
                 D("start_xmit failed: error %d\n", tx_ret);
                 return netmap_ring_reinit(kring);
