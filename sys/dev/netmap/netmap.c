@@ -3409,7 +3409,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 D("tx #%d, hwavail = %d\n", n, kring->nr_hwavail);
     }
 
-    if (n==0 || kring->nr_hwavail < 1) { /* TODO revise this logic */
+    if (1 || n==0 || kring->nr_hwavail < 1) { /* TODO revise this logic */
         int completed = NM_ATOMIC_READ_AND_CLEAR(&na->tx_completed);
         /* Record completed transmissions using na->tx_completed and update hwavail. */
         kring->nr_hwavail += completed;
