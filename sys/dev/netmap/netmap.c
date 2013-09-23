@@ -3312,6 +3312,13 @@ netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 
 #include <linux/rtnetlink.h>  /* rtnl_[un]lock() */
 
+/* Debug for generic netmap adapters. */
+#if 0
+#define DBGEN(x) x
+#else
+#define DBGEN(x)
+#endif
+
 static int
 generic_netmap_register(struct ifnet *ifp, int enable)
 {
@@ -3349,7 +3356,6 @@ generic_mbuf_destructor(struct sk_buff *skb)
 
     NM_ATOMIC_INC(&na->tx_completed);
     netmap_tx_irq(na->ifp, 0);
-//D("destroy --> %d\n", atomic_read(&na->tx_completed));
 }
 
 static int
@@ -3406,14 +3412,14 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
         }
         kring->nr_hwcur = k; /* the saved ring->cur */
         kring->nr_hwavail -= n;
-D("tx #%d, hwavail = %d\n", n, kring->nr_hwavail);
+        DBGEN(D("tx #%d, hwavail = %d\n", n, kring->nr_hwavail));
     }
 
     if (1 || n==0 || kring->nr_hwavail < 1) { /* TODO revise this logic */
         int completed = NM_ATOMIC_READ_AND_CLEAR(&na->tx_completed);
         /* Record completed transmissions using na->tx_completed and update hwavail. */
         kring->nr_hwavail += completed;
-D("tx completed [%d] -> hwavail %d\n", completed, kring->nr_hwavail);
+        DBGEN(D("tx completed [%d] -> hwavail %d\n", completed, kring->nr_hwavail));
     }
     /* Update avail to what the kernel knows */
     ring->avail = kring->nr_hwavail;
