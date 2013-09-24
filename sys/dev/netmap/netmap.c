@@ -3447,6 +3447,12 @@ generic_netmap_attach(struct ifnet *ifp)
     na.nm_rxsync = &generic_netmap_rxsync;
     NM_ATOMIC_SET(&na.tx_completed, 0);
 
+    printk("[GNA] num_tx_queues(%d), real_num_tx_queues(%d), len(%lu)\n", ifp->num_tx_queues,
+                                                                ifp->real_num_tx_queues,
+                                                                ifp->tx_queue_len);
+    printk("[GNA] num_rx_queues(%d), real_num_rx_queues(%d)\n", ifp->num_rx_queues,
+                                                                ifp->real_num_rx_queues);
+
     return netmap_attach(&na, 1);
 }
 
