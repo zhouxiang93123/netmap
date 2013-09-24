@@ -3404,7 +3404,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
             tx_ret = ops->ndo_start_xmit(skb, ifp);
             if (unlikely(tx_ret != NETDEV_TX_OK)) {
                 D("start_xmit failed: error %d\n", tx_ret);
-                return netmap_ring_reinit(kring);
+                //return netmap_ring_reinit(kring);
             }
             slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
             if (unlikely(j++ == lim))
