@@ -3367,8 +3367,9 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
     struct netmap_ring *ring = kring->ring;
     u_int j, k, n = 0, lim = kring->nkr_num_slots - 1;
 
-    if (!netif_carrier_ok(ifp))
+    if (!netif_carrier_ok(ifp)) {
         return 0;
+    }
 
     /* Take a copy of ring->cur now, and never read it again. */
     k = ring->cur;
@@ -3405,9 +3406,8 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
                 D("start_xmit failed: error %d\n", tx_ret);
                 return netmap_ring_reinit(kring);
             }
-
             slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
-            if (unlikely(++j == lim))
+            if (unlikely(j++ == lim))
                 j = 0;
         }
         kring->nr_hwcur = k; /* the saved ring->cur */
