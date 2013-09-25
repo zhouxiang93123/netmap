@@ -3380,7 +3380,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
     j = kring->nr_hwcur;
     if (j != k) {
         /* Process new packets to send: j is the current index in the netmap ring. */
-        for (; j != k; n++) {
+        while (j != k) {
             struct netmap_slot *slot = &ring->slot[j]; /* Current slot in the netmap ring */
             void *addr = NMB(slot);
             u_int len = slot->len;
@@ -3403,29 +3403,32 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
             skb_shinfo(skb)->destructor_arg = na;
             tx_ret = ops->ndo_start_xmit(skb, ifp);
             if (unlikely(tx_ret != NETDEV_TX_OK)) {
+                //D("start_xmit failed: err %d [%d,%d,%d]\n", tx_ret, j, k, kring->nr_hwavail);
                 if (likely(tx_ret == NETDEV_TX_BUSY)) {
+                    skb->destructor = NULL;
                     kfree_skb(skb);
+                    break;
                 }
-                D("start_xmit failed: err %d [%d,%d,%d]\n", tx_ret, j, k, kring->nr_hwavail);
-                //return netmap_ring_reinit(kring);
+                D("start_xmit failed: HARD ERROR\n");
+                return netmap_ring_reinit(kring);
             }
             slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
             if (unlikely(j++ == lim))
                 j = 0;
+            n++;
         }
-        kring->nr_hwcur = k; /* the saved ring->cur */
+        kring->nr_hwcur = j;
         kring->nr_hwavail -= n;
         DBGEN(D("tx #%d, hwavail = %d\n", n, kring->nr_hwavail));
     }
 
     if (1 || n==0 || kring->nr_hwavail < 1) { /* TODO revise this logic */
         int completed = NM_ATOMIC_READ_AND_CLEAR(&na->tx_completed);
-        /* Record completed transmissions using na->tx_completed and update hwavail. */
+        /* Record completed transmissions using na->tx_completed and update hwavail/avail. */
         kring->nr_hwavail += completed;
+        ring->avail += completed;
         DBGEN(D("tx completed [%d] -> hwavail %d\n", completed, kring->nr_hwavail));
     }
-    /* Update avail to what the kernel knows */
-    ring->avail = kring->nr_hwavail;
 
     return 0;
 }
@@ -3443,8 +3446,8 @@ generic_netmap_attach(struct ifnet *ifp)
 
     bzero(&na, sizeof(na));
     na.ifp = ifp;
-    na.num_tx_desc = 128;
-    na.num_rx_desc = 128;
+    na.num_tx_desc = 256;
+    na.num_rx_desc = 256;
     na.nm_register = &generic_netmap_register;
     na.nm_txsync = &generic_netmap_txsync;
     na.nm_rxsync = &generic_netmap_rxsync;
