@@ -151,7 +151,6 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 241723 2012-10-19 09:41:45Z gle
 #include <sys/poll.h>
 #include <sys/proc.h>
 #include <sys/rwlock.h>
-#include <sys/sx.h>
 #include <vm/vm.h>	/* vtophys */
 #include <vm/pmap.h>	/* vtophys */
 #include <vm/vm_param.h>
@@ -171,16 +170,16 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 241723 2012-10-19 09:41:45Z gle
 
 #define prefetch(x)	__builtin_prefetch(x)
 
-#define BDG_RWLOCK_T		struct sx // struct rwlock
+#define BDG_RWLOCK_T		struct rwlock // struct rwlock
 
 #define	BDG_RWINIT(b)		\
-	sx_init_flags(&(b)->bdg_lock, "bdg lock", SX_NOWITNESS)
-#define BDG_WLOCK(b)		sx_xlock(&(b)->bdg_lock)
-#define BDG_WUNLOCK(b)		sx_xunlock(&(b)->bdg_lock)
-#define BDG_RLOCK(b)		sx_slock(&(b)->bdg_lock)
-#define BDG_RTRYLOCK(b)		sx_try_slock(&(b)->bdg_lock)
-#define BDG_RUNLOCK(b)		sx_sunlock(&(b)->bdg_lock)
-#define BDG_RWDESTROY(b)	sx_destroy(&(b)->bdg_lock)
+	rw_init_flags(&(b)->bdg_lock, "bdg lock", RW_NOWITNESS)
+#define BDG_WLOCK(b)		rw_wlock(&(b)->bdg_lock)
+#define BDG_WUNLOCK(b)		rw_wunlock(&(b)->bdg_lock)
+#define BDG_RLOCK(b)		rw_rlock(&(b)->bdg_lock)
+#define BDG_RTRYLOCK(b)		rw_try_rlock(&(b)->bdg_lock)
+#define BDG_RUNLOCK(b)		rw_runlock(&(b)->bdg_lock)
+#define BDG_RWDESTROY(b)	rw_destroy(&(b)->bdg_lock)
 
 
 /* netmap global lock.
