@@ -3312,14 +3312,7 @@ netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 
 #include <linux/rtnetlink.h>  /* rtnl_[un]lock() */
 
-/* Debug for generic netmap adapters. */
-#if 0
-#define DBGEN(x) x
-#else
-#define DBGEN(x)
-#endif
-
-//#define GNA_RAW_XMIT   /* Call ndo_start_xmit() directly. */
+//#define GNA_RAW_XMIT   /* Call ndo_start_xmit() directly (UNSAFE). */
 #ifdef GNA_RAW_XMIT
 #define GNA_TX_OK       NETDEV_TX_OK
 #define GNA_TX_FAIL     NETDEV_TX_BUSY
@@ -3328,6 +3321,10 @@ netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 #define GNA_TX_FAIL     NET_XMIT_DROP
 #endif /* ! GNA_RAW_XMIT */
 
+/* This handler is registered within the attached net_device in the Linux RX subsystem,
+   so that every sk_buff passed up by the driver can be stolen to the network stack.
+   Stolen packets are put in a queue where the generic_netmap_rxsync() callback can
+   extract them. */
 rx_handler_result_t generic_netmap_rx_handler(struct sk_buff **pskb)
 {
     struct netmap_adapter *na = NA((*pskb)->dev);
@@ -3343,6 +3340,7 @@ rx_handler_result_t generic_netmap_rx_handler(struct sk_buff **pskb)
     return RX_HANDLER_CONSUMED;
 }
 
+/* Enable/disable netmap mode for a generic network interface. */
 static int
 generic_netmap_register(struct ifnet *ifp, int enable)
 {
@@ -3363,6 +3361,8 @@ generic_netmap_register(struct ifnet *ifp, int enable)
         na->if_transmit = (void *)ifp->netdev_ops;
         ifp->netdev_ops = &na->nm_ndo;
 #endif  /* GNA_RAW_XMIT */
+        /* Initialize the queue structure, since the generic_netmap_rx_handler() callback can
+           be called as soon after netdev_rx_handler_register() returns. */
         skb_queue_head_init(&na->rx_queue);
         na->nr_ntc = 0;
         if ((error = netdev_rx_handler_register(ifp, &generic_netmap_rx_handler, na))) {
@@ -3386,6 +3386,9 @@ generic_netmap_register(struct ifnet *ifp, int enable)
     return error;
 }
 
+/* Invoked when the driver of the attached interface frees a socket buffer used by netmap for
+   transmitting a packet. This usually happens when the NIC notifies the driver that the
+   transmission is completed. */
 static void
 generic_mbuf_destructor(struct sk_buff *skb)
 {
@@ -3395,6 +3398,9 @@ generic_mbuf_destructor(struct sk_buff *skb)
     netmap_tx_irq(na->ifp, 0);
 }
 
+/* The generic txsync method transforms netmap buffers in sk_buffs and the invokes the
+   driver ndo_start_xmit() method. This is not done directly, but using dev_queue_xmit(),
+   since it implements the TX flow control (and takes some locks). */
 static int
 generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
@@ -3448,7 +3454,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
             tx_ret = dev_queue_xmit(skb);
 #endif  /* GNA_RAW_XMIT */
             if (unlikely(tx_ret != GNA_TX_OK)) {
-                //D("start_xmit failed: err %d [%d,%d,%d]\n", tx_ret, j, k, kring->nr_hwavail);
+                ND("start_xmit failed: err %d [%d,%d,%d]\n", tx_ret, j, k, kring->nr_hwavail);
                 if (likely(tx_ret == GNA_TX_FAIL)) {
                     skb->destructor = NULL;
                     kfree_skb(skb);
@@ -3464,20 +3470,22 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
         }
         kring->nr_hwcur = j;
         kring->nr_hwavail -= n;
-        DBGEN(D("tx #%d, hwavail = %d\n", n, kring->nr_hwavail));
+        ND("tx #%d, hwavail = %d\n", n, kring->nr_hwavail);
     }
 
+    /* Record completed transmissions using na->tx_completed and update hwavail/avail. */
     if (1 || n==0 || kring->nr_hwavail < 1) { /* TODO revise this logic */
         int completed = NM_ATOMIC_READ_AND_CLEAR(&na->tx_completed);
-        /* Record completed transmissions using na->tx_completed and update hwavail/avail. */
         kring->nr_hwavail += completed;
         ring->avail += completed;
-        DBGEN(D("tx completed [%d] -> hwavail %d\n", completed, kring->nr_hwavail));
+        ND("tx completed [%d] -> hwavail %d\n", completed, kring->nr_hwavail);
     }
 
     return 0;
 }
 
+/* The generic rxsync() method extracts sk_buffs from the queue filled by
+   generic_netmap_rx_handler() and puts their content in the netmap receive ring. */
 static int
 generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
@@ -3545,12 +3553,16 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
         kring->nr_hwavail -= n;
         kring->nr_hwcur = k;
     }
-    /* Tell userspace that there are new packets */
+    /* Tell userspace that there are new packets. */
     ring->avail = kring->nr_hwavail - resvd;
 
     return 0;
 }
 
+/* The generic netmap attach method makes it possible to attach netmap to a network
+   interface that doesn't have explicit netmap support. The netmap ring size has no
+   relationship to the NIC ring size: 256 is a good compromise.
+   Since this function cannot be called by the driver, it is called by get_ifp(). */
 static int
 generic_netmap_attach(struct ifnet *ifp)
 {
@@ -3565,11 +3577,10 @@ generic_netmap_attach(struct ifnet *ifp)
     na.nm_rxsync = &generic_netmap_rxsync;
     NM_ATOMIC_SET(&na.tx_completed, 0);
 
-    printk("[GNA] num_tx_queues(%d), real_num_tx_queues(%d), len(%lu)\n", ifp->num_tx_queues,
-                                                                ifp->real_num_tx_queues,
-                                                                ifp->tx_queue_len);
-    printk("[GNA] num_rx_queues(%d), real_num_rx_queues(%d)\n", ifp->num_rx_queues,
-                                                                ifp->real_num_rx_queues);
+    ND("[GNA] num_tx_queues(%d), real_num_tx_queues(%d), len(%lu)\n", ifp->num_tx_queues,
+                                        ifp->real_num_tx_queues, ifp->tx_queue_len);
+    ND("[GNA] num_rx_queues(%d), real_num_rx_queues(%d)\n", ifp->num_rx_queues,
+                                                            ifp->real_num_rx_queues);
 
     return netmap_attach(&na, 1);
 }
