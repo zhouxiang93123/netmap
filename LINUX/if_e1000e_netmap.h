@@ -81,18 +81,13 @@ e1000_netmap_reg(struct ifnet *ifp, int onoff)
 	if (na == NULL)
 		return EINVAL;
 
-	if (!(ifp->flags & IFF_UP)) {
-		/* e1000_open has not been called yet, so resources
-		 * are not allocated */
-		D("Interface is down!");
-		return EINVAL;
-	}
+	rtnl_lock();
 
 	while (test_and_set_bit(__E1000_RESETTING, &adapter->state))
-		msleep(1);
+		usleep_range(1000, 2000);
 
-	//rtnl_lock(); // XXX do we need it ?
-	e1000e_down(adapter);
+	if (netif_running(adapter->netdev))
+		e1000e_down(adapter);
 
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
@@ -103,9 +98,15 @@ e1000_netmap_reg(struct ifnet *ifp, int onoff)
 		ifp->netdev_ops = (void *)na->if_transmit;
 	}
 
-	e1000e_up(adapter);
-	//rtnl_unlock(); // XXX do we need it ?
+	if (netif_running(adapter->netdev))
+		e1000e_up(adapter);
+	else
+		e1000e_reset(adapter);
+
 	clear_bit(__E1000_RESETTING, &adapter->state);
+
+	rtnl_unlock();
+
 	return (error);
 }
 
@@ -125,6 +126,9 @@ e1000_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 
 	/* generate an interrupt approximately every half ring */
 	int report_frequency = kring->nkr_num_slots >> 1;
+
+	if (!netif_carrier_ok(ifp))
+		return 0;
 
 	/* take a copy of ring->cur now, and never read it again */
 	k = ring->cur;
@@ -217,6 +221,9 @@ e1000_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 	int strip_crc = (adapter->flags2 & FLAG2_CRC_STRIPPING) ? 0 : 4;
 	u_int k = ring->cur, resvd = ring->reserved;
+
+	if (!netif_carrier_ok(ifp))
+		return 0;
 
 	if (k > lim)
 		return netmap_ring_reinit(kring);
