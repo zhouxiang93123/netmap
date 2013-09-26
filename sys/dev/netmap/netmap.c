@@ -3495,21 +3495,20 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 
         j = na->nr_ntc;
         n = 0;
-        for (;;) {
+        while ((skb = skb_dequeue(&na->rx_queue))) {
             void *addr = NMB(&ring->slot[j]);
 
+            //printk("extracted %p,%d\n", skb, skb->len);
             if (addr == netmap_buffer_base) { /* Bad buffer */
+                kfree_skb(skb);
                 return netmap_ring_reinit(kring);
             }
-            skb = skb_dequeue(&na->rx_queue);
-            if (!skb)
-                break;
-            //printk("extracted %p,%d\n", skb, skb->len);
             skb_copy_from_linear_data(skb, addr, skb->len);
             ring->slot[j].len = skb->len;
             ring->slot[j].flags = slot_flags;
             kfree_skb(skb);
-	    j = (j == lim) ? 0 : j + 1;
+            if (unlikely(j++ == lim))
+                j = 0;
             n++;
         }
         if (n) {
@@ -3534,7 +3533,8 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
             struct netmap_slot *slot = &ring->slot[j];
 
             slot->flags &= ~NS_BUF_CHANGED;
-            j = (j == lim) ? 0 : j + 1;
+            if (unlikely(j++ == lim))
+                j = 0;
         }
         kring->nr_hwavail -= n;
         kring->nr_hwcur = k;
