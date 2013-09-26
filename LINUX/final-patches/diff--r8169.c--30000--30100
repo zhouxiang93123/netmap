@@ -1,8 +1,8 @@
 diff --git a/r8169.c b/r8169.c
-index 60f96c4..e6b844d 100644
+index 5990621..f6f89b2 100644
 --- a/r8169.c
 +++ b/r8169.c
-@@ -537,6 +537,10 @@ static int rtl8169_poll(struct napi_struct *napi, int budget);
+@@ -704,6 +704,10 @@ static int rtl8169_poll(struct napi_struct *napi, int budget);
  static const unsigned int rtl8169_rx_config =
  	(RX_FIFO_THRESH << RxCfgFIFOShift) | (RX_DMA_BURST << RxCfgDMAShift);
  
@@ -10,33 +10,32 @@ index 60f96c4..e6b844d 100644
 +#include <if_re_netmap_linux.h>
 +#endif
 +
- static void mdio_write(void __iomem *ioaddr, int reg_addr, int value)
+ static u32 ocp_read(struct rtl8169_private *tp, u8 mask, u16 reg)
  {
- 	int i;
-@@ -3210,6 +3214,10 @@ rtl8169_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
- 
- 	device_set_wakeup_enable(&pdev->dev, tp->features & RTL_FEATURE_WOL);
+ 	void __iomem *ioaddr = tp->mmio_addr;
+@@ -3466,6 +3470,10 @@ rtl8169_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 	if (pci_dev_run_wake(pdev))
+ 		pm_runtime_put_noidle(&pdev->dev);
  
 +#ifdef DEV_NETMAP
 +	re_netmap_attach(tp);
 +#endif /* DEV_NETMAP */
 +
+ 	netif_carrier_off(dev);
+ 
  out:
- 	return rc;
- 
-@@ -3236,6 +3244,10 @@ static void __devexit rtl8169_remove_one(struct pci_dev *pdev)
- 
+@@ -3500,6 +3508,9 @@ static void __devexit rtl8169_remove_one(struct pci_dev *pdev)
  	unregister_netdev(dev);
  
+ 	rtl_release_firmware(tp);
 +#ifdef DEV_NETMAP
 +	netmap_detach(dev);
 +#endif /* DEV_NETMAP */
-+
- 	/* restore original MAC address */
- 	rtl_rar_set(tp, dev->perm_addr);
  
-@@ -3993,6 +4005,11 @@ err_out:
- static void rtl8169_rx_clear(struct rtl8169_private *tp)
+ 	if (pci_dev_run_wake(pdev))
+ 		pm_runtime_get_noresume(&pdev->dev);
+@@ -4437,6 +4448,11 @@ static inline void rtl8169_mark_as_last_descriptor(struct RxDesc *desc)
+ static int rtl8169_rx_fill(struct rtl8169_private *tp)
  {
  	unsigned int i;
 +#ifdef DEV_NETMAP
@@ -46,8 +45,8 @@ index 60f96c4..e6b844d 100644
 +#endif /* DEV_NETMAP */
  
  	for (i = 0; i < NUM_RX_DESC; i++) {
- 		if (tp->Rx_skbuff[i]) {
-@@ -4372,6 +4389,11 @@ static void rtl8169_tx_interrupt(struct net_device *dev,
+ 		void *data;
+@@ -4820,6 +4836,11 @@ static void rtl8169_tx_interrupt(struct net_device *dev,
  {
  	unsigned int dirty_tx, tx_left;
  
@@ -59,10 +58,15 @@ index 60f96c4..e6b844d 100644
  	dirty_tx = tp->dirty_tx;
  	smp_rmb();
  	tx_left = tp->cur_tx - dirty_tx;
-@@ -4467,6 +4489,11 @@ static int rtl8169_rx_interrupt(struct net_device *dev,
+@@ -4907,6 +4928,16 @@ static int rtl8169_rx_interrupt(struct net_device *dev,
  	unsigned int cur_rx, rx_left;
- 	unsigned int delta, count;
+ 	unsigned int count;
  
++#ifdef DEV_NETMAP
++	if (netmap_rx_irq(dev, 0, &count))
++   		return count;
++#endif /* DEV_NETMAP */
++
 +#ifdef DEV_NETMAP
 +	if (netmap_rx_irq(dev, 0, &count))
 +   		return count;
