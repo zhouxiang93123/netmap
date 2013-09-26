@@ -3333,9 +3333,13 @@ rx_handler_result_t generic_netmap_rx_handler(struct sk_buff **pskb)
     struct netmap_adapter *na = NA((*pskb)->dev);
     u_int work_done;
 
-    skb_queue_tail(&na->rx_queue, *pskb);
-    //printk("rx_handler %p,%d [%d]\n", *pskb, (*pskb)->len, skb_queue_len(&na->rx_queue));
-    netmap_rx_irq(na->ifp, 0, &work_done);
+    if (unlikely(skb_queue_len(&na->rx_queue) > 1024)) {
+        kfree_skb(*pskb);
+    } else {
+        skb_queue_tail(&na->rx_queue, *pskb);
+        //printk("rx_handler %p,%d [%d]\n", *pskb, (*pskb)->len, skb_queue_len(&na->rx_queue));
+        netmap_rx_irq(na->ifp, 0, &work_done);
+    }
 
     return RX_HANDLER_CONSUMED;
 }
