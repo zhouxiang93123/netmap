@@ -3506,6 +3506,7 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 
         n = 0;
         j = na->nr_ntc;
+        /* The k index in the netmap ring prevents ntc from bumping into hwcur. */
         k = (kring->nr_hwcur) ? kring->nr_hwcur-1 : lim;
         while (j != k) {
             void *addr = NMB(&ring->slot[j]);
