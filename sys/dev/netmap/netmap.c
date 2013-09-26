@@ -3362,7 +3362,6 @@ generic_netmap_register(struct ifnet *ifp, int enable)
 #endif  /* GNA_RAW_XMIT */
         skb_queue_head_init(&na->rx_queue);
         na->nr_ntc = 0;
-        wmb();
         if ((error = netdev_rx_handler_register(ifp, &generic_netmap_rx_handler, na))) {
             D("netdev_rx_handler_register() failed\n");
             rtnl_unlock();
@@ -3374,6 +3373,7 @@ generic_netmap_register(struct ifnet *ifp, int enable)
         ifp->netdev_ops = (void *)na->if_transmit;
 #endif  /* GNA_RAW_XMIT */
         netdev_rx_handler_unregister(ifp);
+        skb_queue_purge(&na->rx_queue);
     }
 
     rtnl_unlock();
