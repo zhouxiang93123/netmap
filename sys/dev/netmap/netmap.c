@@ -3345,13 +3345,15 @@ static int
 generic_netmap_register(struct ifnet *ifp, int enable)
 {
     struct netmap_adapter *na = NA(ifp);
-    int error;
+    int error = 0;
 
     if (!na)
         return EINVAL;
 
+#ifdef GNA_RAW_XMIT
     if ((error = ifp->netdev_ops->ndo_stop(ifp)))
         return error;
+#endif  /* GNA_RAW_XMIT */
 
     rtnl_lock();
 
@@ -3381,7 +3383,9 @@ generic_netmap_register(struct ifnet *ifp, int enable)
 
     rtnl_unlock();
 
+#ifdef GNA_RAW_XMIT
     error = ifp->netdev_ops->ndo_open(ifp);
+#endif  /* GNA_RAW_XMIT */
 
     return error;
 }
