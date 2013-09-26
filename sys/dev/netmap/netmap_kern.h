@@ -347,6 +347,8 @@ struct netmap_adapter {
         /* Generic netmap adapter support. This allows to use netmap with a device driver
            which doesn't support netmap. */
         atomic_t tx_completed;  /* Completed transmissions. */
+        struct sk_buff_head rx_queue;
+        u_int nr_ntc;
 
 #ifdef linux
 	struct net_device_ops nm_ndo;

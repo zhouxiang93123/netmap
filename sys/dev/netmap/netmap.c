@@ -3328,6 +3328,18 @@ netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 #define GNA_TX_FAIL     NET_XMIT_DROP
 #endif /* ! GNA_RAW_XMIT */
 
+rx_handler_result_t generic_netmap_rx_handler(struct sk_buff **pskb)
+{
+    struct netmap_adapter *na = NA((*pskb)->dev);
+    u_int work_done;
+
+    skb_queue_tail(&na->rx_queue, *pskb);
+    //printk("rx_handler %p,%d [%d]\n", *pskb, (*pskb)->len, skb_queue_len(&na->rx_queue));
+    netmap_rx_irq(na->ifp, 0, &work_done);
+
+    return RX_HANDLER_CONSUMED;
+}
+
 static int
 generic_netmap_register(struct ifnet *ifp, int enable)
 {
@@ -3348,11 +3360,20 @@ generic_netmap_register(struct ifnet *ifp, int enable)
         na->if_transmit = (void *)ifp->netdev_ops;
         ifp->netdev_ops = &na->nm_ndo;
 #endif  /* GNA_RAW_XMIT */
+        skb_queue_head_init(&na->rx_queue);
+        na->nr_ntc = 0;
+        wmb();
+        if ((error = netdev_rx_handler_register(ifp, &generic_netmap_rx_handler, na))) {
+            D("netdev_rx_handler_register() failed\n");
+            rtnl_unlock();
+            return error;
+        }
     } else { /* Disable netmap mode. */
         ifp->if_capenable &= ~IFCAP_NETMAP;
 #ifdef GNA_RAW_XMIT
         ifp->netdev_ops = (void *)na->if_transmit;
 #endif  /* GNA_RAW_XMIT */
+        netdev_rx_handler_unregister(ifp);
     }
 
     rtnl_unlock();
@@ -3457,6 +3478,70 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 static int
 generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
+    struct netmap_adapter *na = NA(ifp);
+    struct netmap_kring *kring = &na->rx_rings[ring_nr];
+    struct netmap_ring *ring = kring->ring;
+    u_int j, n, lim = kring->nkr_num_slots - 1;
+    int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
+    u_int k = ring->cur, resvd = ring->reserved;
+
+    if (k > lim)
+        return netmap_ring_reinit(kring);
+
+    /* Import newly received packets into the netmap ring. */
+    if (netmap_no_pendintr || force_update) {
+        uint16_t slot_flags = kring->nkr_slot_flags;
+        struct sk_buff *skb;
+
+        j = na->nr_ntc;
+        n = 0;
+        for (;;) {
+            void *addr = NMB(&ring->slot[j]);
+
+            if (addr == netmap_buffer_base) { /* Bad buffer */
+                return netmap_ring_reinit(kring);
+            }
+            skb = skb_dequeue(&na->rx_queue);
+            if (!skb)
+                break;
+            //printk("extracted %p,%d\n", skb, skb->len);
+            skb_copy_from_linear_data(skb, addr, skb->len);
+            ring->slot[j].len = skb->len;
+            ring->slot[j].flags = slot_flags;
+            kfree_skb(skb);
+	    j = (j == lim) ? 0 : j + 1;
+            n++;
+        }
+        if (n) {
+            na->nr_ntc = j;
+            kring->nr_hwavail += n;
+        }
+        kring->nr_kflags &= ~NKR_PENDINTR;
+    }
+
+    /* Skip past packets that userspace has released */
+    j = kring->nr_hwcur;
+    if (resvd > 0) {
+        if (resvd + ring->avail >= lim + 1) {
+            D("XXX invalid reserve/avail %d %d", resvd, ring->avail);
+            ring->reserved = resvd = 0; // XXX panic...
+        }
+        k = (k >= resvd) ? k - resvd : k + lim + 1 - resvd;
+    }
+    if (j != k) {
+        /* Userspace has released some packets. */
+        for (n = 0; j != k; n++) {
+            struct netmap_slot *slot = &ring->slot[j];
+
+            slot->flags &= ~NS_BUF_CHANGED;
+            j = (j == lim) ? 0 : j + 1;
+        }
+        kring->nr_hwavail -= n;
+        kring->nr_hwcur = k;
+    }
+    /* Tell userspace that there are new packets */
+    ring->avail = kring->nr_hwavail - resvd;
+
     return 0;
 }
 
