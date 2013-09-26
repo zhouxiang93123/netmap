@@ -1155,7 +1155,7 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 static void
 nm_if_rele(struct ifnet *ifp)
 {
-	int i, is_hw, hw, sw, lim;
+	int i, is_hw, is_generic, hw, sw, lim;
 	struct nm_bridge *b;
 	struct netmap_adapter *na;
 	uint8_t tmp[NM_BDG_MAXPORTS];
@@ -1171,6 +1171,7 @@ nm_if_rele(struct ifnet *ifp)
 	na = NA(ifp);
 	b = na->na_bdg;
 	is_hw = nma_is_hw(na);
+	is_generic = nma_is_generic(na);
 
 	ND("%s has %d references", ifp->if_xname, NA(ifp)->na_bdg_refcount);
 
@@ -1237,6 +1238,9 @@ nm_if_rele(struct ifnet *ifp)
 	}
 
 	if (is_hw) {
+		if_rele(ifp);
+	} else if (is_generic) {
+		netmap_detach(ifp);
 		if_rele(ifp);
 	} else {
 		if (na->na_flags & NAF_MEM_OWNER)
