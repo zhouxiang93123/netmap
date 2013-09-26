@@ -631,6 +631,7 @@ struct nm_bridge nm_bridges[NM_BRIDGES];
  * nma_is_vp()		virtual port
  * nma_is_host()	port connected to the host stack
  * nma_is_hw()		port connected to a NIC
+ * nam_is_generic()	generic netmap adapter XXX stop this madness
  */
 int nma_is_vp(struct netmap_adapter *na);
 int
@@ -645,11 +646,18 @@ nma_is_host(struct netmap_adapter *na)
 	return na->nm_register == NULL;
 }
 
+static int generic_netmap_register(struct ifnet *ifp, int enable);
+static __inline int
+nma_is_generic(struct netmap_adapter *na)
+{
+	return na->nm_register == generic_netmap_register;
+}
+
 static __inline int
 nma_is_hw(struct netmap_adapter *na)
 {
 	/* In case of sw adapter, nm_register is NULL */
-	return !nma_is_vp(na) && !nma_is_host(na);
+	return !nma_is_vp(na) && !nma_is_host(na) && !nma_is_generic(na);
 }
 
 
