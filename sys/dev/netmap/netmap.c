@@ -3337,7 +3337,6 @@ rx_handler_result_t generic_netmap_rx_handler(struct sk_buff **pskb)
         kfree_skb(*pskb);
     } else {
         skb_queue_tail(&na->rx_queue, *pskb);
-        //printk("rx_handler %p,%d [%d]\n", *pskb, (*pskb)->len, skb_queue_len(&na->rx_queue));
         netmap_rx_irq(na->ifp, 0, &work_done);
     }
 
@@ -3487,9 +3486,9 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
     struct netmap_ring *ring = kring->ring;
     u_int j, n, lim = kring->nkr_num_slots - 1;
     int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
-    u_int k = ring->cur, resvd = ring->reserved;
+    u_int k, resvd = ring->reserved;
 
-    if (k > lim)
+    if (ring->cur > lim)
         return netmap_ring_reinit(kring);
 
     /* Import newly received packets into the netmap ring. */
@@ -3497,16 +3496,18 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
         uint16_t slot_flags = kring->nkr_slot_flags;
         struct sk_buff *skb;
 
-        j = na->nr_ntc;
         n = 0;
-        while ((skb = skb_dequeue(&na->rx_queue))) {
+        j = na->nr_ntc;
+        k = (kring->nr_hwcur) ? kring->nr_hwcur-1 : lim;
+        while (j != k) {
             void *addr = NMB(&ring->slot[j]);
 
-            //printk("extracted %p,%d\n", skb, skb->len);
             if (addr == netmap_buffer_base) { /* Bad buffer */
-                kfree_skb(skb);
                 return netmap_ring_reinit(kring);
             }
+            skb = skb_dequeue(&na->rx_queue);
+            if (!skb)
+                break;
             skb_copy_from_linear_data(skb, addr, skb->len);
             ring->slot[j].len = skb->len;
             ring->slot[j].flags = slot_flags;
@@ -3524,6 +3525,7 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 
     /* Skip past packets that userspace has released */
     j = kring->nr_hwcur;
+    k = ring->cur;
     if (resvd > 0) {
         if (resvd + ring->avail >= lim + 1) {
             D("XXX invalid reserve/avail %d %d", resvd, ring->avail);
