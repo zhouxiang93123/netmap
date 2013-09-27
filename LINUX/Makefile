@@ -15,7 +15,7 @@ CONFIG_IXGBE:=m
 CONFIG_IGB:=m
 CONFIG_BNX2X:=m
 
-netmap_lin-objs := netmap.o netmap_mem2.o
+netmap_lin-objs := netmap.o netmap_mem2.o netmap_linux.o
 
 obj-$(CONFIG_NETMAP) = netmap_lin.o
 ifndef NODRIVERS
