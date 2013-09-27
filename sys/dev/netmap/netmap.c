@@ -211,50 +211,8 @@ extern struct miscdevice netmap_cdevsw;
 netdev_tx_t linux_netmap_start_xmit(struct sk_buff *, struct net_device *);
 int generic_netmap_register(struct ifnet *ifp, int enable);
 int generic_netmap_attach(struct ifnet *ifp);
-
-
-static struct device_driver*
-linux_netmap_find_driver(struct device *dev)
-{
-	struct device_driver *dd;
-
-	while ( (dd = dev->driver) == NULL ) {
-		if ( (dev = dev->parent) == NULL )
-			return NULL;
-	}
-	return dd;
-}
-
-static struct net_device*
-ifunit_ref(const char *name)
-{
-	struct net_device *ifp = dev_get_by_name(&init_net, name);
-	struct device_driver *dd;
-
-	if (ifp == NULL)
-		return NULL;
-
-	if ( (dd = linux_netmap_find_driver(&ifp->dev)) == NULL )
-		goto error;
-
-	if (!try_module_get(dd->owner))
-		goto error;
-
-	return ifp;
-error:
-	dev_put(ifp);
-	return NULL;
-}
-
-static void
-if_rele(struct net_device *ifp)
-{
-	struct device_driver *dd;
-	dd = linux_netmap_find_driver(&ifp->dev);
-	dev_put(ifp);
-	if (dd)
-		module_put(dd->owner);
-}
+struct net_device* ifunit_ref(const char *name);
+void if_rele(struct net_device *ifp);
 
 // XXX a mtx would suffice here too 20130404 gl
 #define NMG_LOCK_T		struct semaphore
