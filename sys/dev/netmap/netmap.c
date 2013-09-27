@@ -631,7 +631,7 @@ struct nm_bridge nm_bridges[NM_BRIDGES];
  * nma_is_vp()		virtual port
  * nma_is_host()	port connected to the host stack
  * nma_is_hw()		port connected to a NIC
- * nam_is_generic()	generic netmap adapter XXX stop this madness
+ * nma_is_generic()	generic netmap adapter XXX stop this madness
  */
 int nma_is_vp(struct netmap_adapter *na);
 int
@@ -646,11 +646,19 @@ nma_is_host(struct netmap_adapter *na)
 	return na->nm_register == NULL;
 }
 
+#ifdef linux
 static int generic_netmap_register(struct ifnet *ifp, int enable);
+static int generic_netmap_attach(struct ifnet *ifp);
+#endif /* linux */
+
 static __inline int
 nma_is_generic(struct netmap_adapter *na)
 {
+#ifdef linux
 	return na->nm_register == generic_netmap_register;
+#else  /* !linux */
+        return false;
+#endif /* !linux */
 }
 
 static __inline int
@@ -1760,8 +1768,6 @@ unlock_out:
 }
 
 
-static int generic_netmap_attach(struct ifnet *ifp);
-
 /*
  * MUST BE CALLED UNDER NMG_LOCK()
  *
@@ -1941,9 +1947,14 @@ no_bridge_port:
 		} else
 			return 0;	/* valid pointer, we hold the refcount */
 	}
+#ifdef linux
         /* If the interface is not netmap capable, we fall back to the generic netmap
            adapter, which doesn't require driver support. */
         return generic_netmap_attach(*ifp);
+#else  /* !linux */
+        nm_if_rele(*ifp);
+        return EINVAL;  // not NETMAP capable
+#endif /* !linux */
 }
 
 
@@ -3342,10 +3353,10 @@ rx_handler_result_t generic_netmap_rx_handler(struct sk_buff **pskb)
     struct netmap_adapter *na = NA((*pskb)->dev);
     u_int work_done;
 
-    if (unlikely(skb_queue_len(&na->rx_queue) > 1024)) {
+    if (unlikely(skb_queue_len(&na->rx_rings[0].rx_queue) > 1024)) {
         kfree_skb(*pskb);
     } else {
-        skb_queue_tail(&na->rx_queue, *pskb);
+        skb_queue_tail(&na->rx_rings[0].rx_queue, *pskb);
         netmap_rx_irq(na->ifp, 0, &work_done);
     }
 
@@ -3377,8 +3388,9 @@ generic_netmap_register(struct ifnet *ifp, int enable)
 #endif  /* GNA_RAW_XMIT */
         /* Initialize the queue structure, since the generic_netmap_rx_handler() callback can
            be called as soon after netdev_rx_handler_register() returns. */
-        skb_queue_head_init(&na->rx_queue);
-        na->nr_ntc = 0;
+        skb_queue_head_init(&na->rx_rings[0].rx_queue);
+        na->rx_rings[0].nr_ntc = 0;
+        NM_ATOMIC_SET(&na->tx_rings[0].tx_completed, 0);
         if ((error = netdev_rx_handler_register(ifp, &generic_netmap_rx_handler, na))) {
             D("netdev_rx_handler_register() failed\n");
             rtnl_unlock();
@@ -3390,7 +3402,7 @@ generic_netmap_register(struct ifnet *ifp, int enable)
         ifp->netdev_ops = (void *)na->if_transmit;
 #endif  /* GNA_RAW_XMIT */
         netdev_rx_handler_unregister(ifp);
-        skb_queue_purge(&na->rx_queue);
+        skb_queue_purge(&na->rx_rings[0].rx_queue);
     }
 
     rtnl_unlock();
@@ -3410,7 +3422,7 @@ generic_mbuf_destructor(struct sk_buff *skb)
 {
     struct netmap_adapter *na = (struct netmap_adapter *)(skb_shinfo(skb)->destructor_arg);
 
-    NM_ATOMIC_INC(&na->tx_completed);
+    NM_ATOMIC_INC(&na->tx_rings[0].tx_completed);
     netmap_tx_irq(na->ifp, 0);
 }
 
@@ -3489,12 +3501,12 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
         ND("tx #%d, hwavail = %d\n", n, kring->nr_hwavail);
     }
 
-    /* Record completed transmissions using na->tx_completed and update hwavail/avail. */
-    n = NM_ATOMIC_READ_AND_CLEAR(&na->tx_completed);
+    /* Record completed transmissions using tx_completed and update hwavail/avail. */
+    n = NM_ATOMIC_READ_AND_CLEAR(&kring->tx_completed);
     if (n) {
         kring->nr_hwavail += n;
         ring->avail += n;
-        ND("tx completed [%d] -> hwavail %d\n", completed, kring->nr_hwavail);
+        ND("tx completed [%d] -> hwavail %d\n", n, kring->nr_hwavail);
     }
 
     return 0;
@@ -3521,7 +3533,7 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
         struct sk_buff *skb;
 
         n = 0;
-        j = na->nr_ntc;
+        j = kring->nr_ntc;
         /* The k index in the netmap ring prevents ntc from bumping into hwcur. */
         k = (kring->nr_hwcur) ? kring->nr_hwcur-1 : lim;
         while (j != k) {
@@ -3530,7 +3542,7 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
             if (addr == netmap_buffer_base) { /* Bad buffer */
                 return netmap_ring_reinit(kring);
             }
-            skb = skb_dequeue(&na->rx_queue);
+            skb = skb_dequeue(&kring->rx_queue);
             if (!skb)
                 break;
             skb_copy_from_linear_data(skb, addr, skb->len);
@@ -3542,7 +3554,7 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
             n++;
         }
         if (n) {
-            na->nr_ntc = j;
+            kring->nr_ntc = j;
             kring->nr_hwavail += n;
         }
         kring->nr_kflags &= ~NKR_PENDINTR;
@@ -3592,7 +3604,6 @@ generic_netmap_attach(struct ifnet *ifp)
     na.nm_register = &generic_netmap_register;
     na.nm_txsync = &generic_netmap_txsync;
     na.nm_rxsync = &generic_netmap_rxsync;
-    NM_ATOMIC_SET(&na.tx_completed, 0);
 
     ND("[GNA] num_tx_queues(%d), real_num_tx_queues(%d), len(%lu)\n", ifp->num_tx_queues,
                                         ifp->real_num_tx_queues, ifp->tx_queue_len);
