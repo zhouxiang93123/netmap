@@ -557,7 +557,7 @@ send_packets(struct netmap_ring *ring, struct pkt *pkt,
 		else
 			fcnt = nfrags;
 		if (sent == count - 1) {
-			slot->flags &= NS_MOREFRAG;
+			slot->flags &= ~NS_MOREFRAG;
 			slot->flags |= NS_REPORT;
 		}
 		cur = NETMAP_RING_NEXT(ring, cur);
