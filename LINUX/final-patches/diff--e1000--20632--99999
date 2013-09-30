@@ -1,5 +1,5 @@
 diff --git a/e1000/e1000_main.c b/e1000/e1000_main.c
-index 7655436..24295f8 100644
+index bcd192c..5de7009 100644
 --- a/e1000/e1000_main.c
 +++ b/e1000/e1000_main.c
 @@ -213,6 +213,10 @@ static int debug = NETIF_MSG_DRV | NETIF_MSG_PROBE;
@@ -79,7 +79,7 @@ index 7655436..24295f8 100644
  	/* fire a link status change interrupt to start the watchdog */
  	ew32(ICS, E1000_ICS_LSC);
  
-@@ -3434,6 +3462,10 @@ static bool e1000_clean_tx_irq(struct e1000_adapter *adapter,
+@@ -3429,6 +3457,10 @@ static bool e1000_clean_tx_irq(struct e1000_adapter *adapter,
  	unsigned int count = 0;
  	unsigned int total_tx_bytes=0, total_tx_packets=0;
  
@@ -90,7 +90,7 @@ index 7655436..24295f8 100644
  	i = tx_ring->next_to_clean;
  	eop = tx_ring->buffer_info[i].next_to_watch;
  	eop_desc = E1000_TX_DESC(*tx_ring, eop);
-@@ -3800,6 +3832,11 @@ static bool e1000_clean_rx_irq(struct e1000_adapter *adapter,
+@@ -3795,6 +3827,11 @@ static bool e1000_clean_rx_irq(struct e1000_adapter *adapter,
  	bool cleaned = false;
  	unsigned int total_rx_bytes=0, total_rx_packets=0;
  

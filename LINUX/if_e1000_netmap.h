@@ -75,8 +75,6 @@ e1000_netmap_reg(struct ifnet *ifp, int onoff)
 
 	clear_bit(__E1000_RESETTING, &adapter->flags);
 
-unlock_exit:
-
 	rtnl_unlock();
 
 	return (error);
