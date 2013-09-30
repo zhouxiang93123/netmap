@@ -275,10 +275,15 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, txsync_retry, CTLFLAG_RW,
 int netmap_drop = 0;	/* debugging */
 int netmap_flags = 0;	/* debug flags */
 int netmap_fwd = 0;	/* force transparent mode */
+#define NETMAP_ADMODE_NATIVE        1  /* Force native netmap adapter. */
+#define NETMAP_ADMODE_GENERIC       2  /* Force generic netmap adapter. */
+#define NETMAP_ADMODE_BEST          0  /* Priority to native netmap adapter. */
+int netmap_admode = NETMAP_ADMODE_BEST;  /* Choose the netmap adapter to use. */
 
 SYSCTL_INT(_dev_netmap, OID_AUTO, drop, CTLFLAG_RW, &netmap_drop, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, flags, CTLFLAG_RW, &netmap_flags, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, fwd, CTLFLAG_RW, &netmap_fwd, 0 , "");
+SYSCTL_INT(_dev_netmap, OID_AUTO, admode, CTLFLAG_RD, &netmap_admode, 0 , "");
 
 NMG_LOCK_T	netmap_global_lock;
 
