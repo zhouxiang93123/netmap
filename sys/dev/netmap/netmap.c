@@ -1907,9 +1907,10 @@ no_bridge_port:
 		return (ENXIO);
 
 #ifdef linux
-        if ((!NETMAP_CAPABLE(*ifp) && (netmap_admode == NETMAP_ADMODE_BEST || 
+        if ((!NETMAP_CAPABLE(*ifp) && (netmap_admode == NETMAP_ADMODE_BEST ||
                                        netmap_admode == NETMAP_ADMODE_GENERIC))
-            || (NETMAP_CAPABLE(*ifp) && netmap_admode == NETMAP_ADMODE_GENERIC)) {
+            || (NETMAP_CAPABLE(*ifp) && !nma_is_generic(NA(*ifp)) &&
+                netmap_admode == NETMAP_ADMODE_GENERIC)) {
                 prev_na = NA(*ifp);  /* Previously used netmap adapter (can be NULL). */
                 /* We create a generic netmap adapter (which doesn't require
                    driver support), when the interface is not netmap capable (and we are
