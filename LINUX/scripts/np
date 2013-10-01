@@ -243,7 +243,7 @@ mkdir -p tmp-patches
 [ -n "$1" ] && {
 	cmd=$1
 	shift
-	[ -n "$1" ] || { scripts/help $0; exit 1; }
+	[ -n "$cmd" ] || { scripts/help $0; exit 1; }
 	case $cmd in
 	*-all)
 		forall ${cmd%-all} "$@"
