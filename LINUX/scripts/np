@@ -153,7 +153,7 @@ function extend()
 } 
 
 ##
-##  minimize <driver>:
+## minimize <driver>:
 ##	tries to minimize the number of patch files for the given
 ##	<driver>. It uses the patches currently found in tmp-patches
 ##	and stores the resulting patches in final-patches.
