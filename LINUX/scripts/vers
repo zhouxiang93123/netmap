@@ -21,7 +21,7 @@ sub conv
 {
 	my $v = shift;
 
-	return sprintf "%d%02d%02d", (split /\./, $v);
+	return sprintf "%x%02x%02x", (split /\./, $v);
 }
 
 
@@ -31,9 +31,9 @@ sub rconv
 
 	$v =~ /(.*)(..)(..)$/;
 	if ($1 > 2 && $3 == 0) {
-		return sprintf "%d.%d", $1, $2;
+		return sprintf "%d.%d", (hex $1), (hex $2);
 	}
-	return sprintf "%d.%d.%d", $1, $2, $3;
+	return sprintf "%d.%d.%d", (hex $1), (hex $2), (hex $3);
 }
 
 sub next
