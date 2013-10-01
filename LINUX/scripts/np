@@ -1,5 +1,4 @@
 #!/bin/bash
-##
 ## Manage linux driver patches for netmap.
 ## usage (from the dir containing the Makefile):
 ## 
@@ -244,12 +243,13 @@ mkdir -p tmp-patches
 [ -n "$1" ] && {
 	cmd=$1
 	shift
+	[ -n "$1" ] || { scripts/help $0; exit 1; }
 	case $cmd in
 	*-all)
 		forall ${cmd%-all} "$@"
 		;;
 	-[hH]|--help|-help|help)
-		sed -n 's/^## *//p' $0
+		scripts/help $0
 		;;
 	*)
 		$cmd "$@"

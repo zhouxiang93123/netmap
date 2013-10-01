@@ -57,25 +57,31 @@ sub next
 	}
 }
 
+@ARGV or do { system("scripts/help $0"); exit 1; };
+
 for (@ARGV) {
+##
 ## -b	(nullary) suppress normal output. On exit, return 1
 ## 	if stack top is "false", 0 otherwise.
 	/^-b$/  && do {
 		$silent=1;
 		next;
 	};
+##
 ## -c	(unary) convert from dot to fixed notation
 	/^-c$/	&& do {
 		$v = pop @stack;
 		push @stack, &conv($v);
 		next;
 	};
+##
 ## -C	(unary) convert from fixed to dot notation
 	/^-C$/	&& do {
 		$v = pop @stack;
 		push @stack, &rconv($v);
 		next;
 	};
+##
 ## -i	(unary) increment version number
 ##	(must be in dot notation)
 	/^-i$/ && do {
@@ -83,6 +89,7 @@ for (@ARGV) {
 		push @stack, &next($v);
 		next;
 	};
+##
 ## -s	(unary) assume the stack top is a
 ## 	string containing several fields separated
 ## 	by '--'. Replace the stack top with these
@@ -92,6 +99,7 @@ for (@ARGV) {
 		push @stack, split /--/, $v;
 		next;
 	};
+##
 ## -SN	(N-ary) pop N elements from the stack,
 ## 	join them using '--' as a separator
 ## 	(top as last) and push the resulting 
@@ -105,13 +113,16 @@ for (@ARGV) {
 		push @stack, (join '--', @t);
 		next;
 	};
+##
 ## -p	(unary) pop
 	/^-p$/ && do {
 		pop @stack;
 		next;
 	};
+##
 ## -l	(binary) push "true" if first version
 ## 	number is stricly less then second version
+##
 ## 	number (versions in fixed notation)
 ## -L	(binary) like -l, but for version numbers
 ## 	in dot notation
@@ -125,6 +136,7 @@ for (@ARGV) {
 		push @stack, (($v2 lt $v1) ? "true" : "false");
 		next;
 	};
+##
 ## -a	(binary) logical and. Arguments must be
 ## 	either "true" or "false".
 	/^-a$/ && do {
@@ -133,6 +145,7 @@ for (@ARGV) {
 		push @stack, (($v1 eq "true" && $v2 eq "true") ? "true" : "false");
 		next;
 	};
+##
 ## -n	(unary) logical not. Argument must be
 ## 	either "true" or "false".
 	/^-n$/ && do {
