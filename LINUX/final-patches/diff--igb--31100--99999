@@ -1,5 +1,5 @@
 diff --git a/igb/igb_main.c b/igb/igb_main.c
-index c1d72c0..ad7b84d 100644
+index c1d72c0..7d00631 100644
 --- a/igb/igb_main.c
 +++ b/igb/igb_main.c
 @@ -255,6 +255,10 @@ static int debug = -1;
@@ -59,7 +59,18 @@ index c1d72c0..ad7b84d 100644
  
  	/* Release control of h/w to f/w.  If f/w is AMT enabled, this
  	 * would have already happened in close and is redundant.
-@@ -3007,6 +3025,9 @@ void igb_configure_tx_ring(struct igb_adapter *adapter,
+@@ -2814,6 +2832,10 @@ static int __igb_open(struct net_device *netdev, bool resuming)
+ 
+ 	netif_tx_start_all_queues(netdev);
+ 
++#ifdef DEV_NETMAP
++	netmap_enable_all_rings(netdev);
++#endif /* DEV_NETMAP */
++
+ 	if (!resuming)
+ 		pm_runtime_put(&pdev->dev);
+ 
+@@ -3007,6 +3029,9 @@ void igb_configure_tx_ring(struct igb_adapter *adapter,
  
  	txdctl |= E1000_TXDCTL_QUEUE_ENABLE;
  	wr32(E1000_TXDCTL(reg_idx), txdctl);
@@ -69,7 +80,7 @@ index c1d72c0..ad7b84d 100644
  }
  
  /**
-@@ -5991,6 +6012,10 @@ static bool igb_clean_tx_irq(struct igb_q_vector *q_vector)
+@@ -5991,6 +6016,10 @@ static bool igb_clean_tx_irq(struct igb_q_vector *q_vector)
  
  	if (test_bit(__IGB_DOWN, &adapter->state))
  		return true;
@@ -80,7 +91,7 @@ index c1d72c0..ad7b84d 100644
  
  	tx_buffer = &tx_ring->tx_buffer_info[i];
  	tx_desc = IGB_TX_DESC(tx_ring, i);
-@@ -6650,6 +6675,10 @@ static bool igb_clean_rx_irq(struct igb_q_vector *q_vector, const int budget)
+@@ -6650,6 +6679,10 @@ static bool igb_clean_rx_irq(struct igb_q_vector *q_vector, const int budget)
  	unsigned int total_bytes = 0, total_packets = 0;
  	u16 cleaned_count = igb_desc_unused(rx_ring);
  
@@ -91,7 +102,7 @@ index c1d72c0..ad7b84d 100644
  	do {
  		union e1000_adv_rx_desc *rx_desc;
  
-@@ -6767,6 +6796,11 @@ void igb_alloc_rx_buffers(struct igb_ring *rx_ring, u16 cleaned_count)
+@@ -6767,6 +6800,11 @@ void igb_alloc_rx_buffers(struct igb_ring *rx_ring, u16 cleaned_count)
  	struct igb_rx_buffer *bi;
  	u16 i = rx_ring->next_to_use;
  
