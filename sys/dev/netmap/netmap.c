@@ -283,7 +283,7 @@ int netmap_admode = NETMAP_ADMODE_BEST;  /* Choose the netmap adapter to use. */
 SYSCTL_INT(_dev_netmap, OID_AUTO, drop, CTLFLAG_RW, &netmap_drop, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, flags, CTLFLAG_RW, &netmap_flags, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, fwd, CTLFLAG_RW, &netmap_fwd, 0 , "");
-SYSCTL_INT(_dev_netmap, OID_AUTO, admode, CTLFLAG_RD, &netmap_admode, 0 , "");
+SYSCTL_INT(_dev_netmap, OID_AUTO, admode, CTLFLAG_RW, &netmap_admode, 0 , "");
 
 NMG_LOCK_T	netmap_global_lock;
 
@@ -1210,7 +1210,12 @@ nm_if_rele(struct ifnet *ifp)
 	if (is_hw) {
 		if_rele(ifp);
 	} else if (is_generic) {
+                na = na->prev;
 		netmap_detach(ifp);
+                if (na) {
+                    /* Restore the previous netmap_adapter. */
+                    WNA(ifp) = na;
+                }
 		if_rele(ifp);
 	} else {
 		if (na->na_flags & NAF_MEM_OWNER)
@@ -1756,19 +1761,19 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp)
 	const char *name = nmr->nr_name;
 	int namelen = strlen(name);
 	struct ifnet *iter = NULL;
-	int no_prefix = 0;
+        int error = 0;
 
 	/* first try to see if this is a bridge port. */
 	struct nm_bridge *b;
 	struct netmap_adapter *na;
+        struct netmap_adapter *prev_na;
 	int i, j, cand = -1, cand2 = -1;
 	int needed;
 
 	NMG_LOCK_ASSERT();
 	*ifp = NULL;	/* default */
 	if (strncmp(name, NM_NAME, sizeof(NM_NAME) - 1)) {
-		no_prefix = 1;	/* no VALE prefix */
-		goto no_bridge_port;
+		goto no_bridge_port;  /* no VALE prefix */
 	}
 
 	b = nm_find_bridge(name, 1 /* create a new one if no exist */ );
@@ -1901,22 +1906,36 @@ no_bridge_port:
 	if (*ifp == NULL)
 		return (ENXIO);
 
-	if (NETMAP_CAPABLE(*ifp)) {
+	if (NETMAP_CAPABLE(*ifp) || netmap_admode != NETMAP_ADMODE_NATIVE) {
+                if (!NETMAP_CAPABLE(*ifp) || netmap_admode == NETMAP_ADMODE_GENERIC) {
+#ifdef linux
+                        prev_na = NA(*ifp);  /* Previously used netmap adapter (can be NULL). */
+                        /* We fall back to the generic netmap adapter (which doesn't require
+                           driver support), when the interface is not netmap capable or when
+                           we explicitely want to use the generic netmap adapter. */
+                        error = generic_netmap_attach(*ifp);
+                        if (error) {
+                                nm_if_rele(*ifp);
+                                return error;
+                        }
+                        na = NA(*ifp);
+                        na->prev = prev_na; /* Store the previously used netmap_adapter. */
+#else  /* !linux */
+                        /* Not NETMAP_CAPABLE and no generic adapter support. */
+                        (void)prev_na;
+                        nm_if_rele(*ifp);
+                        return EINVAL;
+#endif
+                }
 		/* Users cannot use the NIC attached to a bridge directly */
-		if (no_prefix && NETMAP_OWNED_BY_KERN(*ifp)) {
+		if (NETMAP_OWNED_BY_KERN(*ifp)) {
 			if_rele(*ifp); /* don't detach from bridge */
 			return EINVAL;
 		} else
 			return 0;	/* valid pointer, we hold the refcount */
 	}
-#ifdef linux
-        /* If the interface is not netmap capable, we fall back to the generic netmap
-           adapter, which doesn't require driver support. */
-        return generic_netmap_attach(*ifp);
-#else  /* !linux */
         nm_if_rele(*ifp);
-        return EINVAL;  // not NETMAP capable
-#endif /* !linux */
+        return EINVAL;  /* Not NETMAP capable and we require a native adapter. */
 }
 
 
@@ -2888,6 +2907,7 @@ netmap_attach(struct netmap_adapter *arg, u_int num_queues)
 	WNA(ifp) = na;
 	*na = *arg; /* copy everything, trust the driver to not pass junk */
 	NETMAP_SET_CAPABLE(ifp);
+        na->prev = NULL;
 	if (na->num_tx_rings == 0)
 		na->num_tx_rings = num_queues;
 	na->num_rx_rings = num_queues;

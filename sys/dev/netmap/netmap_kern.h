@@ -352,6 +352,9 @@ struct netmap_adapter {
 	/* memory allocator */
  	struct netmap_mem_d *nm_mem;
 
+        /* Pointer to a previously used netmap adapter. */
+        struct netmap_adapter *prev;
+
 #ifdef linux
 	struct net_device_ops nm_ndo;
 #endif /* linux */
