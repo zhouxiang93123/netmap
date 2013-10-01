@@ -269,7 +269,7 @@ e1000_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 		l = netmap_idx_k2n(kring, j); /* NIC ring index */
 		for (n = 0; j != k; n++) {
 			struct netmap_slot *slot = &ring->slot[j];
-			NM_E1K_RX_DESC_T *curr = E1000_RX_DESC_EXT(*rxr, j);
+			NM_E1K_RX_DESC_T *curr = E1000_RX_DESC_EXT(*rxr, l);
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
 
