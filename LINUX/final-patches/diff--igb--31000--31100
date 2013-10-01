@@ -1,8 +1,8 @@
 diff --git a/igb/igb_main.c b/igb/igb_main.c
-index 31cfe2e..a5c181a 100644
+index 64cbe0d..6610a2d 100644
 --- a/igb/igb_main.c
 +++ b/igb/igb_main.c
-@@ -247,6 +247,10 @@ static int debug = -1;
+@@ -255,6 +255,10 @@ static int debug = -1;
  module_param(debug, int, 0);
  MODULE_PARM_DESC(debug, "Debug level (0=none,...,16=all)");
  
@@ -13,7 +13,7 @@ index 31cfe2e..a5c181a 100644
  struct igb_reg_info {
  	u32 ofs;
  	char *name;
-@@ -1520,6 +1524,10 @@ int igb_up(struct igb_adapter *adapter)
+@@ -1633,6 +1637,10 @@ int igb_up(struct igb_adapter *adapter)
  
  	netif_tx_start_all_queues(adapter->netdev);
  
@@ -24,7 +24,7 @@ index 31cfe2e..a5c181a 100644
  	/* start the watchdog. */
  	hw->mac.get_link_status = 1;
  	schedule_work(&adapter->watchdog_task);
-@@ -1553,6 +1561,10 @@ void igb_down(struct igb_adapter *adapter)
+@@ -1667,6 +1675,10 @@ void igb_down(struct igb_adapter *adapter)
  	wrfl();
  	msleep(10);
  
@@ -35,7 +35,7 @@ index 31cfe2e..a5c181a 100644
  	for (i = 0; i < adapter->num_q_vectors; i++)
  		napi_disable(&(adapter->q_vector[i]->napi));
  
-@@ -2127,6 +2139,10 @@ static int igb_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+@@ -2292,6 +2304,10 @@ static int igb_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
  	/* carrier off reporting is important to ethtool even BEFORE open */
  	netif_carrier_off(netdev);
  
@@ -46,7 +46,7 @@ index 31cfe2e..a5c181a 100644
  #ifdef CONFIG_IGB_DCA
  	if (dca_add_requester(&pdev->dev) == 0) {
  		adapter->flags |= IGB_FLAG_DCA_ENABLED;
-@@ -2233,6 +2249,10 @@ static void igb_remove(struct pci_dev *pdev)
+@@ -2533,6 +2549,10 @@ static void igb_remove(struct pci_dev *pdev)
  		wr32(E1000_DCA_CTRL, E1000_DCA_CTRL_DCA_MODE_DISABLE);
  	}
  #endif
@@ -56,8 +56,8 @@ index 31cfe2e..a5c181a 100644
 +
  
  	/* Release control of h/w to f/w.  If f/w is AMT enabled, this
- 	 * would have already happened in close and is redundant. */
-@@ -2746,6 +2766,9 @@ void igb_configure_tx_ring(struct igb_adapter *adapter,
+ 	 * would have already happened in close and is redundant.
+@@ -3004,6 +3024,9 @@ void igb_configure_tx_ring(struct igb_adapter *adapter,
  
  	txdctl |= E1000_TXDCTL_QUEUE_ENABLE;
  	wr32(E1000_TXDCTL(reg_idx), txdctl);
@@ -67,7 +67,7 @@ index 31cfe2e..a5c181a 100644
  }
  
  /**
-@@ -5690,6 +5713,10 @@ static bool igb_clean_tx_irq(struct igb_q_vector *q_vector)
+@@ -5989,6 +6012,10 @@ static bool igb_clean_tx_irq(struct igb_q_vector *q_vector)
  
  	if (test_bit(__IGB_DOWN, &adapter->state))
  		return true;
@@ -78,7 +78,7 @@ index 31cfe2e..a5c181a 100644
  
  	tx_buffer = &tx_ring->tx_buffer_info[i];
  	tx_desc = IGB_TX_DESC(tx_ring, i);
-@@ -6349,6 +6376,10 @@ static bool igb_clean_rx_irq(struct igb_q_vector *q_vector, const int budget)
+@@ -6648,6 +6675,10 @@ static bool igb_clean_rx_irq(struct igb_q_vector *q_vector, const int budget)
  	unsigned int total_bytes = 0, total_packets = 0;
  	u16 cleaned_count = igb_desc_unused(rx_ring);
  
@@ -89,7 +89,7 @@ index 31cfe2e..a5c181a 100644
  	do {
  		union e1000_adv_rx_desc *rx_desc;
  
-@@ -6461,6 +6492,11 @@ void igb_alloc_rx_buffers(struct igb_ring *rx_ring, u16 cleaned_count)
+@@ -6765,6 +6796,11 @@ void igb_alloc_rx_buffers(struct igb_ring *rx_ring, u16 cleaned_count)
  	struct igb_rx_buffer *bi;
  	u16 i = rx_ring->next_to_use;
  

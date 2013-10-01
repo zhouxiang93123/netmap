@@ -1,5 +1,5 @@
 diff --git a/igb/igb_main.c b/igb/igb_main.c
-index cea37e0..2624756 100644
+index cea37e0..70777e4 100644
 --- a/igb/igb_main.c
 +++ b/igb/igb_main.c
 @@ -201,6 +201,10 @@ MODULE_DESCRIPTION("Intel(R) Gigabit Ethernet Network Driver");
@@ -57,7 +57,18 @@ index cea37e0..2624756 100644
  
  	iounmap(hw->hw_addr);
  	if (hw->flash_address)
-@@ -2545,6 +2565,9 @@ void igb_configure_tx_ring(struct igb_adapter *adapter,
+@@ -2366,6 +2386,10 @@ static int igb_open(struct net_device *netdev)
+ 
+ 	netif_tx_start_all_queues(netdev);
+ 
++#ifdef DEV_NETMAP
++	netmap_enable_all_rings(netdev);
++#endif /* DEV_NETMAP */
++
+ 	/* start the watchdog. */
+ 	hw->mac.get_link_status = 1;
+ 	schedule_work(&adapter->watchdog_task);
+@@ -2545,6 +2569,9 @@ void igb_configure_tx_ring(struct igb_adapter *adapter,
  
  	txdctl |= E1000_TXDCTL_QUEUE_ENABLE;
  	wr32(E1000_TXDCTL(reg_idx), txdctl);
@@ -67,7 +78,7 @@ index cea37e0..2624756 100644
  }
  
  /**
-@@ -5338,6 +5361,11 @@ static bool igb_clean_tx_irq(struct igb_q_vector *q_vector)
+@@ -5338,6 +5365,11 @@ static bool igb_clean_tx_irq(struct igb_q_vector *q_vector)
  	unsigned int i, eop, count = 0;
  	bool cleaned = false;
  
@@ -79,7 +90,7 @@ index cea37e0..2624756 100644
  	i = tx_ring->next_to_clean;
  	eop = tx_ring->buffer_info[i].next_to_watch;
  	eop_desc = E1000_TX_DESC_ADV(*tx_ring, eop);
-@@ -5540,6 +5568,11 @@ static bool igb_clean_rx_irq_adv(struct igb_q_vector *q_vector,
+@@ -5540,6 +5572,11 @@ static bool igb_clean_rx_irq_adv(struct igb_q_vector *q_vector,
  	u16 length;
  	u16 vlan_tag;
  
@@ -91,7 +102,7 @@ index cea37e0..2624756 100644
  	i = rx_ring->next_to_clean;
  	buffer_info = &rx_ring->buffer_info[i];
  	rx_desc = E1000_RX_DESC_ADV(*rx_ring, i);
-@@ -5668,6 +5701,10 @@ void igb_alloc_rx_buffers_adv(struct igb_ring *rx_ring, int cleaned_count)
+@@ -5668,6 +5705,10 @@ void igb_alloc_rx_buffers_adv(struct igb_ring *rx_ring, int cleaned_count)
  	unsigned int i;
  	int bufsz;
  

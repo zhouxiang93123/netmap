@@ -1,5 +1,5 @@
 diff --git a/igb/igb_main.c b/igb/igb_main.c
-index c881347..50a2fc8 100644
+index c881347..77b3fda 100644
 --- a/igb/igb_main.c
 +++ b/igb/igb_main.c
 @@ -1144,6 +1144,10 @@ int igb_up(struct igb_adapter *adapter)
@@ -24,3 +24,14 @@ index c881347..50a2fc8 100644
  	netif_tx_stop_all_queues(netdev);
  
  	/* disable transmits in the hardware */
+@@ -2018,6 +2026,10 @@ static int igb_open(struct net_device *netdev)
+ 
+ 	netif_tx_start_all_queues(netdev);
+ 
++#ifdef DEV_NETMAP
++	netmap_enable_all_rings(netdev);
++#endif /* DEV_NETMAP */
++
+ 	/* start the watchdog. */
+ 	hw->mac.get_link_status = 1;
+ 	schedule_work(&adapter->watchdog_task);
