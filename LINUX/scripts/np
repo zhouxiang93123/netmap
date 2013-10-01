@@ -18,6 +18,7 @@
 }
 
 
+##
 ## driver-path <driver> <version>:
 ##	retrieves the path of <driver> in the linux sources
 ##	for version <version>. The path is output to stdout.
@@ -37,6 +38,7 @@ function driver-path()
 }
 
 
+##
 ## get-patch [-c] <driver> <version>
 ##	extract the netmap patch for the given <driver> and the
 ##	given kernel <version>. The patch is stored in tmp-patches
@@ -48,7 +50,9 @@ function get-patch()
 {
 	local use_cache
 	[ "$1" = -c ] && { use_cache=1; shift; }
+	# convert kernel version to fixed notation
 	local v1=$(scripts/vers $2 -c)
+	# compute next kernel version (in fixed notation)
 	local v2=$(scripts/vers $2 -i -c)
 	local drvname=$1
 	local patchname=diff--$drvname--$v1--$v2
@@ -61,11 +65,13 @@ function get-patch()
 		cd $GITDIR
 		git diff --relative=$drvdir v$2..netmap-$2 -- $drvpath
 	) > $out
+	# an empty patch means no netmap support for this driver
 	[ -s $out ] || { rm $out; return 1; }
 	echo $out
 	return 0;
 }
 
+##
 ## get-range <driver> <version1> <version2>:
 ##	extracts the netmap patches for the given <driver> for
 ##	all the kernel versions from <version1> (included) to
@@ -75,13 +81,16 @@ function get-range()
 {
 	local drv=$1
 	local v=$2
+	# while version is less than $3
 	while scripts/vers -b $v $3 -L; do
 		get-patch $drv $v
+		# compute next version
 		v=$(scripts/vers $v -i)
 	done
 }
 
 
+##
 ## get-src <driver> <version> <dest>:
 ##	copies the original sources of the given <driver>,
 ##	from the given kernel <version> to the given <dest>
@@ -107,6 +116,7 @@ function get-src()
 }
 
 
+##
 ## extend <patch> <version>:
 ##	checks wether the range of applicability of the 
 ##	given <patch> can be extented to include <version>.
@@ -138,11 +148,12 @@ function extend()
 	(
 		cd $tmpdir2
 		patch -p1 < $patch2 >/dev/null 2>&1
-	)
+	) # this will certainly apply
 	diff -qbBr $tmpdir1 $tmpdir2 >/dev/null || return 1
 	return 0
 } 
 
+##
 ##  minimize <driver>:
 ##	tries to minimize the number of patch files for the given
 ##	<driver>. It uses the patches currently found in tmp-patches
@@ -195,6 +206,7 @@ function minimize()
 	return 0
 }
 
+##
 ## infty <driver> <version>
 ##	if final-patches contains a patch for <driver> with a range
 ##	ending in <version>, extend it to infinity.
@@ -202,12 +214,14 @@ function minimize()
 function infty()
 {
 	local drv=$(basename $1)
+	# convert kernel version to fixed notation
 	local v=$(scripts/vers $2 -c)
 	local last=$(ls final-patches/diff--$drv--*--$v 2>/dev/null|tail -n1)
 	[ -n "$last" ] || return 1
 	mv -n $last $(scripts/vers $last -s -p 99999 -S4) 2>/dev/null
 }
 
+##
 ## forall <cmd> [args...]
 ##	exec <cmd> <driver> [args...] for all known drivers.
 function forall()
@@ -233,6 +247,9 @@ mkdir -p tmp-patches
 	case $cmd in
 	*-all)
 		forall ${cmd%-all} "$@"
+		;;
+	-[hH]|--help|-help|help)
+		sed -n 's/^## *//p' $0
 		;;
 	*)
 		$cmd "$@"
