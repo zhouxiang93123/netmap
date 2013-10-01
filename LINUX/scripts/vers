@@ -61,7 +61,7 @@ sub next
 
 for (@ARGV) {
 ##
-##  b	(nullary) suppress normal output. On exit, return 1
+##  -b	(nullary) suppress normal output. On exit, return 1
 ## 	if stack top is "false", 0 otherwise.
 	/^-b$/  && do {
 		$silent=1;
