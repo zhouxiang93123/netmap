@@ -1906,27 +1906,26 @@ no_bridge_port:
 	if (*ifp == NULL)
 		return (ENXIO);
 
-	if (NETMAP_CAPABLE(*ifp) || netmap_admode != NETMAP_ADMODE_NATIVE) {
-                if (!NETMAP_CAPABLE(*ifp) || netmap_admode == NETMAP_ADMODE_GENERIC) {
 #ifdef linux
-                        prev_na = NA(*ifp);  /* Previously used netmap adapter (can be NULL). */
-                        /* We fall back to the generic netmap adapter (which doesn't require
-                           driver support), when the interface is not netmap capable or when
-                           we explicitely want to use the generic netmap adapter. */
-                        error = generic_netmap_attach(*ifp);
-                        if (error) {
-                                nm_if_rele(*ifp);
-                                return error;
-                        }
-                        na = NA(*ifp);
-                        na->prev = prev_na; /* Store the previously used netmap_adapter. */
-#else  /* !linux */
-                        /* Not NETMAP_CAPABLE and no generic adapter support. */
-                        (void)prev_na;
+        if ((!NETMAP_CAPABLE(*ifp) && (netmap_admode == NETMAP_ADMODE_BEST || 
+                                       netmap_admode == NETMAP_ADMODE_GENERIC))
+            || (NETMAP_CAPABLE(*ifp) && netmap_admode == NETMAP_ADMODE_GENERIC)) {
+                prev_na = NA(*ifp);  /* Previously used netmap adapter (can be NULL). */
+                /* We create a generic netmap adapter (which doesn't require
+                   driver support), when the interface is not netmap capable (and we are
+                   not forbidden to use the generic adapter), or when
+                   we explicitely want to use the generic adapter. */
+                error = generic_netmap_attach(*ifp);
+                if (error) {
                         nm_if_rele(*ifp);
-                        return EINVAL;
-#endif
+                        return error;
                 }
+                na = NA(*ifp);
+                na->prev = prev_na; /* Store the previously used netmap_adapter. */
+        }
+#endif  /* !linux */
+
+	if (NETMAP_CAPABLE(*ifp)) {
 		/* Users cannot use the NIC attached to a bridge directly */
 		if (NETMAP_OWNED_BY_KERN(*ifp)) {
 			if_rele(*ifp); /* don't detach from bridge */
