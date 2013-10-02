@@ -1125,23 +1125,38 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 static void
 nm_if_rele(struct ifnet *ifp)
 {
-	int i, is_hw, is_generic, hw, sw, lim;
+	int i, is_hw, hw, sw, lim;
 	struct nm_bridge *b;
-	struct netmap_adapter *na;
+	struct netmap_adapter *na = NA(ifp);  /* May be invalid. */
+        struct netmap_adapter *prev_na;
 	uint8_t tmp[NM_BDG_MAXPORTS];
 
 	NMG_LOCK_ASSERT();
+
+	if (NETMAP_CAPABLE(ifp) && nma_is_generic(na) && na->refcount <=0) {
+                /* XXX Move this block to do_unregif() ? */
+                /* Free the generic netmap adapter on the last reference. */
+                prev_na = na->prev;
+		netmap_detach(ifp);
+                D("Released generic NA %p", na);
+                if (prev_na) {
+                    /* Restore the previous netmap_adapter. */
+                    WNA(ifp) = prev_na;
+                    D("Restored native NA %p", prev_na);
+                }
+		if_rele(ifp);
+                return;
+        }
+
 	/* I can be called not only for get_ifp()-ed references where netmap's
 	 * capability is guaranteed, but also for non-netmap-capable NICs.
 	 */
-	if (!NETMAP_CAPABLE(ifp) || !NA(ifp)->na_bdg) {
+	if (!NETMAP_CAPABLE(ifp) || !na->na_bdg) {
 		if_rele(ifp);
 		return;
 	}
-	na = NA(ifp);
 	b = na->na_bdg;
 	is_hw = nma_is_hw(na);
-	is_generic = nma_is_generic(na);
 
 	ND("%s has %d references", ifp->if_xname, NA(ifp)->na_bdg_refcount);
 
@@ -1208,14 +1223,6 @@ nm_if_rele(struct ifnet *ifp)
 	}
 
 	if (is_hw) {
-		if_rele(ifp);
-	} else if (is_generic) {
-                na = na->prev;
-		netmap_detach(ifp);
-                if (na) {
-                    /* Restore the previous netmap_adapter. */
-                    WNA(ifp) = na;
-                }
 		if_rele(ifp);
 	} else {
 		if (na->na_flags & NAF_MEM_OWNER)
@@ -1923,6 +1930,7 @@ no_bridge_port:
                 }
                 na = NA(*ifp);
                 na->prev = prev_na; /* Store the previously used netmap_adapter. */
+                D("Created generic NA %p (prev %p)", na, na->prev);
         }
 #endif  /* !linux */
 
