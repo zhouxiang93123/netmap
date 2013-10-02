@@ -14,6 +14,7 @@ function pgset() {
     fi
 }
 
+
 # What can we do with this function?
 function pg() {
     echo inject > $PGDEV
@@ -21,46 +22,50 @@ function pg() {
 }
 
 
-# Sanitize command-line parameters
-CPU="$1"
-QUEUE="$2"  # {0, 1, 2}
-if [ -z "$CPU" ]; then
-    CPU="1"
-fi
-if [ -z "$QUEUE"]; then
-    QUEUE="0"
-fi
-
 # Script configuration
-IF="enp1s0f1"
+N="$1"  # number of TX kthreads minus one
+if [ -z "$1" ]; then
+    N=0
+fi
+IF="eth1"
 DST_IP="10.216.8.1"
 DST_MAC="00:1b:21:80:e7:d9"
-PKT_COUNT="40000000"
+PKT_COUNT="10000000"
 PKT_SIZE="60"
-
 
 
 # Load pktgen kernel module
 modprobe pktgen
 
 
-# Thread-CPU configuration
-PGDEV="/proc/net/pktgen/kpktgend_${CPU}"
-echo "Removing all devices"
-pgset "rem_device_all"
-echo "Adding $IF"
-pgset "add_device $IF"
+# Clean the configuration for all the CPU-kthread (from 0 to 7)
+IDX=$(seq 0 1 7)
+for cpu in ${IDX}; do
+    PGDEV="/proc/net/pktgen/kpktgend_${cpu}"
+    echo "Removing all devices (${cpu})"
+    pgset "rem_device_all"
+done
 
+IDX=$(seq 0 1 ${N})
+for cpu in ${IDX}; do
+    # kthread-device configuration
+    PGDEV="/proc/net/pktgen/kpktgend_${cpu}"
+    echo "Configuring $PGDEV"
+    echo "Adding ${IF}@${cpu}"
+    pgset "add_device ${IF}@${cpu}"
 
-# Packets/mode configuration
-PGDEV="/proc/net/pktgen/$IF"
-echo "Configuring $PGDEV"
-pgset "count ${PKT_COUNT}"
-pgset "clone_skb 0"
-pgset "pkt_size ${PKT_SIZE}"
-pgset "delay 0"
-pgset "dst $DST_IP"
-pgset "dst_mac $DST_MAC"
+    # Packets/mode configuration
+    PGDEV="/proc/net/pktgen/${IF}@${cpu}"
+    echo "Configuring $PGDEV"
+    pgset "count ${PKT_COUNT}"
+    pgset "clone_skb 0"
+    pgset "pkt_size ${PKT_SIZE}"
+    pgset "delay 0"
+    pgset "dst $DST_IP"
+    pgset "dst_mac $DST_MAC"
+
+    echo ""
+done
 
 
 # Run
@@ -70,5 +75,11 @@ pgset "start"
 echo "Done."
 
 # Show results
-cat /proc/net/pktgen/$IF
+NUMS=""
+for cpu in ${IDX}; do
+    TMP=$(cat /proc/net/pktgen/${IF}@${cpu} | grep -o "[0-9]\+pps" | grep -o "[0-9]\+")
+    echo "$cpu $TMP"
+    NUMS="${NUMS} ${TMP}"
+done
 
+echo "Total TX rate: $(echo $NUMS | tr ' ' '+' | bc)"
