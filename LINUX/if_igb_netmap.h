@@ -68,16 +68,13 @@ igb_netmap_reg(struct ifnet *ifp, int onoff)
 	if (na == NULL)
 		return EINVAL;
 
-	if (!(ifp->flags & IFF_UP)) {
-		D("Interface is down!");
-		return EINVAL;
-	}
+	rtnl_lock();
 
 	while (test_and_set_bit(__IGB_RESETTING, &adapter->state))
 		msleep(1);
 
-	//rtnl_lock(); // XXX do we need it ?
-	igb_down(adapter);
+	if (netif_running(adapter->netdev))
+		igb_down(adapter);
 
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
@@ -88,9 +85,15 @@ igb_netmap_reg(struct ifnet *ifp, int onoff)
 		ifp->netdev_ops = (void *)na->if_transmit;
 	}
 
-	igb_up(adapter);
-	//rtnl_unlock(); // XXX do we need it ?
+	if (netif_running(adapter->netdev))
+		igb_up(adapter);
+	else
+		igb_reset(adapter);
+
 	clear_bit(__IGB_RESETTING, &adapter->state);
+
+	rtnl_unlock();
+
 	return (error);
 }
 
@@ -110,6 +113,9 @@ igb_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 
 	/* generate an interrupt approximately every half ring */
 	int report_frequency = kring->nkr_num_slots >> 1;
+
+	if (!netif_carrier_ok(ifp))
+		return 0;
 
 	/* take a copy of ring->cur now, and never read it again */
 	k = ring->cur;
@@ -216,6 +222,9 @@ igb_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 	u_int k = ring->cur, resvd = ring->reserved;
 
+	if (!netif_carrier_ok(ifp))
+		return 0;
+
 	if (k > lim)
 		return netmap_ring_reinit(kring);
 
@@ -260,7 +269,7 @@ igb_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 		l = netmap_idx_k2n(kring, j); /* NIC ring index */
 		for (n = 0; j != k; n++) {
 			struct netmap_slot *slot = &ring->slot[j];
-			union e1000_adv_rx_desc *curr = E1000_RX_DESC_ADV(*rxr, j);
+			union e1000_adv_rx_desc *curr = E1000_RX_DESC_ADV(*rxr, l);
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
 

@@ -1,12 +1,28 @@
 #!/bin/bash
+## Manage linux driver patches for netmap.
+## usage (from the dir containing the Makefile):
+## 
+##    scripts/np <action> [args...]
+##
+## where <action> is any of the functions below.
+##
+## GITDIR must contain the absolute path of the netmap linux
+## git repository, containing all the required netmap-*
+## branches.
 
-DRIVER_SRCS=$(make +DRIVER_SRCS)
 
 [ -n "$GITDIR" -a -d "$GITDIR/.git" ] || {
 	echo "GITDIR not set or not valid" >&2
 	exit 1
 }
 
+
+##
+## driver-path <driver> <version>:
+##	retrieves the path of <driver> in the linux sources
+##	for version <version>. The path is output to stdout.
+##	It uses a local cache to minimize the expensive
+##	checkouts in GITDIR.
 function driver-path()
 {
 	cat cache/$2/$1/path 2>/dev/null && return
@@ -20,11 +36,22 @@ function driver-path()
 
 }
 
+
+##
+## get-patch [-c] <driver> <version>
+##	extract the netmap patch for the given <driver> and the
+##	given kernel <version>. The patch is stored in tmp-patches
+##	and the name of the patch is output to stdout.
+##	If a patch with the same name already exists in tmp-patches
+##	it is overwritten, unless the -c option is used,
+##	in which case the existing patch is kept (the patch name is still output).
 function get-patch()
 {
 	local use_cache
 	[ "$1" = -c ] && { use_cache=1; shift; }
+	# convert kernel version to fixed notation
 	local v1=$(scripts/vers $2 -c)
+	# compute next kernel version (in fixed notation)
 	local v2=$(scripts/vers $2 -i -c)
 	local drvname=$1
 	local patchname=diff--$drvname--$v1--$v2
@@ -37,21 +64,38 @@ function get-patch()
 		cd $GITDIR
 		git diff --relative=$drvdir v$2..netmap-$2 -- $drvpath
 	) > $out
+	# an empty patch means no netmap support for this driver
 	[ -s $out ] || { rm $out; return 1; }
 	echo $out
 	return 0;
 }
 
+##
+## get-range <driver> <version1> <version2>:
+##	extracts the netmap patches for the given <driver> for
+##	all the kernel versions from <version1> (included) to
+##	<version2> (excluded). All patches are stored in tmp-patches
+##	and their names are output to stdout.
 function get-range()
 {
 	local drv=$1
 	local v=$2
+	# while version is less than $3
 	while scripts/vers -b $v $3 -L; do
 		get-patch $drv $v
+		# compute next version
 		v=$(scripts/vers $v -i)
 	done
 }
 
+
+##
+## get-src <driver> <version> <dest>:
+##	copies the original sources of the given <driver>,
+##	from the given kernel <version> to the given <dest>
+##	directory.
+##	It uses a local cache to minimize the expensive
+##	checkouts in GITDIR.
 function get-src()
 {
 	cache=cache/$2/$1/src
@@ -70,13 +114,28 @@ function get-src()
 	cp -r $cache/* $3
 }
 
+
+##
+## extend <patch> <version>:
+##	checks wether the range of applicability of the 
+##	given <patch> can be extented to include <version>.
+##	It returns 0 on success and 1 on failure.
 function extend()
 {
 	local patch=$(realpath $1)
 	local v=$2
+	# extract the driver name from the patch name
 	local drv=$(scripts/vers $1 -s -p -p)
 	local tmpdir1=$(mktemp -d)
 	local tmpdir2=$(mktemp -d)
+	trap "rm -rf $tmpdir1 $tmpdir2" 0
+	# we get the driver sources for the given <version> and
+	# we apply two patches separately:
+	# i) the given <patch>;
+	# ii) the proper patch from GITDIR.
+	# We declare <patch> to be extendable if
+	# - it is still applicable AND
+	# - we obtain the same files from i) and ii) (ignoring whitespace)
 	get-src $drv $v $tmpdir1
 	get-src $drv $v $tmpdir2
 	(
@@ -88,36 +147,57 @@ function extend()
 	(
 		cd $tmpdir2
 		patch -p1 < $patch2 >/dev/null 2>&1
-	)
+	) # this will certainly apply
 	diff -qbBr $tmpdir1 $tmpdir2 >/dev/null || return 1
-	rm -rf $tmpdir1 $tmpdir2
 	return 0
 } 
 
+##
+## minimize <driver>:
+##	tries to minimize the number of patch files for the given
+##	<driver>. It uses the patches currently found in tmp-patches
+##	and stores the resulting patches in final-patches.
+##	If final-patches already contained patches for <driver>,
+##	they are deleted first.
 function minimize()
 {
 	mkdir -p final-patches
 	local drv=$(basename $1)
 	local patches=$(ls tmp-patches/diff--$drv--* 2>/dev/null)
 	[ -n "$patches" ] || return 1
+	# put the patch names in $1, $2, ...
 	set $patches
 	rm -f final-patches/diff--$drv--*
+	# the original patches (in tmp-patches) are ordered by version number.
+	# We consider one patch in turn (the 'pivot') and try
+	# to extend its range to cover the range of the next
+	# patch. If this succedes, the merged patch is the new
+	# pivot, otherwise the current pivot is output and the
+	# next patch becomes the new pivot. The process
+	# is repeated until there are no more patches to consider.
 	local pivot=$1
 	[ -n "$pivot" -a -e "$pivot" ] || return 1
+	# extract the left end and right end of the pivot's range
 	local ple=$(scripts/vers $pivot -s -p -C)
 	local pre=$(scripts/vers $pivot -s -C)
 	while [ -n "$pivot" ]; do
 		shift
 		if [ -n "$1" ]; then 
+			# extract the left end and right end of the next patch
 			local nle=$(scripts/vers $1 -s -p -C)
 			local nre=$(scripts/vers $1 -s -C)
+			# we admit no gaps in the range
 			if [ $pre = $nle ] && extend $pivot $nle; then
 				pre=$nre
 				continue
 			fi
 		fi
+		# either out of patches or failed merge.
+		# Compute the file name of the current pivot and store
+		# the patch in its final location
 		out=$(scripts/vers diff $drv $ple -c $pre -c -S4)
 		cp $pivot final-patches/$out
+		# the new pivot becames the next patch (if any)
 		pivot=$1
 		pre=$nre
 		ple=$nle
@@ -125,21 +205,35 @@ function minimize()
 	return 0
 }
 
+##
+## infty <driver> <version>
+##	if final-patches contains a patch for <driver> with a range
+##	ending in <version>, extend it to infinity.
+##	Do nothing otherwise.
 function infty()
 {
 	local drv=$(basename $1)
+	# convert kernel version to fixed notation
 	local v=$(scripts/vers $2 -c)
 	local last=$(ls final-patches/diff--$drv--*--$v 2>/dev/null|tail -n1)
 	[ -n "$last" ] || return 1
 	mv -n $last $(scripts/vers $last -s -p 99999 -S4) 2>/dev/null
 }
 
+##
+## forall <cmd> [args...]
+##	exec <cmd> <driver> [args...] for all known drivers.
 function forall()
 {
 	local cmd=$1
 	shift
+	# we obtain the value of DRIVER_SRC from the makefile
+	# (the +% target is defined in our Makefile and prints
+	# the contents of variable %)
+	local driver_srcs=$(make +DRIVER_SRCS)
+
 	local driver
-	for driver in $DRIVER_SRCS; do
+	for driver in $driver_srcs; do
 		$cmd $(basename $driver) "$@"
 	done
 }
@@ -149,9 +243,13 @@ mkdir -p tmp-patches
 [ -n "$1" ] && {
 	cmd=$1
 	shift
+	[ -n "$cmd" ] || { scripts/help $0; exit 1; }
 	case $cmd in
 	*-all)
 		forall ${cmd%-all} "$@"
+		;;
+	-[hH]|--help|-help|help)
+		scripts/help $0
 		;;
 	*)
 		$cmd "$@"
