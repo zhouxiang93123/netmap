@@ -10,11 +10,13 @@
 ## git repository, containing all the required netmap-*
 ## branches.
 
+[ -f scripts/conf ] && source scripts/conf
 
 [ -n "$GITDIR" -a -d "$GITDIR/.git" ] || {
 	echo "GITDIR not set or not valid" >&2
 	exit 1
 }
+
 
 
 ##
@@ -218,6 +220,71 @@ function infty()
 	local last=$(ls final-patches/diff--$drv--*--$v 2>/dev/null|tail -n1)
 	[ -n "$last" ] || return 1
 	mv -n $last $(scripts/vers $last -s -p 99999 -S4) 2>/dev/null
+}
+
+function build-prep()
+{
+	local v=$1
+
+	local dst="$(realpath $LINUX_SOURCES)/linux-$v"
+
+	[ -d $dst ] && { echo $dst; return; }
+
+	mkdir -p $dst
+
+	exec 3>&1 4>&2 >$dst.log 2>&1
+	(
+		cd $GITDIR
+		git archive v$v | tar xf - -C $dst 
+	)
+	cp $LINUX_CONFIGS/config-$v $dst/.config  2>/dev/null ||
+	cp $LINUX_CONFIGS/config-all $dst/.config 
+	(
+		cd $dst
+		yes '' | make oldconfig
+		make modules_prepare
+	)
+	exec 1>&3 2>&4
+	echo $dst
+}
+
+function check-patch()
+{
+	local v1=$(scripts/vers $1 -s -p -C)
+	local v2=$(scripts/vers $1 -s -C)
+	local p=$(realpath $1)
+	mkdir -p log
+	local log="$(realpath log)/$(basename $1)"
+
+	while scripts/vers -b $v1 $v2 -L; do
+		local ksrc=$(build-prep $v1)
+		local tmpdir=$(mktemp -d)
+		trap "rm -rf $tmpdir" 0
+		(cd ..; git archive master | tar xf - -C $tmpdir )
+		pushd $tmpdir/LINUX >/dev/null
+		mkdir single-patch
+		rm patches
+		ln -s single-patch patches
+		cp $p single-patch
+		ok=false
+		make KSRC=$ksrc >$log 2>&1 && ok=true
+		popd >/dev/null
+		[ $ok = true ] || return 1
+		rm -rf $tmpdir
+		# compute next version
+		v1=$(scripts/vers $v1 -i)
+	done
+}
+
+function build-check()
+{
+	mkdir -p failed-patches
+	local drv=$(basename $1)
+	local patches=$(ls tmp-patches/diff--$drv--* 2>/dev/null)
+	local p
+	for p in $patches; do
+		check-patch $p || mv $p failed-patches
+	done
 }
 
 ##
