@@ -3384,7 +3384,7 @@ linux_netmap_start_xmit(struct sk_buff *skb, struct net_device *dev)
 }
 
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,37)	// XXX was 38
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,36)	// XXX was 37
 #define LIN_IOCTL_NAME	.ioctl
 int
 linux_netmap_ioctl(struct inode *inode, struct file *file, u_int cmd, u_long data /* arg */)
