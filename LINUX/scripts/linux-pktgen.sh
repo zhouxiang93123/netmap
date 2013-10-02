@@ -21,13 +21,23 @@ function pg() {
 }
 
 
+# Sanitize command-line parameters
+CPU="$1"
+QUEUE="$2"  # {0, 1, 2}
+if [ -z "$CPU" ]; then
+    CPU="1"
+fi
+if [ -z "$QUEUE"]; then
+    QUEUE="0"
+fi
+
 # Script configuration
-IF="enp6s0"
-DST_IP="10.216.1.36"
-DST_MAC="14:da:e9:b8:5a:85"
-CPU="1"
-PKT_COUNT="3000000"
+IF="enp1s0f1"
+DST_IP="10.216.8.1"
+DST_MAC="00:1b:21:80:e7:d9"
+PKT_COUNT="40000000"
 PKT_SIZE="60"
+
 
 
 # Load pktgen kernel module

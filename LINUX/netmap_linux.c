@@ -69,8 +69,10 @@ generic_netmap_register(struct ifnet *ifp, int enable)
         return EINVAL;
 
 #ifdef GNA_RAW_XMIT
-    if ((error = ifp->netdev_ops->ndo_stop(ifp)))
+    error = ifp->netdev_ops->ndo_stop(ifp);
+    if (error) {
         return error;
+    }
 #endif  /* GNA_RAW_XMIT */
 
     rtnl_lock();
@@ -86,8 +88,9 @@ generic_netmap_register(struct ifnet *ifp, int enable)
         skb_queue_head_init(&na->rx_rings[0].rx_queue);
         na->rx_rings[0].nr_ntc = 0;
         NM_ATOMIC_SET(&na->tx_rings[0].tx_completed, 0);
-        if ((error = netdev_rx_handler_register(ifp, &generic_netmap_rx_handler, na))) {
-            D("netdev_rx_handler_register() failed\n");
+        error = netdev_rx_handler_register(ifp, &generic_netmap_rx_handler, na);
+        if (error) {
+            D("netdev_rx_handler_register() failed");
             rtnl_unlock();
             return error;
         }
