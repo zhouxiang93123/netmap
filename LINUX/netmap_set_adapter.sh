@@ -5,7 +5,7 @@
 if [ -z "$NMSRC" ]; then
     NMSRC=~/netmap-release
 fi
-DRIVER="e1000"
+DRIVER="ixgbe"
 #IF="eth0"  # force an interface
 
 if [ ! -f ${NMSRC}/LINUX/netmap_lin.ko ]; then

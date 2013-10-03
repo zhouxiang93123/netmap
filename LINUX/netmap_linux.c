@@ -120,6 +120,11 @@ generic_mbuf_destructor(struct sk_buff *skb)
 {
     struct netmap_adapter *na = (struct netmap_adapter *)(skb_shinfo(skb)->destructor_arg);
 
+    if (unlikely(!na || !na->ifp)) {
+        D("na %p na->ifp %p\n", na, na ? na->ifp : 0);
+        return;
+    }
+
     NM_ATOMIC_INC(&na->tx_rings[0].tx_completed);
     netmap_tx_irq(na->ifp, 0);
 }

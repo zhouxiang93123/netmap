@@ -3085,7 +3085,7 @@ done:
 /*
  * netmap_reset() is called by the driver routines when reinitializing
  * a ring. The driver is in charge of locking to protect the kring.
- * If netmap mode is not set just return NULL.
+ * If native netmap mode is not set just return NULL.
  */
 struct netmap_slot *
 netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
@@ -3098,7 +3098,7 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
 		D("NULL na, should not happen");
 		return NULL;	/* no netmap support here */
 	}
-	if (!(na->ifp->if_capenable & IFCAP_NETMAP)) {
+	if (!(na->ifp->if_capenable & IFCAP_NETMAP) || nma_is_generic(na)) {
 		D("interface not in netmap mode");
 		return NULL;	/* nothing to reinitialize */
 	}
