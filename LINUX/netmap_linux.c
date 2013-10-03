@@ -52,7 +52,7 @@ rx_handler_result_t generic_netmap_rx_handler(struct sk_buff **pskb)
         kfree_skb(*pskb);
     } else {
         skb_queue_tail(&na->rx_rings[0].rx_queue, *pskb);
-        netmap_rx_irq(na->ifp, 0, &work_done);
+        netmap_irq_generic(na->ifp, 0, &work_done, 1);
     }
 
     return RX_HANDLER_CONSUMED;
@@ -126,7 +126,7 @@ generic_mbuf_destructor(struct sk_buff *skb)
     }
 
     NM_ATOMIC_INC(&na->tx_rings[0].tx_completed);
-    netmap_tx_irq(na->ifp, 0);
+    netmap_irq_generic(na->ifp, 0, NULL, 1);
 }
 
 /* The generic txsync method transforms netmap buffers in sk_buffs and the invokes the
@@ -530,7 +530,7 @@ EXPORT_SYMBOL(netmap_total_buffers);	/* index check */
 EXPORT_SYMBOL(netmap_buffer_base);
 EXPORT_SYMBOL(netmap_reset);		/* ring init routines */
 EXPORT_SYMBOL(netmap_buf_size);
-EXPORT_SYMBOL(netmap_rx_irq);		/* default irq handler */
+EXPORT_SYMBOL(netmap_irq_generic);	/* default irq handler */
 EXPORT_SYMBOL(netmap_no_pendintr);	/* XXX mitigation - should go away */
 EXPORT_SYMBOL(netmap_bdg_ctl);		/* bridge configuration routine */
 EXPORT_SYMBOL(netmap_bdg_learning);	/* the default lookup function */

@@ -708,7 +708,8 @@ PNMB(struct netmap_slot *slot, uint64_t *pp)
 }
 
 /* default functions to handle rx/tx interrupts */
-int netmap_rx_irq(struct ifnet *, u_int, u_int *);
+int netmap_irq_generic(struct ifnet *, u_int, u_int *, u_int);
+#define netmap_rx_irq(_n, _q, _w) netmap_irq_generic(_n, _q, _w, 0)
 #define netmap_tx_irq(_n, _q) netmap_rx_irq(_n, _q, NULL)
 
 #ifdef __FreeBSD__
