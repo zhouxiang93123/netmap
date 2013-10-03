@@ -30,6 +30,57 @@ void netmap_fini(void);
 
 
 /* ===================== GENERIC NETMAP ADAPTER SUPPORT ================== */
+
+#define RATE  /* Enables communication statistics. */
+#ifdef RATE
+#define IFRATE(x) x
+struct rate_stats {
+    unsigned long txpkt;
+    unsigned long txsync;
+    unsigned long txirq;
+    unsigned long rxpkt;
+    unsigned long rxirq;
+    unsigned long rxsync;
+};
+
+struct rate_context {
+    unsigned refcount;
+    struct timer_list timer;
+    struct rate_stats new;
+    struct rate_stats old;
+};
+
+#define RATE_PRINTK(_NAME_) \
+    printk( #_NAME_ " = %lu Hz\n", (cur._NAME_ - ctx->old._NAME_)/RATE_PERIOD);
+#define RATE_PERIOD  2
+static void rate_callback(unsigned long arg)
+{
+    struct rate_context * ctx = (struct rate_context *)arg;
+    struct rate_stats cur = ctx->new;
+    int r;
+
+    RATE_PRINTK(txpkt);
+    RATE_PRINTK(txsync);
+    RATE_PRINTK(txirq);
+    RATE_PRINTK(rxpkt);
+    RATE_PRINTK(rxsync);
+    RATE_PRINTK(rxirq);
+    printk("\n");
+
+    ctx->old = cur;
+    r = mod_timer(&ctx->timer, jiffies +
+                                msecs_to_jiffies(RATE_PERIOD * 1000));
+    if (unlikely(r))
+        printk("[v1000] Error: mod_timer()\n");
+}
+
+static struct rate_context rate_ctx;
+
+#else
+#define IFRATE(x)
+#endif
+
+
 //#define GNA_RAW_XMIT   /* Call ndo_start_xmit() directly (UNSAFE). */
 #ifdef GNA_RAW_XMIT
 #define GNA_TX_OK       NETDEV_TX_OK
@@ -53,6 +104,7 @@ rx_handler_result_t generic_netmap_rx_handler(struct sk_buff **pskb)
     } else {
         skb_queue_tail(&na->rx_rings[0].rx_queue, *pskb);
         netmap_irq_generic(na->ifp, 0, &work_done, 1);
+        IFRATE(rate_ctx.new.rxirq++);
     }
 
     return RX_HANDLER_CONSUMED;
@@ -94,6 +146,18 @@ generic_netmap_register(struct ifnet *ifp, int enable)
             rtnl_unlock();
             return error;
         }
+#ifdef RATE
+        if (rate_ctx.refcount == 0) {
+            D("setup_timer()");
+            memset(&rate_ctx, 0, sizeof(rate_ctx));
+            setup_timer(&rate_ctx.timer, &rate_callback, (unsigned long)&rate_ctx);
+            error = mod_timer(&rate_ctx.timer, jiffies + msecs_to_jiffies(1500));
+            if (error) {
+                D("[v1000] Error: mod_timer()");
+            }
+        }
+        rate_ctx.refcount++;
+#endif
     } else { /* Disable netmap mode. */
         ifp->if_capenable &= ~IFCAP_NETMAP;
 #ifdef GNA_RAW_XMIT
@@ -101,6 +165,12 @@ generic_netmap_register(struct ifnet *ifp, int enable)
 #endif  /* GNA_RAW_XMIT */
         netdev_rx_handler_unregister(ifp);
         skb_queue_purge(&na->rx_rings[0].rx_queue);
+#ifdef RATE
+        if (--rate_ctx.refcount == 0) {
+            D("del_timer()");
+            del_timer(&rate_ctx.timer);
+        }
+#endif
     }
 
     rtnl_unlock();
@@ -127,6 +197,7 @@ generic_mbuf_destructor(struct sk_buff *skb)
 
     NM_ATOMIC_INC(&na->tx_rings[0].tx_completed);
     netmap_irq_generic(na->ifp, 0, NULL, 1);
+    IFRATE(rate_ctx.new.txirq++);
 }
 
 /* The generic txsync method transforms netmap buffers in sk_buffs and the invokes the
@@ -187,8 +258,10 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
             if (unlikely(tx_ret != GNA_TX_OK)) {
                 ND("start_xmit failed: err %d [%d,%d,%d]\n", tx_ret, j, k, kring->nr_hwavail);
                 if (likely(tx_ret == GNA_TX_FAIL)) {
+#ifdef GNA_RAW_XMIT
                     skb->destructor = NULL;
                     kfree_skb(skb);
+#endif  /* GNA_RAW_XMIT */
                     break;
                 }
                 D("start_xmit failed: HARD ERROR\n");
@@ -201,6 +274,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
         }
         kring->nr_hwcur = j;
         kring->nr_hwavail -= n;
+        IFRATE(rate_ctx.new.txpkt += n);
         ND("tx #%d, hwavail = %d\n", n, kring->nr_hwavail);
     }
 
@@ -211,6 +285,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
         ring->avail += n;
         ND("tx completed [%d] -> hwavail %d\n", n, kring->nr_hwavail);
     }
+    IFRATE(rate_ctx.new.txsync++);
 
     return 0;
 }
@@ -259,6 +334,7 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
         if (n) {
             kring->nr_ntc = j;
             kring->nr_hwavail += n;
+            IFRATE(rate_ctx.new.txpkt += n);
         }
         kring->nr_kflags &= ~NKR_PENDINTR;
     }
@@ -287,6 +363,7 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
     }
     /* Tell userspace that there are new packets. */
     ring->avail = kring->nr_hwavail - resvd;
+    IFRATE(rate_ctx.new.rxsync++);
 
     return 0;
 }
