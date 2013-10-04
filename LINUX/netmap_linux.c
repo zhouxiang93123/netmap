@@ -243,6 +243,15 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
 
     while (ntc != hwcur && (kring->tx_pool[ntc] == NULL
                 || atomic_read(&kring->tx_pool[ntc]->users) == 1)) {
+        if (unlikely(kring->tx_pool[ntc] == NULL)) {
+            kring->tx_pool[ntc] = alloc_skb(1500, GFP_ATOMIC);
+            if (unlikely(!kring->tx_pool[ntc])) {
+                D("mbuf allocation failed");
+                return -ENOMEM;
+            }
+        } else {
+            skb_trim(kring->tx_pool[ntc], 0);
+        }
         if (unlikely(++ntc == num_slots)) {
             ntc = 0;
         }
@@ -300,11 +309,8 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
             /* Tale a sk_buff from the tx pool and copy in the user packet. */
             skb = kring->tx_pool[j];
             if (unlikely(!skb)) {
-                kring->tx_pool[j] = skb = alloc_skb(1500, GFP_ATOMIC);
-                if (unlikely(!skb)) {
-                    D("mbuf allocation failed");
-                    return netmap_ring_reinit(kring);
-                }
+                D("This should never happen");
+                return netmap_ring_reinit(kring);
             }
             /* TODO Support the slot flags (NS_FRAG, NS_INDIRECT). */
             skb_copy_to_linear_data(skb, addr, len); // skb_store_bits(skb, 0, addr, len);
