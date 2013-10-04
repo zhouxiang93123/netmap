@@ -187,6 +187,7 @@ struct netmap_kring {
         /* Generic netmap adapter support. This allows to use netmap with a device driver
            which doesn't support netmap. */
         atomic_t tx_completed;          /* Completed transmissions. */
+        struct sk_buff **tx_pool;
         struct sk_buff_head rx_queue;   /* A queue for intercepted rx sk_buffs. */
         u_int nr_ntc;                   /* Emulation of a next-to-clean RX ring pointer. */
 #endif /* linux */

@@ -111,11 +111,12 @@ rx_handler_result_t generic_netmap_rx_handler(struct sk_buff **pskb)
 }
 
 /* Enable/disable netmap mode for a generic network interface. */
-int
-generic_netmap_register(struct ifnet *ifp, int enable)
+int generic_netmap_register(struct ifnet *ifp, int enable)
 {
     struct netmap_adapter *na = NA(ifp);
-    int error = 0;
+    struct sk_buff *skb;
+    int error;
+    int i;
 
     if (!na)
         return EINVAL;
@@ -127,44 +128,61 @@ generic_netmap_register(struct ifnet *ifp, int enable)
     }
 #endif  /* GNA_RAW_XMIT */
 
-    rtnl_lock();
-
     if (enable) { /* Enable netmap mode. */
-        ifp->if_capenable |= IFCAP_NETMAP;
-#ifdef GNA_RAW_XMIT
-        na->if_transmit = (void *)ifp->netdev_ops;
-        ifp->netdev_ops = &na->nm_ndo;
-#endif  /* GNA_RAW_XMIT */
         /* Initialize the queue structure, since the generic_netmap_rx_handler() callback can
            be called as soon after netdev_rx_handler_register() returns. */
         skb_queue_head_init(&na->rx_rings[0].rx_queue);
         na->rx_rings[0].nr_ntc = 0;
         NM_ATOMIC_SET(&na->tx_rings[0].tx_completed, 0);
+        na->tx_rings[0].tx_pool = kmalloc(na->num_tx_desc * sizeof(struct sk_buff *), GFP_ATOMIC);
+        if (!na->tx_rings[0].tx_pool) {
+            D("tx_pool allocation failed");
+            error = ENOMEM;
+            goto alloc_tx_pool;
+        }
+        for (i=0; i<na->num_tx_desc; i++) {
+            skb = alloc_skb(1500, GFP_ATOMIC); //XXX 1500 ?
+            if (!skb) {
+                D("tx_pool[%d] allocation failed", i);
+                error = ENOMEM;
+                goto alloc_sk_buffs;
+            }
+            na->tx_rings[0].tx_pool[i] = skb;
+        }
+        rtnl_lock();
         error = netdev_rx_handler_register(ifp, &generic_netmap_rx_handler, na);
         if (error) {
             D("netdev_rx_handler_register() failed");
-            rtnl_unlock();
-            return error;
+            goto register_handler;
         }
+        ifp->if_capenable |= IFCAP_NETMAP;
+#ifdef GNA_RAW_XMIT
+        na->if_transmit = (void *)ifp->netdev_ops;
+        ifp->netdev_ops = &na->nm_ndo;
+#endif  /* GNA_RAW_XMIT */
 #ifdef RATE
         if (rate_ctx.refcount == 0) {
             D("setup_timer()");
             memset(&rate_ctx, 0, sizeof(rate_ctx));
             setup_timer(&rate_ctx.timer, &rate_callback, (unsigned long)&rate_ctx);
-            error = mod_timer(&rate_ctx.timer, jiffies + msecs_to_jiffies(1500));
-            if (error) {
+            if (mod_timer(&rate_ctx.timer, jiffies + msecs_to_jiffies(1500))) {
                 D("[v1000] Error: mod_timer()");
             }
         }
         rate_ctx.refcount++;
 #endif
     } else { /* Disable netmap mode. */
+        rtnl_lock();
         ifp->if_capenable &= ~IFCAP_NETMAP;
 #ifdef GNA_RAW_XMIT
         ifp->netdev_ops = (void *)na->if_transmit;
 #endif  /* GNA_RAW_XMIT */
         netdev_rx_handler_unregister(ifp);
         skb_queue_purge(&na->rx_rings[0].rx_queue);
+        for (i=0; i<na->num_tx_desc; i++) {
+            kfree_skb(na->tx_rings[0].tx_pool[i]);
+        }
+        kfree(na->rx_rings[0].tx_pool);
 #ifdef RATE
         if (--rate_ctx.refcount == 0) {
             D("del_timer()");
@@ -177,7 +195,22 @@ generic_netmap_register(struct ifnet *ifp, int enable)
 
 #ifdef GNA_RAW_XMIT
     error = ifp->netdev_ops->ndo_open(ifp);
+    if (error) {
+        goto alloc_sk_buffs;
+    }
 #endif  /* GNA_RAW_XMIT */
+
+    return 0;
+
+register_handler:
+    rtnl_unlock();
+alloc_sk_buffs:
+    i--;
+    for (; i>=0; i--) {
+        kfree_skb(na->tx_rings[0].tx_pool[i]);
+    }
+    kfree(na->rx_rings[0].tx_pool);
+alloc_tx_pool:
 
     return error;
 }
@@ -213,6 +246,15 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
     struct netmap_kring *kring = &na->tx_rings[ring_nr];
     struct netmap_ring *ring = kring->ring;
     u_int j, k, n = 0, lim = kring->nkr_num_slots - 1;
+
+    /* Record completed transmissions using tx_completed and update hwavail/avail. */
+    n = NM_ATOMIC_READ_AND_CLEAR(&kring->tx_completed);
+    if (n) {
+        kring->nr_hwavail += n;
+        ring->avail += n;
+        ND("tx completed [%d] -> hwavail %d\n", n, kring->nr_hwavail);
+    }
+    IFRATE(rate_ctx.new.txsync++);
 
     if (!netif_carrier_ok(ifp)) {
         return 0;
@@ -277,15 +319,6 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
         IFRATE(rate_ctx.new.txpkt += n);
         ND("tx #%d, hwavail = %d\n", n, kring->nr_hwavail);
     }
-
-    /* Record completed transmissions using tx_completed and update hwavail/avail. */
-    n = NM_ATOMIC_READ_AND_CLEAR(&kring->tx_completed);
-    if (n) {
-        kring->nr_hwavail += n;
-        ring->avail += n;
-        ND("tx completed [%d] -> hwavail %d\n", n, kring->nr_hwavail);
-    }
-    IFRATE(rate_ctx.new.txsync++);
 
     return 0;
 }
