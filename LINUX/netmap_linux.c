@@ -133,7 +133,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
            be called as soon after netdev_rx_handler_register() returns. */
         skb_queue_head_init(&na->rx_rings[0].rx_queue);
         na->rx_rings[0].nr_ntc = 0;
-        NM_ATOMIC_SET(&na->tx_rings[0].tx_completed, 0);
+        na->tx_rings[0].nr_ntc = 0;
         na->tx_rings[0].tx_pool = kmalloc(na->num_tx_desc * sizeof(struct sk_buff *), GFP_ATOMIC);
         if (!na->tx_rings[0].tx_pool) {
             D("tx_pool allocation failed");
@@ -224,13 +224,34 @@ generic_mbuf_destructor(struct sk_buff *skb)
     struct netmap_adapter *na = (struct netmap_adapter *)(skb_shinfo(skb)->destructor_arg);
 
     if (unlikely(!na || !na->ifp)) {
-        D("na %p na->ifp %p\n", na, na ? na->ifp : 0);
+        D("ERROR: na %p na->ifp %p\n", na, na ? na->ifp : 0);
         return;
     }
 
-    NM_ATOMIC_INC(&na->tx_rings[0].tx_completed);
     netmap_irq_generic(na->ifp, 0, NULL, 1);
     IFRATE(rate_ctx.new.txirq++);
+}
+
+/* Record completed transmissions and update hwavail/avail. */
+static int
+generic_netmap_tx_clean(struct netmap_kring *kring)
+{
+    u_int num_slots = kring->nkr_num_slots;
+    u_int ntc = kring->nr_ntc;
+    u_int n = 0;
+
+    while (kring->tx_pool[ntc] == NULL || atomic_read(&kring->tx_pool[ntc]->users) == 1) {
+        if (unlikely(++ntc == num_slots)) {
+            ntc = 0;
+        }
+        n++;
+    }
+    kring->nr_ntc = ntc;
+    kring->nr_hwavail += n;
+    kring->ring->avail += n;
+    ND("tx completed [%d] -> hwavail %d\n", n, kring->nr_hwavail);
+
+    return n;
 }
 
 /* The generic txsync method transforms netmap buffers in sk_buffs and the invokes the
@@ -245,16 +266,11 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 #endif
     struct netmap_kring *kring = &na->tx_rings[ring_nr];
     struct netmap_ring *ring = kring->ring;
-    u_int j, k, n = 0, lim = kring->nkr_num_slots - 1;
+    u_int j, k, n = 0, lim = kring->nkr_num_slots - 1, e;
 
-    /* Record completed transmissions using tx_completed and update hwavail/avail. */
-    n = NM_ATOMIC_READ_AND_CLEAR(&kring->tx_completed);
-    if (n) {
-        kring->nr_hwavail += n;
-        ring->avail += n;
-        ND("tx completed [%d] -> hwavail %d\n", n, kring->nr_hwavail);
-    }
     IFRATE(rate_ctx.new.txsync++);
+
+    generic_netmap_tx_clean(kring);
 
     if (!netif_carrier_ok(ifp)) {
         return 0;
@@ -279,17 +295,19 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
             if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
                 return netmap_ring_reinit(kring);
             }
-            /* Allocate a new mbuf for transmission and copy in the user packet. */
-            skb = alloc_skb(len, GFP_ATOMIC);
+            /* Tale a sk_buff from the tx pool and copy in the user packet. */
+            skb = kring->tx_pool[j];
             if (unlikely(!skb)) {
-                D("mbuf allocation failed\n");
-                return netmap_ring_reinit(kring);
+                kring->tx_pool[j] = skb = alloc_skb(1500, GFP_ATOMIC);
+                if (unlikely(!skb)) {
+                    D("mbuf allocation failed");
+                    return netmap_ring_reinit(kring);
+                }
             }
             /* TODO Support the slot flags (NS_FRAG, NS_INDIRECT). */
             skb_copy_to_linear_data(skb, addr, len); // skb_store_bits(skb, 0, addr, len);
             skb_put(skb, len);
-            skb->destructor = &generic_mbuf_destructor;
-            skb_shinfo(skb)->destructor_arg = na;
+            atomic_inc(&skb->users);
 #ifdef GNA_RAW_XMIT
             tx_ret = ops->ndo_start_xmit(skb, ifp);
 #else   /* GNA_RAW_XMIT */
@@ -304,9 +322,30 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
                     skb->destructor = NULL;
                     kfree_skb(skb);
 #endif  /* GNA_RAW_XMIT */
+                    e = (kring->nr_ntc + ((((lim + 1 + j) - kring->nr_ntc) % (lim + 1)) / 2)) % (lim + 1);
+                    if (unlikely(e > lim)) {
+                        D("This cannot happen");
+                        e = 0;
+                    }
+                    skb = kring->tx_pool[e];
+                    if (unlikely(!skb)) {
+                        D("ERROR: This should never happen");
+                        return netmap_ring_reinit(kring);
+                    }
+                    kring->tx_pool[e] = NULL;
+                    skb_shinfo(skb)->destructor_arg = na;
+                    skb->destructor = &generic_mbuf_destructor;
+                    // XXX wmb()
+                    /* atomic_dec(&skb->users); */
+                    /* Decrement the refcount an free it if we have the last one. */
+                    kfree_skb(skb);
+                    smp_mb();
+                    if (unlikely(generic_netmap_tx_clean(kring))) {
+                        continue;
+                    }
                     break;
                 }
-                D("start_xmit failed: HARD ERROR\n");
+                D("start_xmit failed: HARD ERROR %d\n", tx_ret);
                 return netmap_ring_reinit(kring);
             }
             slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
