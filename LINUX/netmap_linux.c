@@ -224,7 +224,7 @@ generic_mbuf_destructor(struct sk_buff *skb)
     struct netmap_adapter *na = (struct netmap_adapter *)(skb_shinfo(skb)->destructor_arg);
 
     if (unlikely(!na || !na->ifp)) {
-        D("ERROR: na %p na->ifp %p\n", na, na ? na->ifp : 0);
+        D("ERROR: na %p na->ifp %p", na, na ? na->ifp : 0);
         return;
     }
 
@@ -238,9 +238,11 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
 {
     u_int num_slots = kring->nkr_num_slots;
     u_int ntc = kring->nr_ntc;
+    u_int hwcur = kring->nr_hwcur;
     u_int n = 0;
 
-    while (kring->tx_pool[ntc] == NULL || atomic_read(&kring->tx_pool[ntc]->users) == 1) {
+    while (ntc != hwcur && (kring->tx_pool[ntc] == NULL
+                || atomic_read(&kring->tx_pool[ntc]->users) == 1)) {
         if (unlikely(++ntc == num_slots)) {
             ntc = 0;
         }
@@ -249,7 +251,7 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
     kring->nr_ntc = ntc;
     kring->nr_hwavail += n;
     kring->ring->avail += n;
-    ND("tx completed [%d] -> hwavail %d\n", n, kring->nr_hwavail);
+    ND("tx completed [%d] -> hwavail %d", n, kring->nr_hwavail);
 
     return n;
 }
@@ -316,7 +318,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
             tx_ret = dev_queue_xmit(skb);
 #endif  /* GNA_RAW_XMIT */
             if (unlikely(tx_ret != GNA_TX_OK)) {
-                ND("start_xmit failed: err %d [%d,%d,%d]\n", tx_ret, j, k, kring->nr_hwavail);
+                ND("start_xmit failed: err %d [%d,%d,%d]", tx_ret, j, k, kring->nr_hwavail);
                 if (likely(tx_ret == GNA_TX_FAIL)) {
 #ifdef GNA_RAW_XMIT
                     skb->destructor = NULL;
@@ -327,7 +329,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
                         D("This cannot happen");
                         e = 0;
                     }
-                    ND("Event at %d\n", e);
+                    ND("Event at %d", e);
                     skb = kring->tx_pool[e];
                     if (unlikely(!skb)) {
                         D("ERROR: This should never happen");
@@ -346,7 +348,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
                     }
                     break;
                 }
-                D("start_xmit failed: HARD ERROR %d\n", tx_ret);
+                D("start_xmit failed: HARD ERROR %d", tx_ret);
                 return netmap_ring_reinit(kring);
             }
             slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
@@ -357,7 +359,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
         kring->nr_hwcur = j;
         kring->nr_hwavail -= n;
         IFRATE(rate_ctx.new.txpkt += n);
-        ND("tx #%d, hwavail = %d\n", n, kring->nr_hwavail);
+        ND("tx #%d, hwavail = %d", n, kring->nr_hwavail);
     }
 
     return 0;
@@ -458,9 +460,9 @@ generic_netmap_attach(struct ifnet *ifp)
     na.nm_txsync = &generic_netmap_txsync;
     na.nm_rxsync = &generic_netmap_rxsync;
 
-    ND("[GNA] num_tx_queues(%d), real_num_tx_queues(%d), len(%lu)\n", ifp->num_tx_queues,
+    ND("[GNA] num_tx_queues(%d), real_num_tx_queues(%d), len(%lu)", ifp->num_tx_queues,
                                         ifp->real_num_tx_queues, ifp->tx_queue_len);
-    ND("[GNA] num_rx_queues(%d), real_num_rx_queues(%d)\n", ifp->num_rx_queues,
+    ND("[GNA] num_rx_queues(%d), real_num_rx_queues(%d)", ifp->num_rx_queues,
                                                             ifp->real_num_rx_queues);
 
     return netmap_attach(&na, 1);
