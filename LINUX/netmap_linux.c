@@ -327,6 +327,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
                         D("This cannot happen");
                         e = 0;
                     }
+                    ND("Event at %d\n", e);
                     skb = kring->tx_pool[e];
                     if (unlikely(!skb)) {
                         D("ERROR: This should never happen");
