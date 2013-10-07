@@ -3726,9 +3726,9 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		 * destination port
 		 */
 		if (unlikely(dst_na == NULL))
-			continue;
+			goto cleanup;
 		if (dst_na->na_flags & NAF_SW_ONLY)
-			continue;
+			goto cleanup;
 		dst_ifp = dst_na->ifp;
 		/*
 		 * The interface may be in !netmap mode in two cases:
@@ -3737,7 +3737,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		 */
 		if (unlikely(!(dst_ifp->if_capenable & IFCAP_NETMAP))) {
 			ND("not in netmap mode!");
-			continue;
+			goto cleanup;
 		}
 
 		/* there is at least one either unicast or broadcast packet */
@@ -3777,7 +3777,7 @@ retry:
 		mtx_lock(&kring->q_lock);
 		if (kring->nkr_stopped) {
 			mtx_unlock(&kring->q_lock);
-			continue;
+			goto cleanup;
 		}
 		/* on physical interfaces, do a txsync to recover
 		 * slots for packets already transmitted.
@@ -3927,6 +3927,7 @@ retry:
 		    if (still_locked)
 			mtx_unlock(&kring->q_lock);
 		}
+cleanup:
 		d->bq_head = d->bq_tail = NM_FT_NULL; /* cleanup */
 		d->bq_len = 0;
 	}
