@@ -27,19 +27,21 @@ N="$1"  # number of TX kthreads minus one
 if [ -z "$1" ]; then
     N=0
 fi
+NCPUS=7  # number of CPUs on your machine minus one
 IF="enp1s0f1"
 DST_IP="10.216.8.1"
 DST_MAC="00:1b:21:80:e7:d9"
 PKT_COUNT="10000000"
 PKT_SIZE="60"
+CLONE_SKB="10000"
 
 
 # Load pktgen kernel module
 modprobe pktgen
 
 
-# Clean the configuration for all the CPU-kthread (from 0 to 7)
-IDX=$(seq 0 1 7)
+# Clean the configuration for all the CPU-kthread (from 0 to ${NCPUS})
+IDX=$(seq 0 1 ${NCPUS})
 for cpu in ${IDX}; do
     PGDEV="/proc/net/pktgen/kpktgend_${cpu}"
     echo "Removing all devices (${cpu})"
@@ -58,7 +60,7 @@ for cpu in ${IDX}; do
     PGDEV="/proc/net/pktgen/${IF}@${cpu}"
     echo "Configuring $PGDEV"
     pgset "count ${PKT_COUNT}"
-    pgset "clone_skb 10000"
+    pgset "clone_skb ${CLONE_SKB}"
     pgset "pkt_size ${PKT_SIZE}"
     pgset "delay 0"
     pgset "dst $DST_IP"

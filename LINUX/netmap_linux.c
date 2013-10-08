@@ -6,7 +6,7 @@
 
 
 /* ====================== STUFF DEFINED in netmap.c ===================== */
-// XXX Why don't we use another header?
+// XXX move it to netmap_kern.h
 struct netmap_priv_d {
 	struct netmap_if * volatile np_nifp;	/* netmap if descriptor. */
 
@@ -81,15 +81,6 @@ static struct rate_context rate_ctx;
 #endif
 
 
-//#define GNA_RAW_XMIT   /* Call ndo_start_xmit() directly (UNSAFE). */
-#ifdef GNA_RAW_XMIT
-#define GNA_TX_OK       NETDEV_TX_OK
-#define GNA_TX_FAIL     NETDEV_TX_BUSY
-#else   /* ! GNA_RAW_XMIT */
-#define GNA_TX_OK       NET_XMIT_SUCCESS
-#define GNA_TX_FAIL     NET_XMIT_DROP
-#endif /* ! GNA_RAW_XMIT */
-
 /* This handler is registered within the attached net_device in the Linux RX subsystem,
    so that every sk_buff passed up by the driver can be stolen to the network stack.
    Stolen packets are put in a queue where the generic_netmap_rxsync() callback can
@@ -110,6 +101,8 @@ rx_handler_result_t generic_netmap_rx_handler(struct sk_buff **pskb)
     return RX_HANDLER_CONSUMED;
 }
 
+//#define REG_RESET
+
 /* Enable/disable netmap mode for a generic network interface. */
 int generic_netmap_register(struct ifnet *ifp, int enable)
 {
@@ -121,12 +114,12 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
     if (!na)
         return EINVAL;
 
-#ifdef GNA_RAW_XMIT
+#ifdef REG_RESET
     error = ifp->netdev_ops->ndo_stop(ifp);
     if (error) {
         return error;
     }
-#endif  /* GNA_RAW_XMIT */
+#endif /* REG_RESET */
 
     if (enable) { /* Enable netmap mode. */
         /* Initialize the queue structure, since the generic_netmap_rx_handler() callback can
@@ -156,10 +149,6 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
             goto register_handler;
         }
         ifp->if_capenable |= IFCAP_NETMAP;
-#ifdef GNA_RAW_XMIT
-        na->if_transmit = (void *)ifp->netdev_ops;
-        ifp->netdev_ops = &na->nm_ndo;
-#endif  /* GNA_RAW_XMIT */
 #ifdef RATE
         if (rate_ctx.refcount == 0) {
             D("setup_timer()");
@@ -174,9 +163,6 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
     } else { /* Disable netmap mode. */
         rtnl_lock();
         ifp->if_capenable &= ~IFCAP_NETMAP;
-#ifdef GNA_RAW_XMIT
-        ifp->netdev_ops = (void *)na->if_transmit;
-#endif  /* GNA_RAW_XMIT */
         netdev_rx_handler_unregister(ifp);
         skb_queue_purge(&na->rx_rings[0].rx_queue);
         for (i=0; i<na->num_tx_desc; i++) {
@@ -193,12 +179,12 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
 
     rtnl_unlock();
 
-#ifdef GNA_RAW_XMIT
+#ifdef REG_RESET
     error = ifp->netdev_ops->ndo_open(ifp);
     if (error) {
         goto alloc_sk_buffs;
     }
-#endif  /* GNA_RAW_XMIT */
+#endif
 
     return 0;
 
@@ -221,14 +207,10 @@ alloc_tx_pool:
 static void
 generic_mbuf_destructor(struct sk_buff *skb)
 {
-    struct netmap_adapter *na = (struct netmap_adapter *)(skb_shinfo(skb)->destructor_arg);
+    void *arg = skb_shinfo(skb)->destructor_arg;
 
-    if (unlikely(!na || !na->ifp)) {
-        D("ERROR: na %p na->ifp %p", na, na ? na->ifp : 0);
-        return;
-    }
-
-    netmap_irq_generic(na->ifp, 0, NULL, 1);
+    ND("Tx irq (%p)", arg);
+    netmap_irq_generic(skb->dev, 0, NULL, 1);
     IFRATE(rate_ctx.new.txirq++);
 }
 
@@ -265,6 +247,34 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
     return n;
 }
 
+static int generic_set_tx_event(struct netmap_kring *kring, u_int j)
+{
+    u_int num_slots =  kring->nkr_num_slots, e;
+    struct sk_buff *skb;
+
+    e = (kring->nr_ntc + ((((num_slots + j) - kring->nr_ntc) % (num_slots)) / 2)) % (num_slots);
+    if (unlikely(e >= num_slots)) {
+        D("This cannot happen");
+        e = 0;
+    }
+    ND("Event at %d", e);
+    skb = kring->tx_pool[e];
+    if (unlikely(!skb)) {
+        D("ERROR: This should never happen");
+        return -EINVAL;
+    }
+    kring->tx_pool[e] = NULL;
+    skb_shinfo(skb)->destructor_arg = NULL + e;
+    skb->destructor = &generic_mbuf_destructor;
+    // XXX wmb()
+    /* atomic_dec(&skb->users); */
+    /* Decrement the refcount an free it if we have the last one. */
+    kfree_skb(skb);
+    smp_mb();
+
+    return generic_netmap_tx_clean(kring);
+}
+
 /* The generic txsync method transforms netmap buffers in sk_buffs and the invokes the
    driver ndo_start_xmit() method. This is not done directly, but using dev_queue_xmit(),
    since it implements the TX flow control (and takes some locks). */
@@ -272,12 +282,9 @@ static int
 generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
     struct netmap_adapter *na = NA(ifp);
-#ifdef GNA_RAW_XMIT
-    struct net_device_ops * ops = (struct net_device_ops *)na->if_transmit;
-#endif
     struct netmap_kring *kring = &na->tx_rings[ring_nr];
     struct netmap_ring *ring = kring->ring;
-    u_int j, k, n = 0, lim = kring->nkr_num_slots - 1, e;
+    u_int j, k, n = 0, lim = kring->nkr_num_slots - 1;
 
     IFRATE(rate_ctx.new.txsync++);
 
@@ -316,40 +323,13 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
             skb_copy_to_linear_data(skb, addr, len); // skb_store_bits(skb, 0, addr, len);
             skb_put(skb, len);
             atomic_inc(&skb->users);
-#ifdef GNA_RAW_XMIT
-            tx_ret = ops->ndo_start_xmit(skb, ifp);
-#else   /* GNA_RAW_XMIT */
             skb->dev = ifp;
             skb->priority = 100;
             tx_ret = dev_queue_xmit(skb);
-#endif  /* GNA_RAW_XMIT */
-            if (unlikely(tx_ret != GNA_TX_OK)) {
+            if (unlikely(tx_ret != NET_XMIT_SUCCESS)) {
                 ND("start_xmit failed: err %d [%d,%d,%d]", tx_ret, j, k, kring->nr_hwavail);
-                if (likely(tx_ret == GNA_TX_FAIL)) {
-#ifdef GNA_RAW_XMIT
-                    skb->destructor = NULL;
-                    kfree_skb(skb);
-#endif  /* GNA_RAW_XMIT */
-                    e = (kring->nr_ntc + ((((lim + 1 + j) - kring->nr_ntc) % (lim + 1)) / 2)) % (lim + 1);
-                    if (unlikely(e > lim)) {
-                        D("This cannot happen");
-                        e = 0;
-                    }
-                    ND("Event at %d", e);
-                    skb = kring->tx_pool[e];
-                    if (unlikely(!skb)) {
-                        D("ERROR: This should never happen");
-                        return netmap_ring_reinit(kring);
-                    }
-                    kring->tx_pool[e] = NULL;
-                    skb_shinfo(skb)->destructor_arg = na;
-                    skb->destructor = &generic_mbuf_destructor;
-                    // XXX wmb()
-                    /* atomic_dec(&skb->users); */
-                    /* Decrement the refcount an free it if we have the last one. */
-                    kfree_skb(skb);
-                    smp_mb();
-                    if (unlikely(generic_netmap_tx_clean(kring))) {
+                if (likely(tx_ret == NET_XMIT_DROP)) {
+                    if (unlikely(generic_set_tx_event(kring, j) > 0)) {
                         continue;
                     }
                     break;
@@ -362,9 +342,13 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
                 j = 0;
             n++;
         }
+
         kring->nr_hwcur = j;
         kring->nr_hwavail -= n;
         IFRATE(rate_ctx.new.txpkt += n);
+        if (ring->avail < 1) {
+            generic_set_tx_event(kring, j);
+        }
         ND("tx #%d, hwavail = %d", n, kring->nr_hwavail);
     }
 
