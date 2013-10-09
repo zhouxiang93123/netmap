@@ -207,8 +207,6 @@ alloc_tx_pool:
 static void
 generic_mbuf_destructor(struct sk_buff *skb)
 {
-    void *arg = skb_shinfo(skb)->destructor_arg;
-
     ND("Tx irq (%p)", arg);
     netmap_irq_generic(skb->dev, 0, NULL, 1);
     IFRATE(rate_ctx.new.txirq++);
@@ -247,16 +245,23 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
     return n;
 }
 
-static int generic_set_tx_event(struct netmap_kring *kring, u_int j)
+static inline u_int generic_tx_event_middle(struct netmap_kring *kring, u_int j)
 {
-    u_int num_slots =  kring->nkr_num_slots, e;
-    struct sk_buff *skb;
+    u_int n = kring->nkr_num_slots;
+    u_int e = (kring->nr_ntc + ((((n + j) - kring->nr_ntc) % (n)) / 2)) % (n);
 
-    e = (kring->nr_ntc + ((((num_slots + j) - kring->nr_ntc) % (num_slots)) / 2)) % (num_slots);
-    if (unlikely(e >= num_slots)) {
+    if (unlikely(e >= n)) {
         D("This cannot happen");
         e = 0;
     }
+
+    return e;
+}
+
+static int generic_set_tx_event(struct netmap_kring *kring, u_int e)
+{
+    struct sk_buff *skb;
+
     ND("Event at %d", e);
     skb = kring->tx_pool[e];
     if (unlikely(!skb)) {
@@ -264,15 +269,16 @@ static int generic_set_tx_event(struct netmap_kring *kring, u_int j)
         return -EINVAL;
     }
     kring->tx_pool[e] = NULL;
-    skb_shinfo(skb)->destructor_arg = NULL + e;
+    //skb_shinfo(skb)->destructor_arg = NULL + e;
     skb->destructor = &generic_mbuf_destructor;
-    // XXX wmb()
-    /* atomic_dec(&skb->users); */
+    // XXX wmb() ?
     /* Decrement the refcount an free it if we have the last one. */
     kfree_skb(skb);
     smp_mb();
 
-    return generic_netmap_tx_clean(kring);
+    /* Double check here is redundant, because the txsync callback is called twice.
+    return generic_netmap_tx_clean(kring); */
+    return 0;
 }
 
 /* The generic txsync method transforms netmap buffers in sk_buffs and the invokes the
@@ -329,7 +335,8 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
             if (unlikely(tx_ret != NET_XMIT_SUCCESS)) {
                 ND("start_xmit failed: err %d [%d,%d,%d]", tx_ret, j, k, kring->nr_hwavail);
                 if (likely(tx_ret == NET_XMIT_DROP)) {
-                    if (unlikely(generic_set_tx_event(kring, j) > 0)) {
+                    if (unlikely(generic_set_tx_event(kring,
+                                            generic_tx_event_middle(kring, j)) > 0)) {
                         continue;
                     }
                     break;
@@ -347,7 +354,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
         kring->nr_hwavail -= n;
         IFRATE(rate_ctx.new.txpkt += n);
         if (ring->avail < 1) {
-            generic_set_tx_event(kring, j);
+            generic_set_tx_event(kring, generic_tx_event_middle(kring, j));
         }
         ND("tx #%d, hwavail = %d", n, kring->nr_hwavail);
     }
