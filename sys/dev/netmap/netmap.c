@@ -965,42 +965,6 @@ netmap_if_new(const char *ifname, struct netmap_adapter *na)
 }
 
 
-/* Structure associated to each thread which registered an interface.
- *
- * The first 4 fields of this structure are written by NIOCREGIF and
- * read by poll() and NIOC?XSYNC.
- * There is low contention among writers (actually, a correct user program
- * should have no contention among writers) and among writers and readers,
- * so we use a single global lock to protect the structure initialization.
- * Since initialization involves the allocation of memory, we reuse the memory
- * allocator lock.
- * Read access to the structure is lock free. Readers must check that
- * np_nifp is not NULL before using the other fields.
- * If np_nifp is NULL initialization has not been performed, so they should
- * return an error to userlevel.
- *
- * The ref_done field is used to regulate access to the refcount in the
- * memory allocator. The refcount must be incremented at most once for
- * each open("/dev/netmap"). The increment is performed by the first
- * function that calls netmap_get_memory() (currently called by
- * mmap(), NIOCGINFO and NIOCREGIF).
- * If the refcount is incremented, it is then decremented when the
- * private structure is destroyed.
- */
-struct netmap_priv_d {
-	struct netmap_if * volatile np_nifp;	/* netmap if descriptor. */
-
-	struct ifnet	*np_ifp;	/* device for which we hold a ref. */
-	int		np_ringid;	/* from the ioctl */
-	u_int		np_qfirst, np_qlast;	/* range of rings to scan */
-	uint16_t	np_txpoll;
-
-	struct netmap_mem_d *np_mref;	/* use with NMG_LOCK held */
-#ifdef __FreeBSD__
-	int		np_refcount;	/* use with NMG_LOCK held */
-#endif /* __FreeBSD__ */
-};
-
 /* grab a reference to the memory allocator, if we don't have one already.  The
  * reference is taken from the netmap_adapter registered with the priv.
  *

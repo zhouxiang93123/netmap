@@ -7,21 +7,6 @@
 
 
 /* ====================== STUFF DEFINED in netmap.c ===================== */
-// XXX move it to netmap_kern.h
-struct netmap_priv_d {
-	struct netmap_if * volatile np_nifp;	/* netmap if descriptor. */
-
-	struct ifnet	*np_ifp;	/* device for which we hold a ref. */
-	int		np_ringid;	/* from the ioctl */
-	u_int		np_qfirst, np_qlast;	/* range of rings to scan */
-	uint16_t	np_txpoll;
-
-	struct netmap_mem_d *np_mref;	/* use with NMG_LOCK held */
-#ifdef __FreeBSD__
-	int		np_refcount;	/* use with NMG_LOCK held */
-#endif /* __FreeBSD__ */
-};
-
 int netmap_get_memory(struct netmap_priv_d* p);
 void netmap_dtor(void *data);
 int netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td);
