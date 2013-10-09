@@ -1,5 +1,6 @@
-#include <linux/rtnetlink.h>  /* rtnl_[un]lock() */
 #include "bsd_glue.h"
+#include <linux/rtnetlink.h>    /* rtnl_[un]lock() */
+#include <linux/ethtool.h>      /* struct ethtool_ops, get_ringparam */
 #include <net/netmap.h>
 #include <dev/netmap/netmap_kern.h>
 #include <dev/netmap/netmap_mem2.h>
@@ -440,20 +441,40 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
     return 0;
 }
 
+/* Use ethtool to find the current NIC rings lengths, so that the netmap rings can be
+   have the same lengths. */
+static int
+generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx)
+{
+    struct ethtool_ringparam rp;
+
+    if (ifp->ethtool_ops && ifp->ethtool_ops->get_ringparam) {
+        ifp->ethtool_ops->get_ringparam(ifp, &rp);
+        *tx = rp.tx_pending;
+        *rx = rp.rx_pending;
+    }
+
+    return 0;
+}
+
 /* The generic netmap attach method makes it possible to attach netmap to a network
    interface that doesn't have explicit netmap support. The netmap ring size has no
-   relationship to the NIC ring size: 256 could be a good compromise. However, we
+   relationship to the NIC ring size: 256 could be a good default value. However, we
    usually get the best performance when the netmap ring size matches the NIC ring
    size. Since this function cannot be called by the driver, it is called by get_ifp(). */
 int
 generic_netmap_attach(struct ifnet *ifp)
 {
     struct netmap_adapter na;
+    unsigned int num_tx_desc = 256, num_rx_desc = 256;
+
+    generic_find_num_desc(ifp, &num_tx_desc, &num_rx_desc);
+    D("Netmap ring descriptors: TX = %d, RX = %d\n", num_tx_desc, num_rx_desc);
 
     bzero(&na, sizeof(na));
     na.ifp = ifp;
-    na.num_tx_desc = 512;
-    na.num_rx_desc = 512;
+    na.num_tx_desc = num_tx_desc;
+    na.num_rx_desc = num_rx_desc;
     na.nm_register = &generic_netmap_register;
     na.nm_txsync = &generic_netmap_txsync;
     na.nm_rxsync = &generic_netmap_rxsync;
