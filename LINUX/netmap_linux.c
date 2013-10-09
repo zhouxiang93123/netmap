@@ -442,8 +442,9 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 
 /* The generic netmap attach method makes it possible to attach netmap to a network
    interface that doesn't have explicit netmap support. The netmap ring size has no
-   relationship to the NIC ring size: 256 is a good compromise.
-   Since this function cannot be called by the driver, it is called by get_ifp(). */
+   relationship to the NIC ring size: 256 could be a good compromise. However, we
+   usually get the best performance when the netmap ring size matches the NIC ring
+   size. Since this function cannot be called by the driver, it is called by get_ifp(). */
 int
 generic_netmap_attach(struct ifnet *ifp)
 {
@@ -451,8 +452,8 @@ generic_netmap_attach(struct ifnet *ifp)
 
     bzero(&na, sizeof(na));
     na.ifp = ifp;
-    na.num_tx_desc = 256;
-    na.num_rx_desc = 256;
+    na.num_tx_desc = 512;
+    na.num_rx_desc = 512;
     na.nm_register = &generic_netmap_register;
     na.nm_txsync = &generic_netmap_txsync;
     na.nm_rxsync = &generic_netmap_rxsync;
