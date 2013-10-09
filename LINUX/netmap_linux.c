@@ -102,6 +102,11 @@ rx_handler_result_t generic_netmap_rx_handler(struct sk_buff **pskb)
     return RX_HANDLER_CONSUMED;
 }
 
+static u16 generic_ndo_select_queue(struct ifnet *ifp, struct sk_buff *skb)
+{
+    return 0;
+}
+
 //#define REG_RESET
 
 /* Enable/disable netmap mode for a generic network interface. */
@@ -150,6 +155,10 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
             goto register_handler;
         }
         ifp->if_capenable |= IFCAP_NETMAP;
+        na->if_transmit = (void *)ifp->netdev_ops;
+        na->generic_ndo = *(ifp->netdev_ops);  /* Copy */
+        na->generic_ndo.ndo_select_queue = &generic_ndo_select_queue;  /* Replace a field. */
+        ifp->netdev_ops = &na->generic_ndo;  /* Switch the pointer. */
 #ifdef RATE
         if (rate_ctx.refcount == 0) {
             D("setup_timer()");
@@ -164,6 +173,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
     } else { /* Disable netmap mode. */
         rtnl_lock();
         ifp->if_capenable &= ~IFCAP_NETMAP;
+        ifp->netdev_ops = (void *)na->if_transmit;
         netdev_rx_handler_unregister(ifp);
         skb_queue_purge(&na->rx_rings[0].rx_queue);
         for (i=0; i<na->num_tx_desc; i++) {
