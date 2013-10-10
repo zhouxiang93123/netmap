@@ -72,56 +72,8 @@ static struct rate_context rate_ctx;
 
 #define GENERIC_BUF_SIZE        1500    /* Size of the sk_buffs in the Tx pool. */
 
-enum hrtimer_restart generic_timer_handler(struct hrtimer *t)
-{
-    struct netmap_adapter *na = container_of(t, struct netmap_adapter, mit_timer);
-    unsigned int work_done;
-
-    if (na->mit_pending) {
-        na->mit_pending = 0;
-        netmap_irq_generic(na->ifp, 0, &work_done, 1);
-        IFRATE(rate_ctx.new.rxirq++);
-        hrtimer_forward_now(&na->mit_timer, ktime_set(0, netmap_generic_mit));
-
-        return HRTIMER_RESTART;
-    }
-
-    return HRTIMER_NORESTART;
-}
-
-/* This handler is registered within the attached net_device in the Linux RX subsystem,
-   so that every sk_buff passed up by the driver can be stolen to the network stack.
-   Stolen packets are put in a queue where the generic_netmap_rxsync() callback can
-   extract them. */
-rx_handler_result_t generic_netmap_rx_handler(struct sk_buff **pskb)
-{
-    struct netmap_adapter *na = NA((*pskb)->dev);
-    unsigned int work_done;
-
-    if (unlikely(skb_queue_len(&na->rx_rings[0].rx_queue) > 1024)) {
-        kfree_skb(*pskb);
-    } else {
-        skb_queue_tail(&na->rx_rings[0].rx_queue, *pskb);
-        if (netmap_generic_mit < 32768) {
-            /* When rx mitigation is not used, never filter the notification. */
-            netmap_irq_generic(na->ifp, 0, &work_done, 1);
-            IFRATE(rate_ctx.new.rxirq++);
-        } else {
-            /* Filter the notification when there is a pending timer, otherwise
-               start the timer and don't filter. */
-            if (likely(hrtimer_active(&na->mit_timer))) {
-                /* Record that there is some pending work. */
-                na->mit_pending = 1;
-            } else {
-                netmap_irq_generic(na->ifp, 0, &work_done, 1);
-                IFRATE(rate_ctx.new.rxirq++);
-                hrtimer_start(&na->mit_timer, ktime_set(0, netmap_generic_mit), HRTIMER_MODE_REL);
-            }
-        }
-    }
-
-    return RX_HANDLER_CONSUMED;
-}
+rx_handler_result_t generic_netmap_rx_handler(struct sk_buff **pskb);
+enum hrtimer_restart generic_timer_handler(struct hrtimer *t);
 
 static u16 generic_ndo_select_queue(struct ifnet *ifp, struct sk_buff *skb)
 {
@@ -396,6 +348,60 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
     }
 
     return 0;
+}
+
+enum hrtimer_restart generic_timer_handler(struct hrtimer *t)
+{
+    struct netmap_adapter *na = container_of(t, struct netmap_adapter, mit_timer);
+    unsigned int work_done;
+
+    if (na->mit_pending) {
+        /* Some work arrived while the timer was counting down: Reset the pending work
+           flag, restart the timer and issue a notification. */
+        na->mit_pending = 0;
+        netmap_irq_generic(na->ifp, 0, &work_done, 1);
+        IFRATE(rate_ctx.new.rxirq++);
+        hrtimer_forward_now(&na->mit_timer, ktime_set(0, netmap_generic_mit));
+
+        return HRTIMER_RESTART;
+    }
+
+    /* No pending work? Don't restart the timer. */
+    return HRTIMER_NORESTART;
+}
+
+/* This handler is registered within the attached net_device in the Linux RX subsystem,
+   so that every sk_buff passed up by the driver can be stolen to the network stack.
+   Stolen packets are put in a queue where the generic_netmap_rxsync() callback can
+   extract them. */
+rx_handler_result_t generic_netmap_rx_handler(struct sk_buff **pskb)
+{
+    struct netmap_adapter *na = NA((*pskb)->dev);
+    unsigned int work_done;
+
+    if (unlikely(skb_queue_len(&na->rx_rings[0].rx_queue) > 1024)) {
+        kfree_skb(*pskb);
+    } else {
+        skb_queue_tail(&na->rx_rings[0].rx_queue, *pskb);
+        if (netmap_generic_mit < 32768) {
+            /* When rx mitigation is not used, never filter the notification. */
+            netmap_irq_generic(na->ifp, 0, &work_done, 1);
+            IFRATE(rate_ctx.new.rxirq++);
+        } else {
+            /* Filter the notification when there is a pending timer, otherwise
+               start the timer and don't filter. */
+            if (likely(hrtimer_active(&na->mit_timer))) {
+                /* Record that there is some pending work. */
+                na->mit_pending = 1;
+            } else {
+                netmap_irq_generic(na->ifp, 0, &work_done, 1);
+                IFRATE(rate_ctx.new.rxirq++);
+                hrtimer_start(&na->mit_timer, ktime_set(0, netmap_generic_mit), HRTIMER_MODE_REL);
+            }
+        }
+    }
+
+    return RX_HANDLER_CONSUMED;
 }
 
 /* The generic rxsync() method extracts sk_buffs from the queue filled by
