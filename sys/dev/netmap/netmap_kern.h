@@ -359,6 +359,8 @@ struct netmap_adapter {
 #ifdef linux
 	struct net_device_ops nm_ndo;
         struct net_device_ops generic_ndo;
+        struct hrtimer mit_timer;
+        int mit_pending;
 #endif /* linux */
 };
 

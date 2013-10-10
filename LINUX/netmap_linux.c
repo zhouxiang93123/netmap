@@ -1,6 +1,8 @@
 #include "bsd_glue.h"
 #include <linux/rtnetlink.h>    /* rtnl_[un]lock() */
 #include <linux/ethtool.h>      /* struct ethtool_ops, get_ringparam */
+#include <linux/hrtimer.h>
+
 #include <net/netmap.h>
 #include <dev/netmap/netmap_kern.h>
 #include <dev/netmap/netmap_mem2.h>
@@ -13,6 +15,7 @@ int netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct t
 int netmap_poll(struct cdev *dev, int events, struct thread *td);
 int netmap_init(void);
 void netmap_fini(void);
+extern int netmap_generic_mit;
 
 
 /* ===================== GENERIC NETMAP ADAPTER SUPPORT ================== */
@@ -67,6 +70,25 @@ static struct rate_context rate_ctx;
 #endif
 
 
+#define GENERIC_BUF_SIZE        1500    /* Size of the sk_buffs in the Tx pool. */
+
+enum hrtimer_restart generic_timer_handler(struct hrtimer *t)
+{
+    struct netmap_adapter *na = container_of(t, struct netmap_adapter, mit_timer);
+    unsigned int work_done;
+
+    if (na->mit_pending) {
+        na->mit_pending = 0;
+        netmap_irq_generic(na->ifp, 0, &work_done, 1);
+        IFRATE(rate_ctx.new.rxirq++);
+        hrtimer_forward_now(&na->mit_timer, ktime_set(0, netmap_generic_mit));
+
+        return HRTIMER_RESTART;
+    }
+
+    return HRTIMER_NORESTART;
+}
+
 /* This handler is registered within the attached net_device in the Linux RX subsystem,
    so that every sk_buff passed up by the driver can be stolen to the network stack.
    Stolen packets are put in a queue where the generic_netmap_rxsync() callback can
@@ -74,14 +96,28 @@ static struct rate_context rate_ctx;
 rx_handler_result_t generic_netmap_rx_handler(struct sk_buff **pskb)
 {
     struct netmap_adapter *na = NA((*pskb)->dev);
-    u_int work_done;
+    unsigned int work_done;
 
     if (unlikely(skb_queue_len(&na->rx_rings[0].rx_queue) > 1024)) {
         kfree_skb(*pskb);
     } else {
         skb_queue_tail(&na->rx_rings[0].rx_queue, *pskb);
-        netmap_irq_generic(na->ifp, 0, &work_done, 1);
-        IFRATE(rate_ctx.new.rxirq++);
+        if (netmap_generic_mit < 32768) {
+            /* When rx mitigation is not used, never filter the notification. */
+            netmap_irq_generic(na->ifp, 0, &work_done, 1);
+            IFRATE(rate_ctx.new.rxirq++);
+        } else {
+            /* Filter the notification when there is a pending timer, otherwise
+               start the timer and don't filter. */
+            if (likely(hrtimer_active(&na->mit_timer))) {
+                /* Record that there is some pending work. */
+                na->mit_pending = 1;
+            } else {
+                netmap_irq_generic(na->ifp, 0, &work_done, 1);
+                IFRATE(rate_ctx.new.rxirq++);
+                hrtimer_start(&na->mit_timer, ktime_set(0, netmap_generic_mit), HRTIMER_MODE_REL);
+            }
+        }
     }
 
     return RX_HANDLER_CONSUMED;
@@ -116,6 +152,9 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         /* Initialize the queue structure, since the generic_netmap_rx_handler() callback can
            be called as soon after netdev_rx_handler_register() returns. */
         skb_queue_head_init(&na->rx_rings[0].rx_queue);
+        hrtimer_init(&na->mit_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+        na->mit_timer.function = &generic_timer_handler;
+        na->mit_pending = 0;
         na->rx_rings[0].nr_ntc = 0;
         na->tx_rings[0].nr_ntc = 0;
         na->tx_rings[0].tx_pool = kmalloc(na->num_tx_desc * sizeof(struct sk_buff *), GFP_ATOMIC);
@@ -125,7 +164,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
             goto alloc_tx_pool;
         }
         for (i=0; i<na->num_tx_desc; i++) {
-            skb = alloc_skb(1500, GFP_ATOMIC); //XXX 1500 ?
+            skb = alloc_skb(GENERIC_BUF_SIZE, GFP_ATOMIC);
             if (!skb) {
                 D("tx_pool[%d] allocation failed", i);
                 error = ENOMEM;
@@ -161,6 +200,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         ifp->netdev_ops = (void *)na->if_transmit;
         netdev_rx_handler_unregister(ifp);
         skb_queue_purge(&na->rx_rings[0].rx_queue);
+        hrtimer_cancel(&na->mit_timer);
         for (i=0; i<na->num_tx_desc; i++) {
             kfree_skb(na->tx_rings[0].tx_pool[i]);
         }
@@ -220,7 +260,7 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
     while (ntc != hwcur && (kring->tx_pool[ntc] == NULL
                 || atomic_read(&kring->tx_pool[ntc]->users) == 1)) {
         if (unlikely(kring->tx_pool[ntc] == NULL)) {
-            kring->tx_pool[ntc] = alloc_skb(1500, GFP_ATOMIC);
+            kring->tx_pool[ntc] = alloc_skb(GENERIC_BUF_SIZE, GFP_ATOMIC);
             if (unlikely(!kring->tx_pool[ntc])) {
                 D("mbuf allocation failed");
                 return -ENOMEM;
