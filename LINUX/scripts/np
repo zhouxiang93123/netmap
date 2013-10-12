@@ -291,6 +291,8 @@ function check-patch()
 	mkdir -p log
 	local log="$(realpath log)/$(basename $1)"
 
+	echo -n $1...
+
 	while scripts/vers -b $v1 $v2 -L; do
 		local ksrc=$(build-prep $v1)
 		local tmpdir=$(mktemp -d)
@@ -304,11 +306,12 @@ function check-patch()
 		ok=false
 		make KSRC=$ksrc >$log 2>&1 && ok=true
 		popd >/dev/null
-		[ $ok = true ] || return 1
+		[ $ok = true ] || { echo FAILED; return 1; }
 		rm -rf $tmpdir
 		# compute next version
 		v1=$(scripts/vers $v1 -i)
 	done
+	echo OK
 }
 
 ##
