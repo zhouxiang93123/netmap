@@ -42,15 +42,14 @@
 ##	retrieves the path of <driver> in the linux sources
 ##	for version <version>. The path is output to stdout.
 ##	It uses a local cache to minimize the expensive
-##	checkouts in GITDIR.
+##	file system search.
 function driver-path()
 {
 	cat cache/$2/$1/path 2>/dev/null && return
+	local kern=$(get-kernel $2)
 	mkdir -p cache/$2/$1
 	(
-		cd $GITDIR
-		git checkout netmap-$2 >/dev/null 2>&1
-		git clean -fdx >/dev/null 2>&1
+		cd $kern
 		find drivers/net -name $1
 	) | tee cache/$2/$1/path
 
@@ -118,20 +117,9 @@ function get-range()
 ##	checkouts in GITDIR.
 function get-src()
 {
-	cache=cache/$2/$1/src
-	[ -d $cache ] || {
-		mkdir -p $cache
-		(
-			local _cache=$(realpath $cache)
-			local src=$(driver-path $1 $2)
-			cd $GITDIR
-			git checkout v$2 >/dev/null 2>&1
-			git reset --hard
-			git clean -fdx
-			cp -r $src $_cache
-		)
-	}
-	cp -r $cache/* $3
+	local kern=$(get-kernel $2)
+	local src=$(driver-path $1 $2)
+	cp -r $kern/$src $3
 }
 
 
@@ -240,6 +228,23 @@ function infty()
 	mv -n $last $(scripts/vers $last -s -p 99999 -S4) 2>/dev/null
 }
 
+function get-kernel()
+{
+	local v=$1
+
+	local dst="$(realpath $LINUX_SOURCES)/linux-$v"
+
+	[ -d $dst ] && { echo $dst; return; }
+
+	mkdir -p $dst
+
+	(
+		cd $GITDIR
+		git archive v$v | tar xf - -C $dst 
+	)
+	echo $dst
+}
+
 
 ##
 ## build-prep <version>
@@ -257,17 +262,9 @@ function build-prep()
 {
 	local v=$1
 
-	local dst="$(realpath $LINUX_SOURCES)/linux-$v"
-
-	[ -d $dst ] && { echo $dst; return; }
-
-	mkdir -p $dst
+	local dst=$(get-kernel $v)
 
 	exec 3>&1 4>&2 >$dst.log 2>&1
-	(
-		cd $GITDIR
-		git archive v$v | tar xf - -C $dst 
-	)
 	cp $LINUX_CONFIGS/config-$v $dst/.config  2>/dev/null ||
 	cp $LINUX_CONFIGS/config-all $dst/.config 
 	(
