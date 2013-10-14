@@ -3157,10 +3157,23 @@ nm_bdg_preflush(struct netmap_adapter *na, u_int ring_nr,
 	struct netmap_kring *kring, u_int end)
 {
 	struct netmap_ring *ring = kring->ring;
-	struct nm_bdg_fwd *ft = kring->nkr_ft;
+	struct nm_bdg_fwd *ft;
 	u_int j = kring->nr_hwcur, lim = kring->nkr_num_slots - 1;
 	u_int ft_i = 0;	/* start from 0 */
 	u_int frags = 1; /* how many frags ? */
+	struct nm_bridge *b = na->na_bdg;
+
+	/* To protect against modifications to the bridge we acquire a
+	 * shared lock, waiting if we can sleep (if the source port is
+	 * attached to a user process) or with a trylock otherwise (NICs).
+	 */
+	ND("wait rlock for %d packets", n);
+	if (na->na_flags & NAF_BDG_MAYSLEEP)
+		BDG_RLOCK(b);
+	else if (!BDG_RTRYLOCK(b))
+		return 0;
+	ND(5, "rlock acquired for %d packets", n);
+	ft = kring->nkr_ft;
 
 	for (; likely(j != end); j = nm_next(j, lim)) {
 		struct netmap_slot *slot = &ring->slot[j];
@@ -3195,6 +3208,7 @@ nm_bdg_preflush(struct netmap_adapter *na, u_int ring_nr,
 	}
 	if (ft_i)
 		ft_i = nm_bdg_flush(ft, ft_i, na, ring_nr);
+	BDG_RUNLOCK(b);
 	return j;
 }
 
@@ -3634,17 +3648,6 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 	dst_ents = (struct nm_bdg_q *)(ft + NM_BDG_BATCH_MAX);
 	dsts = (uint16_t *)(dst_ents + NM_BDG_MAXPORTS * NM_BDG_MAXRINGS + 1);
 
-	/* To protect against modifications to the bridge we acquire a
-	 * shared lock, waiting if we can sleep (if the source port is
-	 * attached to a user process) or with a trylock otherwise (NICs).
-	 */
-	ND("wait rlock for %d packets", n);
-	if (na->na_flags & NAF_BDG_MAYSLEEP)
-		BDG_RLOCK(b);
-	else if (!BDG_RTRYLOCK(b))
-		return 0;
-	ND(5, "rlock acquired for %d packets", n);
-
 	/* first pass: find a destination for each packet in the batch */
 	for (i = 0; likely(i < n); i += ft[i].ft_frags) {
 		uint8_t dst_ring = ring_nr; /* default, same ring as origin */
@@ -3933,7 +3936,6 @@ cleanup:
 	}
 	brddst->bq_head = brddst->bq_tail = NM_FT_NULL; /* cleanup */
 	brddst->bq_len = 0;
-	BDG_RUNLOCK(b);
 	return 0;
 }
 
