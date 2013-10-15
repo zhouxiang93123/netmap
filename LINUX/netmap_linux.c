@@ -77,7 +77,7 @@ enum hrtimer_restart generic_timer_handler(struct hrtimer *t);
 
 static u16 generic_ndo_select_queue(struct ifnet *ifp, struct sk_buff *skb)
 {
-    return 0;
+    return skb_get_queue_mapping(skb);
 }
 
 //#define REG_RESET
@@ -88,7 +88,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
     struct netmap_adapter *na = NA(ifp);
     struct sk_buff *skb;
     int error;
-    int i;
+    int i, r;
 
     if (!na)
         return EINVAL;
@@ -108,21 +108,24 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         na->mit_timer.function = &generic_timer_handler;
         na->mit_pending = 0;
         na->rx_rings[0].nr_ntc = 0;
-        na->tx_rings[0].nr_ntc = 0;
-        na->tx_rings[0].tx_pool = kmalloc(na->num_tx_desc * sizeof(struct sk_buff *), GFP_ATOMIC);
-        if (!na->tx_rings[0].tx_pool) {
-            D("tx_pool allocation failed");
-            error = ENOMEM;
-            goto alloc_tx_pool;
-        }
-        for (i=0; i<na->num_tx_desc; i++) {
-            skb = alloc_skb(GENERIC_BUF_SIZE, GFP_ATOMIC);
-            if (!skb) {
-                D("tx_pool[%d] allocation failed", i);
+printk("%d %d\n", na->num_tx_rings, na->num_rx_rings);
+        for (r=0; r<na->num_tx_rings; r++) {
+            na->tx_rings[r].nr_ntc = 0;
+            na->tx_rings[r].tx_pool = kmalloc(na->num_tx_desc * sizeof(struct sk_buff *), GFP_ATOMIC);
+            if (!na->tx_rings[r].tx_pool) {
+                D("tx_pool allocation failed");
                 error = ENOMEM;
-                goto alloc_sk_buffs;
+                goto alloc_tx_pool;
             }
-            na->tx_rings[0].tx_pool[i] = skb;
+            for (i=0; i<na->num_tx_desc; i++) {
+                skb = alloc_skb(GENERIC_BUF_SIZE, GFP_ATOMIC);
+                if (!skb) {
+                    D("tx_pool[%d] allocation failed", i);
+                    error = ENOMEM;
+                    goto alloc_sk_buffs;
+                }
+                na->tx_rings[r].tx_pool[i] = skb;
+            }
         }
         rtnl_lock();
         error = netdev_rx_handler_register(ifp, &generic_netmap_rx_handler, na);
@@ -153,10 +156,12 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         netdev_rx_handler_unregister(ifp);
         skb_queue_purge(&na->rx_rings[0].rx_queue);
         hrtimer_cancel(&na->mit_timer);
-        for (i=0; i<na->num_tx_desc; i++) {
-            kfree_skb(na->tx_rings[0].tx_pool[i]);
+        for (r=0; r<na->num_tx_rings; r++) {
+            for (i=0; i<na->num_tx_desc; i++) {
+                kfree_skb(na->tx_rings[r].tx_pool[i]);
+            }
+            kfree(na->rx_rings[r].tx_pool);
         }
-        kfree(na->rx_rings[0].tx_pool);
 #ifdef RATE
         if (--rate_ctx.refcount == 0) {
             D("del_timer()");
@@ -170,7 +175,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
 #ifdef REG_RESET
     error = ifp->netdev_ops->ndo_open(ifp);
     if (error) {
-        goto alloc_sk_buffs;
+        goto alloc_tx_pool;
     }
 #endif
 
@@ -178,13 +183,18 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
 
 register_handler:
     rtnl_unlock();
+alloc_tx_pool:
+    r--;
+    i = na->num_tx_desc;  /* Useless, but just to stay safe. */
 alloc_sk_buffs:
     i--;
-    for (; i>=0; i--) {
-        kfree_skb(na->tx_rings[0].tx_pool[i]);
+    for (; r>=0; r--) {
+        for (; i>=0; i--) {
+            kfree_skb(na->tx_rings[r].tx_pool[i]);
+        }
+        kfree(na->tx_rings[r].tx_pool);
+        i = na->num_tx_desc - 1;
     }
-    kfree(na->rx_rings[0].tx_pool);
-alloc_tx_pool:
 
     return error;
 }
@@ -196,7 +206,7 @@ static void
 generic_mbuf_destructor(struct sk_buff *skb)
 {
     ND("Tx irq (%p)", arg);
-    netmap_irq_generic(skb->dev, 0, NULL, 1);
+    netmap_irq_generic(skb->dev, skb_get_queue_mapping(skb), NULL, 1);
     IFRATE(rate_ctx.new.txirq++);
 }
 
@@ -319,6 +329,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
             atomic_inc(&skb->users);
             skb->dev = ifp;
             skb->priority = 100;
+            skb_set_queue_mapping(skb, ring_nr);
             tx_ret = dev_queue_xmit(skb);
             if (unlikely(tx_ret != NET_XMIT_SUCCESS)) {
                 ND("start_xmit failed: err %d [%d,%d,%d]", tx_ret, j, k, kring->nr_hwavail);
@@ -524,6 +535,7 @@ generic_netmap_attach(struct ifnet *ifp)
                                         ifp->real_num_tx_queues, ifp->tx_queue_len);
     ND("[GNA] num_rx_queues(%d), real_num_rx_queues(%d)", ifp->num_rx_queues,
                                                             ifp->real_num_rx_queues);
+    na.num_tx_rings = ifp->real_num_tx_queues;
 
     return netmap_attach(&na, 1);
 }
