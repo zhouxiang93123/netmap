@@ -103,12 +103,14 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
     if (enable) { /* Enable netmap mode. */
         /* Initialize the queue structure, since the generic_netmap_rx_handler() callback can
            be called as soon after netdev_rx_handler_register() returns. */
-        skb_queue_head_init(&na->rx_rings[0].rx_queue);
+        printk("%d %d\n", na->num_tx_rings, na->num_rx_rings);
+        for (r=0; r<na->num_rx_rings; r++) {
+            skb_queue_head_init(&na->rx_rings[r].rx_queue);
+            na->rx_rings[r].nr_ntc = 0;
+        }
         hrtimer_init(&na->mit_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
         na->mit_timer.function = &generic_timer_handler;
         na->mit_pending = 0;
-        na->rx_rings[0].nr_ntc = 0;
-printk("%d %d\n", na->num_tx_rings, na->num_rx_rings);
         for (r=0; r<na->num_tx_rings; r++) {
             na->tx_rings[r].nr_ntc = 0;
             na->tx_rings[r].tx_pool = kmalloc(na->num_tx_desc * sizeof(struct sk_buff *), GFP_ATOMIC);
@@ -154,7 +156,9 @@ printk("%d %d\n", na->num_tx_rings, na->num_rx_rings);
         ifp->if_capenable &= ~IFCAP_NETMAP;
         ifp->netdev_ops = (void *)na->if_transmit;
         netdev_rx_handler_unregister(ifp);
-        skb_queue_purge(&na->rx_rings[0].rx_queue);
+        for (r=0; r<na->num_rx_rings; r++) {
+            skb_queue_purge(&na->rx_rings[r].rx_queue);
+        }
         hrtimer_cancel(&na->mit_timer);
         for (r=0; r<na->num_tx_rings; r++) {
             for (i=0; i<na->num_tx_desc; i++) {
@@ -389,26 +393,28 @@ rx_handler_result_t generic_netmap_rx_handler(struct sk_buff **pskb)
 {
     struct netmap_adapter *na = NA((*pskb)->dev);
     unsigned int work_done;
+    unsigned int rr = 0;
 
-    if (unlikely(skb_queue_len(&na->rx_rings[0].rx_queue) > 1024)) {
+    if (unlikely(skb_queue_len(&na->rx_rings[rr].rx_queue) > 1024)) {
         kfree_skb(*pskb);
     } else {
-        skb_queue_tail(&na->rx_rings[0].rx_queue, *pskb);
-        if (netmap_generic_mit < 32768) {
-            /* When rx mitigation is not used, never filter the notification. */
-            netmap_irq_generic(na->ifp, 0, &work_done, 1);
-            IFRATE(rate_ctx.new.rxirq++);
+        skb_queue_tail(&na->rx_rings[rr].rx_queue, *pskb);
+    }
+
+    if (netmap_generic_mit < 32768) {
+        /* When rx mitigation is not used, never filter the notification. */
+        netmap_irq_generic(na->ifp, rr, &work_done, 1);
+        IFRATE(rate_ctx.new.rxirq++);
+    } else {
+        /* Filter the notification when there is a pending timer, otherwise
+           start the timer and don't filter. */
+        if (likely(hrtimer_active(&na->mit_timer))) {
+            /* Record that there is some pending work. */
+            na->mit_pending = 1;
         } else {
-            /* Filter the notification when there is a pending timer, otherwise
-               start the timer and don't filter. */
-            if (likely(hrtimer_active(&na->mit_timer))) {
-                /* Record that there is some pending work. */
-                na->mit_pending = 1;
-            } else {
-                netmap_irq_generic(na->ifp, 0, &work_done, 1);
-                IFRATE(rate_ctx.new.rxirq++);
-                hrtimer_start(&na->mit_timer, ktime_set(0, netmap_generic_mit), HRTIMER_MODE_REL);
-            }
+            netmap_irq_generic(na->ifp, rr, &work_done, 1);
+            IFRATE(rate_ctx.new.rxirq++);
+            hrtimer_start(&na->mit_timer, ktime_set(0, netmap_generic_mit), HRTIMER_MODE_REL);
         }
     }
 
@@ -493,7 +499,7 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
     return 0;
 }
 
-/* Use ethtool to find the current NIC rings lengths, so that the netmap rings can be
+/* Use ethtool to find the current NIC rings lengths, so that the netmap rings can
    have the same lengths. */
 static int
 generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx)
@@ -537,7 +543,7 @@ generic_netmap_attach(struct ifnet *ifp)
                                                             ifp->real_num_rx_queues);
     na.num_tx_rings = ifp->real_num_tx_queues;
 
-    return netmap_attach(&na, 1);
+    return netmap_attach(&na, 1); // TODO ifp->real_num_rx_queues);
 }
 
 
