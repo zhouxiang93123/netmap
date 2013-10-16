@@ -36,7 +36,7 @@ do_copyfiles_user() {
 	# XXX change this to head/tools/tools/netmap
 	#local d=/usr/ports-luigi/netmap-release/examples
 	local d=/usr/home/luigi/qemu-misc/netmap-release/examples
-	find_progs -L $d -P $d pkt-gen bridge vale-ctl testlock libnetmap.so # pingd 
+	find_progs -L $d -P $d pkt-gen bridge vale-ctl testlock libnetmap.so click # pingd 
 	cp -p ${u_progs} ${dst}/bin
 	cp -p ${u_libs} ${dst}/usr/lib
 	cp -p $d/testmod/test.ko ${dst}	 # XXX
