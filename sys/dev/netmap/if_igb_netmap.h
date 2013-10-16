@@ -119,7 +119,13 @@ igb_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 			/* curr is the current slot in the nic ring */
 			union e1000_adv_tx_desc *curr =
 			    (union e1000_adv_tx_desc *)&txr->tx_base[l];
-#define igb_tx_buf igb_tx_buffer // XXX head compat
+#ifndef IGB_MEDIA_RESET
+/* at the same time as IGB_MEDIA_RESET was defined, the
+ * tx buffer descriptor was renamed, so use this to revert
+ * back to the old name.
+ */
+#define igb_tx_buf igb_tx_buffer
+#endif
 			struct igb_tx_buf *txbuf = &txr->tx_buffers[l];
 			int flags = ((slot->flags & NS_REPORT) ||
 				j == 0 || j == report_frequency) ?
