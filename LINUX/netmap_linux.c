@@ -160,7 +160,7 @@ printk("%d %d\n", na->num_tx_rings, na->num_rx_rings);
             for (i=0; i<na->num_tx_desc; i++) {
                 kfree_skb(na->tx_rings[r].tx_pool[i]);
             }
-            kfree(na->rx_rings[r].tx_pool);
+            kfree(na->tx_rings[r].tx_pool);
         }
 #ifdef RATE
         if (--rate_ctx.refcount == 0) {
@@ -459,7 +459,7 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
         if (n) {
             kring->nr_ntc = j;
             kring->nr_hwavail += n;
-            IFRATE(rate_ctx.new.txpkt += n);
+            IFRATE(rate_ctx.new.rxpkt += n);
         }
         kring->nr_kflags &= ~NKR_PENDINTR;
     }
