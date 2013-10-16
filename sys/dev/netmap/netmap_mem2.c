@@ -604,10 +604,11 @@ netmap_finalize_obj_allocator(struct netmap_obj_pool *p)
 			/*
 			 * If we get here, there is a severe memory shortage,
 			 * so halve the allocated memory to reclaim some.
-			 * XXX check boundaries
 			 */
 			D("Unable to create cluster at %d for '%s' allocator",
 			    i, p->name);
+			if (i < 2) /* nothing to halve */
+				goto out;
 			lim = i / 2;
 			for (i--; i >= lim; i--) {
 				p->bitmap[ (i>>5) ] &=  ~( 1 << (i & 31) );
@@ -615,8 +616,10 @@ netmap_finalize_obj_allocator(struct netmap_obj_pool *p)
 					contigfree(p->lut[i].vaddr,
 						n, M_NETMAP);
 			}
+		out:
 			p->objtotal = i;
-			p->numclusters = i / p->_clustentries;
+			/* we may have stopped in the middle of a cluster */
+			p->numclusters = (i + p->_clustentries - 1) / p->_clustentries;
 			break;
 		}
 		for (; i < lim; i++, clust += p->_objsize) {
@@ -627,6 +630,8 @@ netmap_finalize_obj_allocator(struct netmap_obj_pool *p)
 	}
 	p->objfree = p->objtotal;
 	p->memtotal = p->numclusters * p->_clustsize;
+	if (p->objfree == 0)
+		goto clean;
 	if (netmap_verbose)
 		D("Pre-allocated %d clusters (%d/%dKB) for '%s'",
 		    p->numclusters, p->_clustsize >> 10,
