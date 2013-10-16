@@ -680,7 +680,8 @@ netmap_mem_finalize_all(struct netmap_mem_d *nmd)
 	nmd->lasterr = 0;
 	nmd->nm_totalsize = 0;
 	for (i = 0; i < NETMAP_POOLS_NR; i++) {
-		if (netmap_finalize_obj_allocator(&nmd->pools[i]))
+		nmd->lasterr = netmap_finalize_obj_allocator(&nmd->pools[i]);
+		if (nmd->lasterr)
 			goto error;
 		nmd->nm_totalsize += nmd->pools[i].memtotal;
 	}
