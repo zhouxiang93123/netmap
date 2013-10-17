@@ -488,7 +488,10 @@ to map memory.
 Applications may need to create threads and bind them to
 specific cores to improve performance, using standard
 OS primitives, see
-.Xr pthread
+.Xr pthread 3 .
+In particular,
+.Xr pthread_setaffinity_np 3
+may be of use.
 .Sh EXAMPLES
 The following code implements a traffic generator
 .Pp
