@@ -1,9 +1,10 @@
-#!/bin/bash
+#!/bin/sh
 
 #set -x
 
 
-function pgset() {
+function pgset()
+{
     local result
 
     echo $1 > ${PGDEV}
@@ -15,25 +16,18 @@ function pgset() {
 }
 
 
-# What can we do with this function?
-function pg() {
-    echo inject > $PGDEV
-    cat $PGDEV
-}
-
-
-# Script configuration
-N="$1"  # number of TX kthreads minus one
+##################### Script configuration ######################
+N="$1"                          # number of TX kthreads minus one
 if [ -z "$1" ]; then
     N=0
 fi
-NCPUS=7  # number of CPUs on your machine minus one
-IF="enp1s0f1"
-DST_IP="10.216.8.1"
-DST_MAC="00:1b:21:80:e7:d9"
-PKT_COUNT="10000000"
-PKT_SIZE="60"
-CLONE_SKB="10000"
+NCPUS="7"                       # number of CPUs on your machine minus one
+IF="enp1s0f1"                   # network interface to test
+DST_IP="10.216.8.1"             # destination IP address
+DST_MAC="00:1b:21:80:e7:d9"     # destination MAC address
+PKT_SIZE="60"                   # packet size
+PKT_COUNT="10000000"            # number of packets to send
+CLONE_SKB="10000"               # how many times a sk_buff is recycled
 
 
 # Load pktgen kernel module
