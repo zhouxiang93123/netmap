@@ -3,7 +3,7 @@
 # it should only contain variable definitions -- it is sourced
 # by the shell much like rc.conf* files
 
-fd_size="12000"
+fd_size="16000"
 
 # You can use it e.g. in a local configuration file by writing
 #
