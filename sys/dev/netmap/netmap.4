@@ -37,14 +37,15 @@
 .Cd device netmap
 .Sh DESCRIPTION
 .Nm
-is a framework for fast packet I/O
-(reaching 14.88 Mpps at less than 1 GHz) from both userspace
-and kernel clients.
-Userspace clients can use the netmap API described below
-to send and receive raw packets using physical interfaces,
+is a framework for extremely fast and efficient packet I/O
+(reaching 14.88 Mpps with a single core at less than 1 GHz)
+for both userspace and kernel clients.
+Userspace clients can use the netmap API
+to send and receive raw packets through physical interfaces
 or ports of the
 .Xr VALE 4
 switch.
+.Pp
 .Nm VALE
 is a very fast (reaching 20 Mpps per port)
 and modular software switch,
@@ -52,9 +53,9 @@ implemented within the kernel, which can interconnect
 virtual ports, physical devices, and the native host stack.
 .Pp
 .Nm
-uses memory mapped buffers and metadata
-(buffer indexes and lengths) to communicate with the kernel.
-Some
+uses a memory mapped region to share packet buffers,
+descriptors and queues with the kernel.
+Simple
 .Pa ioctl()s
 are used to bind interfaces/ports to file descriptors and
 implement non-blocking I/O, whereas blocking I/O uses
@@ -65,12 +66,11 @@ multicore systems.
 .Pp
 For the best performance,
 .Nm
-requires explicit support in device drivers,
-although a generic operation mode is available
-to implement the
+requires explicit support in device drivers;
+a generic emulation layer is available to implement the
 .Nm
 API on top of unmodified device drivers,
-at the price of significantly reduced performance
+at the price of reduced performance
 (but still better than what can be achieved with
 sockets or BPF/pcap).
 .Pp
@@ -83,7 +83,7 @@ support, see the end of this manual page.
 clients must first
 .Pa open("/dev/netmap") ,
 and then issue an
-.Pa ioctl(..., NIOCREGIF, ...)
+.Pa ioctl(fd, NIOCREGIF, (struct nmreq *)arg)
 to bind the file descriptor to a specific interface or port.
 .Nm
 has multiple modes of operation controlled by the
@@ -118,7 +118,7 @@ Flags in the argument control whether the physical interface
 (and optionally the corrisponding host stack endpoint)
 are connected or disconnected from the VALE switch named XXX.
 .Pp
-This
+In this case the
 .Pa ioctl()
 is used only for configuring the VALE switch, typically through the
 .Nm vale-ctl
@@ -129,49 +129,50 @@ after issuing the
 .Pa ioctl().
 .El
 .Pp
-If the file descriptor is bound to a device or virtual port,
-the processes owning the file descriptor
-can read/write raw packets
-through an mmapped memory region that contains pre-allocated
-buffers and descriptors.
-.El
+The binding can be removed (and the interface returns to
+regular operation, or the virtual port destroyed) with a
+.Pa close()
+on the file descriptor.
 .Pp
+The processes owning the file descriptor can then
+.Pa mmap()
+the memory region that contains pre-allocated
+buffers, descriptors and queues, and use them to
+read/write raw packets.
 Non blocking I/O is done with special
 .Pa ioctl()'s ,
 whereas the file descriptor can be passed to
 .Pa select()/poll()
 to be notified about incoming packet or available transmit buffers.
 .Ss DATA STRUCTURES
-All data structures for all physical devices operating in
+The data structures in the mmapped memory are described below
+(see
+.Xr sys/net/netmap.h
+for reference).
+All physical devices operating in
 .Nm
-mode are in the same memory
-region shared by the kernel and all processes
-who own
+mode use the same memory region,
+shared by the kernel and all processes who own
 .Pa /dev/netmap
 descriptors bound to those devices
 (NOTE: visibility may be restricted in future implementations).
-.Pp
-The memory regions for different virtual ports are instead completely
-independent and shared only with the kernel.
+Virtual ports instead use separate memory regions,
+shared only with the kernel.
 .Pp
 All references between the shared data structure
 are relative (offsets or indexes). Some macros help converting
 them into actual pointers.
 .Pp
-The data structures in shared memory are the following
-(see
-.Xr sys/net/netmap.h
-for reference):
 .Pp
 .Bl -tag -width XXX
 .It Dv struct netmap_if (one per interface)
-Indicates the number of rings supported by an interface, their
+indicates the number of rings supported by an interface, their
 sizes, and the offsets of the
 .Pa netmap_rings
 associated to the interface.
 .Pp
 .Pa struct netmap_if
-is located at an offset
+is at offset
 .Pa nr_offset
 in the shared memory region is indicated by the
 field in the structure returned by the
@@ -293,15 +294,9 @@ macros.
 .Pp
 .Bl -tag -width XXX
 Some macros support the access to objects in the shared memory
-region. In particular, given the following:
-.Bd -literal
-    struct netmap_if *nifp;
-    struct netmap_ring *txring = NETMAP_TXRING(nifp, i);
-    struct netmap_ring *rxring = NETMAP_RXRING(nifp, i);
-    int i = txring->slot[txring->cur].buf_idx;
-    char *buf = NETMAP_BUF(txring, i);
-.Ed
-.It NETMAP_TXRING() and NETMAP_RXRING()
+region. In particular,
+.It NETMAP_TXRING(nifp, i)
+.It NETMAP_RXRING(nifp, i)
 return the address of the i-th transmit and receive ring,
 respectively, whereas
 .It NETMAP_BUF(ring, buf_idx)
@@ -473,8 +468,6 @@ When registering a virtual interface that is dynamically created to a
 .Xr vale 4
 switch, we can specify the desired number of rings (1 by default,
 and currently up to 16) on it using nr_tx_rings and nr_rx_rings fields.
-.It Dv NIOCUNREGIF
-brings an interface back to normal mode.
 .It Dv NIOCTXSYNC
 tells the hardware of new packets to transmit, and updates the
 number of slots available for transmission.
@@ -485,10 +478,20 @@ packets.
 .Sh SYSTEM CALLS
 .Nm
 uses
-.Nm select
+.Xr select 2
 and
-.Nm poll
-to wake up processes when significant events occur.
+.Xr poll 2
+to wake up processes when significant events occur, and
+.Xr mmap 2
+to map memory.
+.Pp
+Applications may need to create threads and bind them to
+specific cores to improve performance, using standard
+OS primitives, see
+.Xr pthread 3 .
+In particular,
+.Xr pthread_setaffinity_np 3
+may be of use.
 .Sh EXAMPLES
 The following code implements a traffic generator
 .Pp
@@ -497,15 +500,15 @@ The following code implements a traffic generator
 #include <net/netmap_user.h>
 struct netmap_if *nifp;
 struct netmap_ring *ring;
-struct netmap_request nmr;
+struct nmreq nmr;
 
 fd = open("/dev/netmap", O_RDWR);
 bzero(&nmr, sizeof(nmr));
-strcpy(nmr.nm_name, "ix0");
+strcpy(nmr.nr_name, "ix0");
 nmr.nm_version = NETMAP_API;
 ioctl(fd, NIOCREG, &nmr);
-p = mmap(0, nmr.memsize, fd);
-nifp = NETMAP_IF(p, nmr.offset);
+p = mmap(0, nmr.nr_memsize, fd);
+nifp = NETMAP_IF(p, nmr.nr_offset);
 ring = NETMAP_TXRING(nifp, 0);
 fds.fd = fd;
 fds.events = POLLOUT;
