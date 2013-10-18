@@ -3,7 +3,7 @@
 # it should only contain variable definitions -- it is sourced
 # by the shell much like rc.conf* files
 
-fd_size="12000"
+fd_size="16000"
 
 # You can use it e.g. in a local configuration file by writing
 #
@@ -36,7 +36,7 @@ do_copyfiles_user() {
 	# XXX change this to head/tools/tools/netmap
 	#local d=/usr/ports-luigi/netmap-release/examples
 	local d=/usr/home/luigi/qemu-misc/netmap-release/examples
-	find_progs -L $d -P $d pkt-gen bridge vale-ctl testlock libnetmap.so # pingd 
+	find_progs -L $d -P $d pkt-gen bridge vale-ctl testlock libnetmap.so click # pingd 
 	cp -p ${u_progs} ${dst}/bin
 	cp -p ${u_libs} ${dst}/usr/lib
 	cp -p $d/testmod/test.ko ${dst}	 # XXX

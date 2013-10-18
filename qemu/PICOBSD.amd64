@@ -20,17 +20,19 @@ ident		PICOBSD
 options	NO_SWAPPING
 
 #makeoptions	"CCOPTS=-O3 -Wall -Werror"
-makeoptions    COPTFLAGS="-O2 " # -Wall" 	# -Werror
-makeoptions    CWARNFLAGS="-Wunused -Wuninitialized -Wredundant-decls"
+#makeoptions    COPTFLAGS="-O2  -Wall" 	# -Werror
+makeoptions    CWARNFLAGS="-Wunused -Wuninitialized -Wno-pointer-sign -Wredundant-decls -fformat-extensions"
+# clang may require more e.g. -Wno-tautological-compare
+
 #makeoptions    WARNS=5
 options	SMP
 device	acpi	# more frequencies ?
 # device	apic	# not for amd64
 device	cpufreq
 
-option	INVARIANTS
-option	INVARIANT_SUPPORT
-options         WITNESS   
+#option	INVARIANTS
+#option	INVARIANT_SUPPORT
+#options         WITNESS   
 
 # XXX i find that SCHED_4BSD+PREEMPTION seems to work better.
 #options		SCHED_ULE		# mandatory to have one scheduler
