@@ -1,3 +1,28 @@
+/*
+ * Copyright (C) 2011-2013 Universita` di Pisa. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *   1. Redistributions of source code must retain the above copyright
+ *      notice, this list of conditions and the following disclaimer.
+ *   2. Redistributions in binary form must reproduce the above copyright
+ *      notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ */
+
 #include "bsd_glue.h"
 #include <linux/rtnetlink.h>    /* rtnl_[un]lock() */
 #include <linux/ethtool.h>      /* struct ethtool_ops, get_ringparam */
@@ -39,6 +64,7 @@ struct rate_context {
     struct rate_stats old;
 };
 
+// XXX can we use D() ?
 #define RATE_PRINTK(_NAME_) \
     printk( #_NAME_ " = %lu Hz\n", (cur._NAME_ - ctx->old._NAME_)/RATE_PERIOD);
 #define RATE_PERIOD  2
@@ -65,9 +91,9 @@ static void rate_callback(unsigned long arg)
 
 static struct rate_context rate_ctx;
 
-#else
+#else /* !RATE */
 #define IFRATE(x)
-#endif
+#endif /* !RATE */
 
 
 #define GENERIC_BUF_SIZE        1500    /* Size of the sk_buffs in the Tx pool. */
@@ -103,7 +129,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
     if (enable) { /* Enable netmap mode. */
         /* Initialize the queue structure, since the generic_netmap_rx_handler() callback can
            be called as soon after netdev_rx_handler_register() returns. */
-        printk("%d %d\n", na->num_tx_rings, na->num_rx_rings);
+        D("%d %d\n", na->num_tx_rings, na->num_rx_rings);
         for (r=0; r<na->num_rx_rings; r++) {
             skb_queue_head_init(&na->rx_rings[r].rx_queue);
             na->rx_rings[r].nr_ntc = 0;
@@ -693,7 +719,7 @@ linux_netmap_ioctl(struct file *file, u_int cmd, u_long data /* arg */)
 
 
 static int
-netmap_release(struct inode *inode, struct file *file)
+linux_netmap_release(struct inode *inode, struct file *file)
 {
 	(void)inode;	/* UNUSED */
 	if (file->private_data)
@@ -725,7 +751,7 @@ static struct file_operations netmap_fops = {
     .mmap = linux_netmap_mmap,
     LIN_IOCTL_NAME = linux_netmap_ioctl,
     .poll = linux_netmap_poll,
-    .release = netmap_release,
+    .release = linux_netmap_release,
 };
 
 
@@ -743,6 +769,7 @@ static int linux_netmap_init(void)
 }
 
 
+/* XXX do we need the wrapper ? */
 static void linux_netmap_fini(void)
 {
         netmap_fini();
@@ -751,6 +778,7 @@ static void linux_netmap_fini(void)
 
 module_init(linux_netmap_init);
 module_exit(linux_netmap_fini);
+
 /* export certain symbols to other modules */
 EXPORT_SYMBOL(netmap_attach);		/* driver attach routines */
 EXPORT_SYMBOL(netmap_detach);		/* driver detach routines */
@@ -771,4 +799,3 @@ EXPORT_SYMBOL(netmap_enable_all_rings);
 MODULE_AUTHOR("http://info.iet.unipi.it/~luigi/netmap/");
 MODULE_DESCRIPTION("The netmap packet I/O framework");
 MODULE_LICENSE("Dual BSD/GPL"); /* the code here is all BSD. */
-
