@@ -1734,13 +1734,10 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp)
 	const char *name = nmr->nr_name;
 	int namelen = strlen(name);
 	struct ifnet *iter = NULL;
-        unsigned admode = netmap_admode;  /* Take a snapshot. */
-        int error = 0;
 
 	/* first try to see if this is a bridge port. */
 	struct nm_bridge *b;
 	struct netmap_adapter *na;
-        struct netmap_adapter *prev_na;
 	int i, j, cand = -1, cand2 = -1;
 	int needed;
 
@@ -1881,10 +1878,14 @@ no_bridge_port:
 		return (ENXIO);
 
 #ifdef linux
-        if ((!NETMAP_CAPABLE(*ifp) && (admode == NETMAP_ADMODE_BEST ||
-                                       admode == NETMAP_ADMODE_GENERIC))
+        i = netmap_admode;  /* Take a snapshot. */
+        if ((!NETMAP_CAPABLE(*ifp) && (i == NETMAP_ADMODE_BEST ||
+                                       i == NETMAP_ADMODE_GENERIC))
             || (NETMAP_CAPABLE(*ifp) && !nma_is_generic(NA(*ifp)) &&
-                                        admode == NETMAP_ADMODE_GENERIC)) {
+                                        i == NETMAP_ADMODE_GENERIC)) {
+        	int error = 0;
+        	struct netmap_adapter *prev_na;
+
                 prev_na = NA(*ifp);  /* Previously used netmap adapter (can be NULL). */
                 /* We create a generic netmap adapter (which doesn't require
                    driver support), when the interface is not netmap capable (and we are
