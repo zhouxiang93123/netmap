@@ -4,9 +4,11 @@
 # build a distribution
 
 RELEASE_SRCS := ./sys/net ./sys/dev ./sys/modules ./examples
-RELEASE_SRCS += ./README ./LINUX ./OSX
+RELEASE_SRCS += ./README* ./LINUX ./OSX
 RELEASE_EXCL := --exclude .svn --exclude examples/testmod
 RELEASE_EXCL += --exclude connlib\*
+RELEASE_EXCL += --exclude if_epair.diff
+#RELEASE_EXCL += --exclude \*-patches
 RELEASE_EXCL += --exclude \*bnx2x\* --exclude \*mellanox\* --exclude \*mlx4\*
 RELEASE_EXCL += --exclude OSX
 
