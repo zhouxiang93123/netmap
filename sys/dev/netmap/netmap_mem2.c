@@ -651,8 +651,6 @@ netmap_memory_config_changed(struct netmap_mem_d *nmd)
 	int i;
 
 	for (i = 0; i < NETMAP_POOLS_NR; i++) {
-		if (nmd->pools[i]._objsize != netmap_params[i].size ||
-		    nmd->pools[i].objtotal != netmap_params[i].num)
 		if (nmd->pools[i].r_objsize != netmap_params[i].size ||
 		    nmd->pools[i].r_objtotal != netmap_params[i].num)
 		    return 1;
