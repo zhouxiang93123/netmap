@@ -156,6 +156,7 @@ struct netmap_obj_pool {
 #define NMA_LOCK_T		struct mtx
 #endif /* linux */
 
+typedef int (*netmap_mem_config_t)(struct netmap_mem_d*);
 typedef int (*netmap_mem_finalize_t)(struct netmap_mem_d*);
 typedef void (*netmap_mem_deref_t)(struct netmap_mem_d*);
 
@@ -186,6 +187,7 @@ struct netmap_mem_d {
 	/* the three allocators */
 	struct netmap_obj_pool pools[NETMAP_POOLS_NR];
 
+	netmap_mem_config_t   config;	
 	netmap_mem_finalize_t finalize;
 	netmap_mem_deref_t    deref;
 };
@@ -199,7 +201,7 @@ void 	   netmap_mem_fini(void);
 void* 	   netmap_mem_if_new(const char *ifname, struct netmap_adapter *na);
 void 	   netmap_mem_if_delete(struct netmap_adapter *na, struct netmap_if *nifp);
 void 	   netmap_mem_deref(struct netmap_mem_d *nm_mem);
-u_int	   netmap_mem_get_totalsize(struct netmap_mem_d *nm_mem);
+int	   netmap_mem_get_totalsize(struct netmap_mem_d *nm_mem, u_int *size);
 ssize_t    netmap_mem_if_offset(struct netmap_mem_d *nm_mem, const void *vaddr);
 struct netmap_mem_d*
 	   netmap_mem_private_new(const char *name, u_int txr, u_int txd, u_int rxr, u_int rxd);

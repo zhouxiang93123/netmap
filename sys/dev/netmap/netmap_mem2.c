@@ -86,6 +86,7 @@ struct netmap_obj_params netmap_params[NETMAP_POOLS_NR] = {
  * running in netmap mode.
  * Virtual (VALE) ports will have each its own allocator.
  */
+static int netmap_mem_global_config(struct netmap_mem_d *nmd);
 static int netmap_mem_global_finalize(struct netmap_mem_d *nmd);
 static void netmap_mem_global_deref(struct netmap_mem_d *nmd);
 struct netmap_mem_d nm_mem = {	/* Our memory allocator. */
@@ -112,6 +113,7 @@ struct netmap_mem_d nm_mem = {	/* Our memory allocator. */
 			.nummax	    = 1000000, /* one million! */
 		},
 	},
+	.config   = netmap_mem_global_config,
 	.finalize = netmap_mem_global_finalize,
 	.deref    = netmap_mem_global_deref,
 };
@@ -121,6 +123,7 @@ struct netmap_mem_d nm_mem = {	/* Our memory allocator. */
 struct lut_entry *netmap_buffer_lut;	/* exported */
 
 /* blueprint for the private memory allocators */
+static int netmap_mem_private_config(struct netmap_mem_d *nmd);
 static int netmap_mem_private_finalize(struct netmap_mem_d *nmd);
 static void netmap_mem_private_deref(struct netmap_mem_d *nmd);
 const struct netmap_mem_d nm_blueprint = {
@@ -147,6 +150,7 @@ const struct netmap_mem_d nm_blueprint = {
 			.nummax	    = 1000000, /* one million! */
 		},
 	},
+	.config   = netmap_mem_private_config,
 	.finalize = netmap_mem_private_finalize,
 	.deref    = netmap_mem_private_deref,
 };
@@ -207,14 +211,27 @@ netmap_mem_ofstophys(struct netmap_mem_d* nmd, vm_ooffset_t offset)
 	return 0;	// XXX bad address
 }
 
-u_int
-netmap_mem_get_totalsize(struct netmap_mem_d* nmd)
+int
+netmap_mem_get_totalsize(struct netmap_mem_d* nmd, u_int* size)
 {
-	u_int size;
+	int error = 0;
 	NMA_LOCK(nmd);
-	size = nmd->nm_totalsize;
+	error = nmd->config(nmd);
+	if (error)
+		goto out;
+	if (nmd->finalized) {
+		*size = nmd->nm_totalsize;
+	} else {
+		int i;
+		*size = 0;
+		for (i = 0; i < NETMAP_POOLS_NR; i++) {
+			struct netmap_obj_pool *p = nmd->pools + i;
+			*size += (p->_numclusters * p->_clustsize);
+		}
+	}
+out:
 	NMA_UNLOCK(nmd);
-	return size;
+	return error;
 }
 
 /*
@@ -718,6 +735,15 @@ netmap_mem_private_delete(struct netmap_mem_d *nmd)
 }
 
 static int
+netmap_mem_private_config(struct netmap_mem_d *nmd)
+{
+	/* nothing to do, we are configured on creation
+ 	 * and configuration never changes thereafter
+ 	 */
+	return 0;
+}
+
+static int
 netmap_mem_private_finalize(struct netmap_mem_d *nmd)
 {
 	int err;
@@ -793,12 +819,15 @@ error:
 }
 
 
-
 /* call with lock held */
 static int
-netmap_memory_config(struct netmap_mem_d *nmd)
+netmap_mem_global_config(struct netmap_mem_d *nmd)
 {
 	int i;
+
+	if (nmd->refcount)
+		/* already in use, we cannot change the configuration */
+		goto out;
 
 	if (!netmap_memory_config_changed(nmd))
 		goto out;
@@ -832,15 +861,12 @@ netmap_mem_global_finalize(struct netmap_mem_d *nmd)
 
 	NMA_LOCK(nmd);
 
-	nmd->refcount++;
-	if (nmd->refcount > 1) {
-		ND("busy (refcount %d)", nmd->refcount);
-		goto out;
-	}
 
 	/* update configuration if changed */
-	if (netmap_memory_config(nmd))
+	if (netmap_mem_global_config(nmd))
 		goto out;
+
+	nmd->refcount++;
 
 	if (nmd->finalized) {
 		/* may happen if config is not changed */

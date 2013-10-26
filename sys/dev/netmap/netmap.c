@@ -2387,9 +2387,9 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	int fflag, struct thread *td)
 {
 	struct netmap_priv_d *priv = NULL;
-	struct ifnet *ifp;
+	struct ifnet *ifp = NULL;
 	struct nmreq *nmr = (struct nmreq *) data;
-	struct netmap_adapter *na;
+	struct netmap_adapter *na = NULL;
 	int error;
 	u_int i, lim;
 	struct netmap_if *nifp;
@@ -2446,28 +2446,31 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 
 		NMG_LOCK();
 		do {
-			/* update configuration */
-			error = netmap_get_memory_locked(priv);
-			ND("get_memory returned %d", error);
+			/* memsize is always valid */
+			struct netmap_mem_d *nmd = &nm_mem;
+			if (nmr->nr_name[0] != '\0') {
+				error = get_ifp(nmr, &ifp); /* get a refcount */
+				if (error)
+					break;
+				na = NA(ifp);  /* retrieve the netmap adapter */
+				nmd = na->nm_mem; /* and its memory allocator */
+			}
+			
+			error = netmap_mem_get_totalsize(nmd, &nmr->nr_memsize);
 			if (error)
 				break;
-			/* memsize is always valid */
-			nmr->nr_memsize = netmap_mem_get_totalsize(priv->np_mref);
+			if (na == NULL) /* only memory info */
+				break;
 			nmr->nr_offset = 0;
 			nmr->nr_rx_slots = nmr->nr_tx_slots = 0;
-			if (nmr->nr_name[0] == '\0')	/* just get memory info */
-				break;
-			error = get_ifp(nmr, &ifp); /* get a refcount */
-			if (error)
-				break;
-			na = NA(ifp); /* retrieve netmap_adapter */
 			netmap_update_config(na);
 			nmr->nr_rx_rings = na->num_rx_rings;
 			nmr->nr_tx_rings = na->num_tx_rings;
 			nmr->nr_rx_slots = na->num_rx_desc;
 			nmr->nr_tx_slots = na->num_tx_desc;
-			nm_if_rele(ifp);	/* return the refcount */
 		} while (0);
+		if (ifp)
+			nm_if_rele(ifp);	/* return the refcount */
 		NMG_UNLOCK();
 		break;
 
@@ -2518,7 +2521,11 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			nmr->nr_tx_rings = na->num_tx_rings;
 			nmr->nr_rx_slots = na->num_rx_desc;
 			nmr->nr_tx_slots = na->num_tx_desc;
-			nmr->nr_memsize = netmap_mem_get_totalsize(na->nm_mem);
+			error = netmap_mem_get_totalsize(na->nm_mem, &nmr->nr_memsize);
+			if (error) {
+				nm_if_rele(ifp);
+				break;
+			}
 			nmr->nr_offset = netmap_mem_if_offset(na->nm_mem, nifp);
 		} while (0);
 		NMG_UNLOCK();
