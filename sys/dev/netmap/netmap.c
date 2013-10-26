@@ -1025,12 +1025,6 @@ struct netmap_priv_d {
 /* grab a reference to the memory allocator, if we don't have one already.  The
  * reference is taken from the netmap_adapter registered with the priv.
  *
- * Before the introduction of private allocators for VALE ports, netmap API
- * allowed userspace to call mmap() and ioctl(NIOCGINFO) before ioctl(NIOCREGIF). 
- * For compatibility with this behaviour, we grab the global allocator if
- * the priv doesn't point to a netmap_adapter. The allocator cannot be
- * changed later on, therefore applications that behave in this way cannot
- * register VALE ports.
  */
 static int
 netmap_get_memory_locked(struct netmap_priv_d* p)
@@ -1039,9 +1033,11 @@ netmap_get_memory_locked(struct netmap_priv_d* p)
 	struct netmap_mem_d *nmd;
 	int error = 0;
 
-	na = p->np_ifp ? NA(p->np_ifp) : NULL;
-	nmd = na ? na->nm_mem : &nm_mem;
-	if (!p->np_mref) {
+	if (p->np_ifp == NULL)
+		return ENOMEM;
+	na = NA(p->np_ifp);
+	nmd = na->nm_mem;
+	if (p->np_mref == NULL) {
 		error = netmap_mem_finalize(nmd);
 		if (!error)
 			p->np_mref = nmd;
