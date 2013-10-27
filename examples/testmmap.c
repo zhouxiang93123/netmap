@@ -124,6 +124,36 @@ void do_close()
 	output_err(ret, "close(%d)=%d", fd, ret);
 }
 
+void parse_nmr_config(char* w, struct nmreq *nmr)
+{
+	char *tok;
+	int i, v;
+
+	nmr->nr_tx_rings = nmr->nr_rx_rings = 0;
+	nmr->nr_tx_slots = nmr->nr_rx_slots = 0;
+	if (w == NULL || ! *w)
+		return;
+	for (i = 0, tok = strtok(w, ","); tok; i++, tok = strtok(NULL, ",")) {
+		v = atoi(tok);
+		switch (i) {
+		case 0:
+			nmr->nr_tx_slots = nmr->nr_rx_slots = v;
+			break;
+		case 1:
+			nmr->nr_rx_slots = v;
+			break;
+		case 2:
+			nmr->nr_tx_rings = nmr->nr_rx_rings = v;
+			break;
+		case 3:
+			nmr->nr_rx_rings = v;
+			break;
+		default:
+			break;
+		}
+	}
+}
+
 void do_getinfo()
 {
 	struct nmreq nmr;
@@ -148,12 +178,16 @@ void do_getinfo()
 	}
 	fd = atoi(arg);
 
+	arg = nextarg();
+	parse_nmr_config(arg, &nmr);
+
 doit:
 	ret = ioctl(fd, NIOCGINFO, &nmr);
 	last_memsize = nmr.nr_memsize;
 	output_err(ret, "ioctl(%d, NIOCGINFO) for %s: %s memsize=%zu",
 		fd, name, (nmr.nr_ringid & NETMAP_PRIV_MEM ? "PRIVATE" : "GLOBAL"), last_memsize);
 }
+
 
 void do_regif()
 {
@@ -173,8 +207,16 @@ void do_regif()
 	strncpy(nmr.nr_name, name, sizeof(nmr.nr_name));
 
 	arg = nextarg();
-	fd = arg ? atoi(arg) : last_fd;
+	if (!arg) {
+		fd = last_fd;
+		goto doit;
+	}
+	fd = atoi(arg);
 
+	arg = nextarg();
+	parse_nmr_config(arg, &nmr);
+
+doit:
 	ret = ioctl(fd, NIOCREGIF, &nmr);
 	last_memsize = nmr.nr_memsize;
 	output_err(ret, "ioctl(%d, NIOCREGIF) for %s: %s memsize=%zu",
