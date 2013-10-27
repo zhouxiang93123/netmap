@@ -2444,6 +2444,8 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		do {
 			/* memsize is always valid */
 			struct netmap_mem_d *nmd = &nm_mem;
+			u_int memflags;
+
 			if (nmr->nr_name[0] != '\0') {
 				error = get_ifp(nmr, &ifp); /* get a refcount */
 				if (error)
@@ -2452,7 +2454,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 				nmd = na->nm_mem; /* and its memory allocator */
 			}
 			
-			error = netmap_mem_get_totalsize(nmd, &nmr->nr_memsize);
+			error = netmap_mem_get_info(nmd, &nmr->nr_memsize, &memflags);
 			if (error)
 				break;
 			if (na == NULL) /* only memory info */
@@ -2464,6 +2466,8 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			nmr->nr_tx_rings = na->num_tx_rings;
 			nmr->nr_rx_slots = na->num_rx_desc;
 			nmr->nr_tx_slots = na->num_tx_desc;
+			if (memflags & NETMAP_MEM_PRIVATE)
+				nmr->nr_ringid |= NETMAP_PRIV_MEM;
 		} while (0);
 		if (ifp)
 			nm_if_rele(ifp);	/* return the refcount */
@@ -2490,6 +2494,8 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		/* protect access to priv from concurrent NIOCREGIF */
 		NMG_LOCK();
 		do {
+			u_int memflags;
+
 			if (priv->np_ifp != NULL) {	/* thread already registered */
 				error = netmap_set_ringid(priv, nmr->nr_ringid);
 				break;
@@ -2517,11 +2523,13 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			nmr->nr_tx_rings = na->num_tx_rings;
 			nmr->nr_rx_slots = na->num_rx_desc;
 			nmr->nr_tx_slots = na->num_tx_desc;
-			error = netmap_mem_get_totalsize(na->nm_mem, &nmr->nr_memsize);
+			error = netmap_mem_get_info(na->nm_mem, &nmr->nr_memsize, &memflags);
 			if (error) {
 				nm_if_rele(ifp);
 				break;
 			}
+			if (memflags & NETMAP_MEM_PRIVATE)
+				nmr->nr_ringid |= NETMAP_PRIV_MEM;
 			nmr->nr_offset = netmap_mem_if_offset(na->nm_mem, nifp);
 		} while (0);
 		NMG_UNLOCK();

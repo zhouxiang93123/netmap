@@ -128,11 +128,18 @@ void do_getinfo()
 {
 	struct nmreq nmr;
 	int ret;
-	char *arg, *name = "any";
+	char *arg, *name;
 	int fd;
 
 	bzero(&nmr, sizeof(nmr));
 	nmr.nr_version = NETMAP_API;
+
+	name = nextarg();
+	if (name) {
+		strncpy(nmr.nr_name, name, sizeof(nmr.nr_name));
+	} else {
+		name = "any";
+	}
 
 	arg = nextarg();
 	if (!arg) {
@@ -141,14 +148,11 @@ void do_getinfo()
 	}
 	fd = atoi(arg);
 
-	name = nextarg();
-	if (name) {
-		strncpy(nmr.nr_name, name, sizeof(nmr.nr_name));
-	} 
 doit:
 	ret = ioctl(fd, NIOCGINFO, &nmr);
 	last_memsize = nmr.nr_memsize;
-	output_err(ret, "ioctl(%d, NIOCGINFO) for %s: memsize=%zu", fd, name, last_memsize);
+	output_err(ret, "ioctl(%d, NIOCGINFO) for %s: %s memsize=%zu",
+		fd, name, (nmr.nr_ringid & NETMAP_PRIV_MEM ? "PRIVATE" : "GLOBAL"), last_memsize);
 }
 
 void do_regif()
@@ -173,7 +177,8 @@ void do_regif()
 
 	ret = ioctl(fd, NIOCREGIF, &nmr);
 	last_memsize = nmr.nr_memsize;
-	output_err(ret, "ioctl(%d, NIOCREGIF) for %s =%d", fd, name, ret);
+	output_err(ret, "ioctl(%d, NIOCREGIF) for %s: %s memsize=%zu",
+		fd, name, (nmr.nr_ringid & NETMAP_PRIV_MEM ? "PRIVATE" : "GLOBAL"), last_memsize);
 }
 
 

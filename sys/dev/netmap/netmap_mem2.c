@@ -65,6 +65,7 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 241723 2012-10-19 09:41:45Z gle
 #define NMA_UNLOCK(n)		mtx_unlock(&(n)->nm_mtx)
 #endif /* linux */
 
+
 struct netmap_obj_params netmap_params[NETMAP_POOLS_NR] = {
 	[NETMAP_IF_POOL] = {
 		.size = 1024,
@@ -153,6 +154,8 @@ const struct netmap_mem_d nm_blueprint = {
 	.config   = netmap_mem_private_config,
 	.finalize = netmap_mem_private_finalize,
 	.deref    = netmap_mem_private_deref,
+
+	.flags = NETMAP_MEM_PRIVATE,
 };
 
 /* memory allocator related sysctls */
@@ -212,14 +215,14 @@ netmap_mem_ofstophys(struct netmap_mem_d* nmd, vm_ooffset_t offset)
 }
 
 int
-netmap_mem_get_totalsize(struct netmap_mem_d* nmd, u_int* size)
+netmap_mem_get_info(struct netmap_mem_d* nmd, u_int* size, u_int *memflags)
 {
 	int error = 0;
 	NMA_LOCK(nmd);
 	error = nmd->config(nmd);
 	if (error)
 		goto out;
-	if (nmd->finalized) {
+	if (nmd->flags & NETMAP_MEM_FINALIZED) {
 		*size = nmd->nm_totalsize;
 	} else {
 		int i;
@@ -229,6 +232,7 @@ netmap_mem_get_totalsize(struct netmap_mem_d* nmd, u_int* size)
 			*size += (p->_numclusters * p->_clustsize);
 		}
 	}
+	*memflags = nmd->flags;
 out:
 	NMA_UNLOCK(nmd);
 	return error;
@@ -683,14 +687,14 @@ netmap_mem_reset_all(struct netmap_mem_d *nmd)
 	for (i = 0; i < NETMAP_POOLS_NR; i++) {
 		netmap_reset_obj_allocator(&nmd->pools[i]);
 	}
-	nmd->finalized = 0;
+	nmd->flags  &= ~NETMAP_MEM_FINALIZED;
 }
 
 static int
 netmap_mem_finalize_all(struct netmap_mem_d *nmd)
 {
 	int i;
-	if (nmd->finalized)
+	if (nmd->flags & NETMAP_MEM_FINALIZED)
 		return 0;
 	nmd->lasterr = 0;
 	nmd->nm_totalsize = 0;
@@ -703,7 +707,7 @@ netmap_mem_finalize_all(struct netmap_mem_d *nmd)
 	/* buffers 0 and 1 are reserved */
 	nmd->pools[NETMAP_BUF_POOL].objfree -= 2;
 	nmd->pools[NETMAP_BUF_POOL].bitmap[0] = ~3;
-	nmd->finalized = 1;
+	nmd->flags |= NETMAP_MEM_FINALIZED;
 
 	D("Have %d KB for interfaces, %d KB for rings and %d MB for buffers",
 	    nmd->pools[NETMAP_IF_POOL].memtotal >> 10,
@@ -808,7 +812,7 @@ netmap_mem_private_new(const char *name, u_int txr, u_int txd, u_int rxr, u_int 
 			goto error;
 	}
 
-	d->finalized = 0;
+	d->flags &= ~NETMAP_MEM_FINALIZED;
 
 	NMA_LOCK_INIT(d);
 
@@ -834,12 +838,12 @@ netmap_mem_global_config(struct netmap_mem_d *nmd)
 
 	D("reconfiguring");
 
-	if (nmd->finalized) {
+	if (nmd->flags & NETMAP_MEM_FINALIZED) {
 		/* reset previous allocation */
 		for (i = 0; i < NETMAP_POOLS_NR; i++) {
 			netmap_reset_obj_allocator(&nmd->pools[i]);
 		}
-		nmd->finalized = 0;
+		nmd->flags &= ~NETMAP_MEM_FINALIZED;
         }
 
 	for (i = 0; i < NETMAP_POOLS_NR; i++) {
@@ -868,7 +872,7 @@ netmap_mem_global_finalize(struct netmap_mem_d *nmd)
 
 	nmd->refcount++;
 
-	if (nmd->finalized) {
+	if (nmd->flags & NETMAP_MEM_FINALIZED) {
 		/* may happen if config is not changed */
 		ND("nothing to do");
 		goto out;

@@ -181,7 +181,9 @@ struct netmap_mem_d {
 	NMA_LOCK_T nm_mtx;  /* protect the allocator */
 	u_int nm_totalsize; /* shorthand */
 
-	int finalized;		/* !=0 iff preallocation done */
+	u_int flags;
+#define NETMAP_MEM_FINALIZED	0x1	/* preallocation done */
+#define NETMAP_MEM_PRIVATE	0x2	/* uses private address space */
 	int lasterr;		/* last error for curr config */
 	int refcount;		/* existing priv structures */
 	/* the three allocators */
@@ -201,7 +203,7 @@ void 	   netmap_mem_fini(void);
 void* 	   netmap_mem_if_new(const char *ifname, struct netmap_adapter *na);
 void 	   netmap_mem_if_delete(struct netmap_adapter *na, struct netmap_if *nifp);
 void 	   netmap_mem_deref(struct netmap_mem_d *nm_mem);
-int	   netmap_mem_get_totalsize(struct netmap_mem_d *nm_mem, u_int *size);
+int	   netmap_mem_get_info(struct netmap_mem_d *nm_mem, u_int *size, u_int *memflags);
 ssize_t    netmap_mem_if_offset(struct netmap_mem_d *nm_mem, const void *vaddr);
 struct netmap_mem_d*
 	   netmap_mem_private_new(const char *name, u_int txr, u_int txd, u_int rxr, u_int rxd);

@@ -325,6 +325,7 @@ struct nmreq {
 	uint16_t	nr_tx_rings;	/* number of tx rings */
 	uint16_t	nr_rx_rings;	/* number of rx rings */
 	uint16_t	nr_ringid;	/* ring(s) we care about */
+#define NETMAP_PRIV_MEM	0x8000		/* rings use private memory */
 #define NETMAP_HW_RING	0x4000		/* low bits indicate one hw ring */
 #define NETMAP_SW_RING	0x2000		/* process the sw ring */
 #define NETMAP_NO_TX_POLL	0x1000	/* no automatic txsync on poll */
