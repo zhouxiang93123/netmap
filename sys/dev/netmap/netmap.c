@@ -312,10 +312,12 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, txsync_retry, CTLFLAG_RW,
 int netmap_drop = 0;	/* debugging */
 int netmap_flags = 0;	/* debug flags */
 int netmap_fwd = 0;	/* force transparent mode */
+int netmap_mmap_unreg = 0; /* allow mmap of unregistered fds */
 
 SYSCTL_INT(_dev_netmap, OID_AUTO, drop, CTLFLAG_RW, &netmap_drop, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, flags, CTLFLAG_RW, &netmap_flags, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, fwd, CTLFLAG_RW, &netmap_fwd, 0 , "");
+SYSCTL_INT(_dev_netmap, OID_AUTO, mmap_unreg, CTLFLAG_RW, &netmap_mmap_unreg, 0, "");
 
 NMG_LOCK_T	netmap_global_lock;
 
@@ -1029,20 +1031,30 @@ struct netmap_priv_d {
 static int
 netmap_get_memory_locked(struct netmap_priv_d* p)
 {
-	struct netmap_adapter *na;
 	struct netmap_mem_d *nmd;
 	int error = 0;
 
-	if (p->np_ifp == NULL)
-		return ENOMEM;
-	na = NA(p->np_ifp);
-	nmd = na->nm_mem;
+	if (p->np_ifp == NULL) {
+		if (!netmap_mmap_unreg)
+			return ENODEV;
+		/* for compatibility with older versions of the API
+ 		 * we use the global allocator when no interface has been
+ 		 * registered
+ 		 */
+		nmd = &nm_mem;
+	} else {
+		nmd = NA(p->np_ifp)->nm_mem;
+	}
 	if (p->np_mref == NULL) {
 		error = netmap_mem_finalize(nmd);
 		if (!error)
 			p->np_mref = nmd;
 	} else if (p->np_mref != nmd) {
-		error = EINVAL;
+		/* a virtual port has been registered, but previous
+ 		 * syscalls already used the global allocator.
+ 		 * We cannot continue
+ 		 */
+		error = ENODEV;
 	}
 	return error;
 }
