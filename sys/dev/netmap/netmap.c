@@ -1776,7 +1776,7 @@ unlock_out:
  * is acquired by this function, it must be released using nm_if_rele().
  */
 static int
-get_ifp(struct nmreq *nmr, struct ifnet **ifp)
+get_ifp(struct nmreq *nmr, struct ifnet **ifp, int create)
 {
 	const char *name = nmr->nr_name;
 	int namelen = strlen(name);
@@ -1796,7 +1796,7 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp)
 		goto no_bridge_port;
 	}
 
-	b = nm_find_bridge(name, 1 /* create a new one if no exist */ );
+	b = nm_find_bridge(name, create);
 	if (b == NULL) {
 		D("no bridges available for '%s'", name);
 		return (ENXIO);
@@ -1827,7 +1827,10 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp)
 			return 0;
 		}
 	}
-	/* not found, see if we have space to attach entries */
+	/* not found, should we create it? */
+	if (!create)
+		return ENXIO;
+	/* yes we should, see if we have space to attach entries */
 	needed = 2; /* in some cases we only need 1 */
 	if (b->bdg_active_ports + needed >= NM_BDG_MAXPORTS) {
 		D("bridge full %d, cannot create new port", b->bdg_active_ports);
@@ -2143,7 +2146,7 @@ nm_bdg_attach(struct nmreq *nmr)
 	if (npriv == NULL)
 		return ENOMEM;
 	NMG_LOCK();
-	error = get_ifp(nmr, &ifp);
+	error = get_ifp(nmr, &ifp, 1 /* create if not exists */);
 	if (error) /* no device, or another bridge or user owns the device */
 		goto unlock_exit;
 	/* get_ifp() sets na_bdg if this is a physical interface
@@ -2190,7 +2193,7 @@ nm_bdg_detach(struct nmreq *nmr)
 	int last_instance;
 
 	NMG_LOCK();
-	error = get_ifp(nmr, &ifp);
+	error = get_ifp(nmr, &ifp, 0 /* don't create */);
 	if (error) { /* no device, or another bridge or user owns the device */
 		goto unlock_exit;
 	}
@@ -2459,7 +2462,8 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			u_int memflags;
 
 			if (nmr->nr_name[0] != '\0') {
-				error = get_ifp(nmr, &ifp); /* get a refcount */
+				/* get a refcount */
+				error = get_ifp(nmr, &ifp, 1 /* create */);
 				if (error)
 					break;
 				na = NA(ifp);  /* retrieve the netmap adapter */
@@ -2513,7 +2517,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 				break;
 			}
 			/* find the interface and a reference */
-			error = get_ifp(nmr, &ifp); /* keep reference */
+			error = get_ifp(nmr, &ifp, 1 /* create */); /* keep reference */
 			if (error)
 				break;
 			if (NETMAP_OWNED_BY_KERN(ifp)) {
@@ -2625,7 +2629,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 
 		bzero(&so, sizeof(so));
 		NMG_LOCK();
-		error = get_ifp(nmr, &ifp); /* keep reference */
+		error = get_ifp(nmr, &ifp, 0 /* don't create */); /* keep reference */
 		if (error) {
 			NMG_UNLOCK();
 			break;
