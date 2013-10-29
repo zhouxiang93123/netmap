@@ -64,7 +64,6 @@ struct rate_context {
     struct rate_stats old;
 };
 
-// XXX can we use D() ?
 #define RATE_PRINTK(_NAME_) \
     printk( #_NAME_ " = %lu Hz\n", (cur._NAME_ - ctx->old._NAME_)/RATE_PERIOD);
 #define RATE_PERIOD  2
@@ -86,7 +85,7 @@ static void rate_callback(unsigned long arg)
     r = mod_timer(&ctx->timer, jiffies +
                                 msecs_to_jiffies(RATE_PERIOD * 1000));
     if (unlikely(r))
-        printk("[v1000] Error: mod_timer()\n");
+        D("[v1000] Error: mod_timer()\n");
 }
 
 static struct rate_context rate_ctx;
@@ -768,7 +767,6 @@ static int linux_netmap_init(void)
 }
 
 
-/* XXX do we need the wrapper ? */
 static void linux_netmap_fini(void)
 {
         netmap_fini();
