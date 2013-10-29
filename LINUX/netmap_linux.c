@@ -96,7 +96,7 @@ static struct rate_context rate_ctx;
 #endif /* !RATE */
 
 
-#define GENERIC_BUF_SIZE        1500    /* Size of the sk_buffs in the Tx pool. */
+#define GENERIC_BUF_SIZE        netmap_buf_size    /* Size of the sk_buffs in the Tx pool. */
 
 rx_handler_result_t generic_netmap_rx_handler(struct sk_buff **pskb);
 enum hrtimer_restart generic_timer_handler(struct hrtimer *t);
@@ -129,7 +129,6 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
     if (enable) { /* Enable netmap mode. */
         /* Initialize the queue structure, since the generic_netmap_rx_handler() callback can
            be called as soon after netdev_rx_handler_register() returns. */
-        D("%d %d\n", na->num_tx_rings, na->num_rx_rings);
         for (r=0; r<na->num_rx_rings; r++) {
             skb_queue_head_init(&na->rx_rings[r].rx_queue);
             na->rx_rings[r].nr_ntc = 0;
