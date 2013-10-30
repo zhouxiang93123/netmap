@@ -155,6 +155,7 @@ struct netmap_slot {
 #define	NS_NO_LEARN	0x0008
 #define	NS_INDIRECT	0x0010
 #define	NS_MOREFRAG	0x0020
+#define NS_VNET_HDR     0x0040  /* the buffer begins with a virtio-net header */
 #define	NS_PORT_SHIFT	8
 #define	NS_PORT_MASK	(0xff << NS_PORT_SHIFT)
 				/*
@@ -353,5 +354,22 @@ struct nmreq {
 #define NIOCTXSYNC	_IO('i', 148) /* sync tx queues */
 #define NIOCRXSYNC	_IO('i', 149) /* sync rx queues */
 #endif /* !NIOCREGIF */
+
+/* From virtio_net.h. */
+struct virtio_net_hdr {
+#define VIRTIO_NET_HDR_F_NEEDS_CSUM	1	// Use csum_start, csum_offset
+#define VIRTIO_NET_HDR_F_DATA_VALID	2	// Csum is valid
+	uint8_t flags;
+#define VIRTIO_NET_HDR_GSO_NONE		0	// Not a GSO frame
+#define VIRTIO_NET_HDR_GSO_TCPV4	1	// GSO frame, IPv4 TCP (TSO)
+#define VIRTIO_NET_HDR_GSO_UDP		3	// GSO frame, IPv4 UDP (UFO)
+#define VIRTIO_NET_HDR_GSO_TCPV6	4	// GSO frame, IPv6 TCP
+#define VIRTIO_NET_HDR_GSO_ECN		0x80	// TCP has ECN set
+	uint8_t gso_type;
+	uint16_t hdr_len;		/* Ethernet + IP + tcp/udp hdrs */
+	uint16_t gso_size;		/* Bytes to append to hdr_len per frame */
+	uint16_t csum_start;	        /* Position to start checksumming from */
+	uint16_t csum_offset;           /* Offset after that to place checksum */
+};
 
 #endif /* _NET_NETMAP_H_ */

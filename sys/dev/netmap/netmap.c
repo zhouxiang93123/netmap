@@ -3680,10 +3680,16 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		uint8_t dst_ring = ring_nr; /* default, same ring as origin */
 		uint16_t dst_port, d_i;
 		struct nm_bdg_q *d;
+                uint8_t *buf = ft[i].ft_buf;
+                uint16_t len = ft[i].ft_len;;
 
 		ND("slot %d frags %d", i, ft[i].ft_frags);
-		dst_port = b->nm_bdg_lookup(ft[i].ft_buf, ft[i].ft_len,
-			&dst_ring, na);
+                if (ft[i].ft_flags & NS_VNET_HDR) {
+                    /* The bridge lookup function must not see the virtio-net header. */
+                    buf += sizeof(struct virtio_net_hdr);
+                    len -= sizeof(struct virtio_net_hdr);
+                }
+		dst_port = b->nm_bdg_lookup(buf, len, &dst_ring, na);
 		if (netmap_verbose > 255)
 			RD(5, "slot %d port %d -> %d", i, me, dst_port);
 		if (dst_port == NM_BDG_NOPORT)
@@ -3716,9 +3722,6 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 	/*
 	 * Broadcast traffic goes to ring 0 on all destinations.
 	 * So we need to add these rings to the list of ports to scan.
-	 * XXX at the moment we scan all NM_BDG_MAXPORTS ports, which is
-	 * expensive. We should keep a compact list of active destinations
-	 * so we could shorten this loop.
 	 */
 	brddst = dst_ents + NM_BDG_BROADCAST * NM_BDG_MAXRINGS;
 	if (brddst->bq_head != NM_FT_NULL) {
@@ -3746,6 +3749,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		struct nm_bdg_q *d;
 		uint32_t my_start = 0, lease_idx = 0;
 		int nrings;
+                u_int drop_vnet_hdr;
 
 		d_i = dsts[i];
 		ND("second pass %d port %d", i, d_i);
@@ -3769,6 +3773,9 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 			ND("not in netmap mode!");
 			goto cleanup;
 		}
+
+                /* is the destination able to understand the virtio-net header? */
+                drop_vnet_hdr = (!(dst_na->na_flags & NAF_VNET_HDR));
 
 		/* there is at least one either unicast or broadcast packet */
 		brd_next = brddst->bq_head;
@@ -3856,24 +3863,34 @@ retry:
 			ft_end = ft_p + cnt;
 			do {
 			    void *dst, *src = ft_p->ft_buf;
-			    size_t len = (ft_p->ft_len + 63) & ~63;
+                            size_t ft_len = ft_p->ft_len, r_len;
+
+                            if (unlikely((ft_p->ft_flags & NS_VNET_HDR) && drop_vnet_hdr)) {
+                                /* if this slot contains a virtio-net header and the
+                                 * destination is not able to understand it, just drop
+                                 * the first bytes.
+                                 */
+                                src += sizeof(struct virtio_net_hdr);
+                                ft_len -= sizeof(struct virtio_net_hdr);
+                            }
+			    /* round to a multiple of 64 */
+			    r_len = (ft_len + 63) & ~63;
 
 			    slot = &ring->slot[j];
 			    dst = BDG_NMB(dst_na->nm_mem, slot);
-			    /* round to a multiple of 64 */
 
 			    ND("send %d %d bytes at %s:%d",
 				i, ft_p->ft_len, dst_ifp->if_xname, j);
 			    if (ft_p->ft_flags & NS_INDIRECT) {
-				if (copyin(src, dst, len)) {
+				if (copyin(src, dst, r_len)) {
 					// invalid user pointer, pretend len is 0
-					ft_p->ft_len = 0;
+					ft_len = 0;
 				}
 			    } else {
 				//memcpy(dst, src, len);
-				pkt_copy(src, dst, (int)len);
+				pkt_copy(src, dst, (int)r_len);
 			    }
-			    slot->len = ft_p->ft_len;
+			    slot->len = ft_len;
 			    slot->flags = (cnt << 8)| NS_MOREFRAG;
 			    j = nm_next(j, lim);
 			    ft_p++;
@@ -4078,7 +4095,7 @@ bdg_netmap_attach(struct netmap_adapter *arg)
 	bzero(&na, sizeof(na));
 
 	na.ifp = arg->ifp;
-	na.na_flags = NAF_BDG_MAYSLEEP | NAF_MEM_OWNER;
+	na.na_flags = NAF_BDG_MAYSLEEP | NAF_MEM_OWNER | NAF_VNET_HDR;
 	na.num_tx_rings = arg->num_tx_rings;
 	na.num_rx_rings = arg->num_rx_rings;
 	na.num_tx_desc = arg->num_tx_desc;
