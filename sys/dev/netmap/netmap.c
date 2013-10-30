@@ -483,7 +483,7 @@ nm_dump_buf(char *p, int len, int lim, char *dst)
 /*
  * system parameters (most of them in netmap_kern.h)
  * NM_NAME	prefix for switch port names, default "vale"
- * NM_MAXPORTS	number of ports
+ * NM_BDG_MAXPORTS	number of ports
  * NM_BRIDGES	max number of switches in the system.
  *	XXX should become a sysctl or tunable
  *
@@ -3194,12 +3194,12 @@ nm_bdg_preflush(struct netmap_adapter *na, u_int ring_nr,
 	 * shared lock, waiting if we can sleep (if the source port is
 	 * attached to a user process) or with a trylock otherwise (NICs).
 	 */
-	ND("wait rlock for %d packets", n);
+	ND("wait rlock for %d packets", ((j > end ? lim+1 : 0) + end) - j);
 	if (na->na_flags & NAF_BDG_MAYSLEEP)
 		BDG_RLOCK(b);
 	else if (!BDG_RTRYLOCK(b))
 		return 0;
-	ND(5, "rlock acquired for %d packets", n);
+	ND(5, "rlock acquired for %d packets", ((j > end ? lim+1 : 0) + end) - j);
 	ft = kring->nkr_ft;
 
 	for (; likely(j != end); j = nm_next(j, lim)) {
@@ -3220,7 +3220,7 @@ nm_bdg_preflush(struct netmap_adapter *na, u_int ring_nr,
 			frags++;
 			continue;
 		}
-		if (netmap_verbose && frags > 1)
+		if (unlikely(netmap_verbose && frags > 1))
 			RD(5, "%d frags at %d", frags, ft_i - frags);
 		ft[ft_i - frags].ft_frags = frags;
 		frags = 1;
@@ -3632,7 +3632,7 @@ netmap_bdg_learning(char *buf, u_int buf_len, uint8_t *dst_ring,
 	 */
 	if ((buf[6] & 1) == 0) { /* valid src */
 		uint8_t *s = buf+6;
-		sh = nm_bridge_rthash(buf+6); // XXX hash of source
+		sh = nm_bridge_rthash(s); // XXX hash of source
 		/* update source port forwarding entry */
 		ht[sh].mac = smac;	/* XXX expire ? */
 		ht[sh].ports = mysrc;
