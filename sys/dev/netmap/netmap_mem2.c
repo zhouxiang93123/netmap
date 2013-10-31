@@ -395,15 +395,13 @@ netmap_obj_free_va(struct netmap_obj_pool *p, void *vaddr)
 
 /* Return nonzero on error */
 static int
-netmap_new_bufs(struct netmap_mem_d *nmd, struct netmap_if *nifp,
-                struct netmap_slot *slot, u_int n)
+netmap_new_bufs(struct netmap_mem_d *nmd, struct netmap_slot *slot, u_int n)
 {
 	struct netmap_obj_pool *p = &nmd->pools[NETMAP_BUF_POOL];
 	u_int i = 0;	/* slot counter */
 	uint32_t pos = 0;	/* slot in p->bitmap */
 	uint32_t index = 0;	/* buffer index */
 
-	(void)nifp;	/* UNUSED */
 	for (i = 0; i < n; i++) {
 		void *vaddr = netmap_buf_malloc(nmd, &pos, &index);
 		if (vaddr == NULL) {
@@ -433,11 +431,10 @@ cleanup:
 
 
 static void
-netmap_free_buf(struct netmap_mem_d *nmd, struct netmap_if *nifp, uint32_t i)
+netmap_free_buf(struct netmap_mem_d *nmd, uint32_t i)
 {
 	struct netmap_obj_pool *p = &nmd->pools[NETMAP_BUF_POOL];
 
-	(void)nifp;
 	if (i < 2 || i >= p->objtotal) {
 		D("Cannot free buf#%d: should be in [2, %d[", i, p->objtotal);
 		return;
@@ -1057,7 +1054,7 @@ netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
 		*(uint16_t *)(uintptr_t)&ring->nr_buf_size =
 			NETMAP_BDG_BUF_SIZE(na->nm_mem);
 		ND("initializing slots for txring[%d]", i);
-		if (netmap_new_bufs(na->nm_mem, nifp, ring->slot, ndesc)) {
+		if (netmap_new_bufs(na->nm_mem, ring->slot, ndesc)) {
 			D("Cannot allocate buffers for tx_ring[%d] for %s", i, ifname);
 			goto cleanup;
 		}
@@ -1093,7 +1090,7 @@ netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
 		*(int *)(uintptr_t)&ring->nr_buf_size =
 			NETMAP_BDG_BUF_SIZE(na->nm_mem);
 		ND("initializing slots for rxring[%d]", i);
-		if (netmap_new_bufs(na->nm_mem, nifp, ring->slot, ndesc)) {
+		if (netmap_new_bufs(na->nm_mem, ring->slot, ndesc)) {
 			D("Cannot allocate buffers for rx_ring[%d] for %s", i, ifname);
 			goto cleanup;
 		}
@@ -1152,13 +1149,13 @@ netmap_mem_if_delete(struct netmap_adapter *na, struct netmap_if *nifp)
 			ring = na->tx_rings[i].ring;
 			lim = na->tx_rings[i].nkr_num_slots;
 			for (j = 0; j < lim; j++)
-				netmap_free_buf(na->nm_mem, nifp, ring->slot[j].buf_idx);
+				netmap_free_buf(na->nm_mem, ring->slot[j].buf_idx);
 		}
 		for (i = 0; i < na->num_rx_rings + 1; i++) {
 			ring = na->rx_rings[i].ring;
 			lim = na->rx_rings[i].nkr_num_slots;
 			for (j = 0; j < lim; j++)
-				netmap_free_buf(na->nm_mem, nifp, ring->slot[j].buf_idx);
+				netmap_free_buf(na->nm_mem, ring->slot[j].buf_idx);
 		}
 		netmap_free_rings(na);
 	}
