@@ -593,8 +593,7 @@ struct nm_bridge nm_bridges[NM_BRIDGES];
  * nma_is_hw()		port connected to a NIC
  * nma_is_generic()	generic netmap adapter XXX stop this madness
  */
-int nma_is_vp(struct netmap_adapter *na);
-int
+static __inline int
 nma_is_vp(struct netmap_adapter *na)
 {
 	return na->nm_register == bdg_netmap_reg;
@@ -841,23 +840,110 @@ static struct netmap_if *
 netmap_if_new(const char *ifname, struct netmap_adapter *na)
 {
 	struct netmap_if *nifp;
+	u_int i, len, ntx, nrx, ndesc;
+	struct netmap_kring *kring;
+	uint32_t *tx_leases = NULL, *rx_leases = NULL;
 
 	if (netmap_update_config(na)) {
 		/* configuration mismatch, report and fail */
 		return NULL;
 	}
 
-	if (na->refcount <= 0) {
-		/* first instance, allocate rings and buffers */
-		if (netmap_mem_rings_create(ifname, na))
-			return NULL;
-	}
-		
-	nifp = netmap_mem_if_new(ifname, na);
-	if (nifp == NULL && na->refcount <= 0)
-		netmap_mem_rings_delete(na);
+	if (na->refcount)
+		goto final;
 
-	return nifp;
+	/*
+	 * verify whether virtual port need the stack ring
+	 */
+	ntx = na->num_tx_rings + 1; /* shorthand, include stack ring */
+	nrx = na->num_rx_rings + 1; /* shorthand, include stack ring */
+
+	len = (ntx + nrx) * sizeof(struct netmap_kring);
+	/*
+	 * Leases are attached to TX rings on NIC/host ports,
+	 * and to RX rings on VALE ports.
+	 */
+	if (nma_is_vp(na)) {
+		len += sizeof(uint32_t) * na->num_rx_desc * na->num_rx_rings;
+	} else {
+		len += sizeof(uint32_t) * na->num_tx_desc * ntx;
+	}
+
+	na->tx_rings = malloc((size_t)len, M_DEVBUF, M_NOWAIT | M_ZERO);
+	if (na->tx_rings == NULL) {
+		D("Cannot allocate krings for %s", ifname);
+		goto cleanup;
+	}
+	na->rx_rings = na->tx_rings + ntx;
+
+	if (nma_is_vp(na)) {
+		rx_leases = (uint32_t *)(na->rx_rings + nrx);
+	} else {
+		tx_leases = (uint32_t *)(na->rx_rings + nrx);
+	}
+
+	ndesc = na->num_tx_desc;
+	for (i = 0; i < ntx; i++) { /* Transmit rings */
+		kring = &na->tx_rings[i];
+		bzero(kring, sizeof(*kring));
+		kring->na = na;
+		kring->nkr_num_slots = ndesc;
+		/*
+		 * IMPORTANT:
+		 * Always keep one slot empty, so we can detect new
+		 * transmissions comparing cur and nr_hwcur (they are
+		 * the same only if there are no new transmissions).
+		 */
+		kring->nr_hwavail = ndesc - 1;
+		if (tx_leases) {
+			kring->nkr_leases = tx_leases;
+			tx_leases += na->num_tx_desc;
+		}
+#ifdef linux
+		init_waitqueue_head(&kring->si);
+#endif
+	}
+
+	ndesc = na->num_rx_desc;
+	for (i = 0; i < nrx; i++) { /* Receive rings */
+		kring = &na->rx_rings[i];
+		bzero(kring, sizeof(*kring));
+		kring->na = na;
+		kring->nkr_num_slots = ndesc;
+		if (rx_leases && i < na->num_rx_rings) {
+			kring->nkr_leases = rx_leases;
+			rx_leases += na->num_rx_desc;
+		}
+#ifdef linux
+		init_waitqueue_head(&kring->si);
+#endif
+	}
+#ifdef linux
+	init_waitqueue_head(&na->tx_si);
+	init_waitqueue_head(&na->rx_si);
+#endif
+
+	if (netmap_mem_rings_create(ifname, na))
+		goto cleanup;
+
+final:
+
+	nifp = netmap_mem_if_new(ifname, na);
+	if (nifp == NULL)
+		goto cleanup;
+
+	return (nifp);
+
+cleanup:
+	D("cleanup");
+
+	if (na->refcount == 0) {
+		netmap_mem_rings_delete(na);
+		free(na->tx_rings, M_DEVBUF);
+		na->tx_rings = na->rx_rings = NULL;
+	}
+
+	return NULL;
 }
 
 
@@ -976,11 +1062,14 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 		/* knlist_destroy(&na->rx_si.si_note); */
 		if (nma_is_hw(na))
 			SWNA(ifp)->tx_rings = SWNA(ifp)->rx_rings = NULL;
+	
+		/* delete rings and buffers */
+		netmap_mem_rings_delete(na);
+
+		free(na->tx_rings, M_DEVBUF);
+		na->tx_rings = na->rx_rings = NULL;
 	}
-	/*
-	 * netmap_mem_if_delete() deletes the nifp, and if this is
-	 * the last instance also buffers, rings and krings.
-	 */
+	/* delete the nifp */
 	netmap_mem_if_delete(na, nifp);
 }
 

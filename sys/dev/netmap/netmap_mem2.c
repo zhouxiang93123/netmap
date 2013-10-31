@@ -936,8 +936,6 @@ netmap_free_rings(struct netmap_adapter *na)
 			na->rx_rings[i].ring = NULL;
 		}
 	}
-	free(na->tx_rings, M_DEVBUF);
-	na->tx_rings = na->rx_rings = NULL;
 }
 
 /* call with NMA_LOCK held *
@@ -945,14 +943,12 @@ netmap_free_rings(struct netmap_adapter *na)
  * Allocate netmap rings and buffers for this card
  * The rings are contiguous, but have variable size.
  */
-extern int nma_is_vp(struct netmap_adapter *na);
 int
 netmap_mem_rings_create(const char *ifname, struct netmap_adapter *na)
 {
 	struct netmap_ring *ring;
 	u_int i, len, ndesc, ntx, nrx;
 	struct netmap_kring *kring;
-	uint32_t *tx_leases = NULL, *rx_leases = NULL;
 
 	/*
 	 * verify whether virtual port need the stack ring
@@ -960,36 +956,11 @@ netmap_mem_rings_create(const char *ifname, struct netmap_adapter *na)
 	ntx = na->num_tx_rings + 1; /* shorthand, include stack ring */
 	nrx = na->num_rx_rings + 1; /* shorthand, include stack ring */
 
-	len = (ntx + nrx) * sizeof(struct netmap_kring);
-	/*
-	 * Leases are attached to TX rings on NIC/host ports,
-	 * and to RX rings on VALE ports.
-	 */
-	if (nma_is_vp(na)) {
-		len += sizeof(uint32_t) * na->num_rx_desc * na->num_rx_rings;
-	} else {
-		len += sizeof(uint32_t) * na->num_tx_desc * ntx;
-	}
-
-	na->tx_rings = malloc((size_t)len, M_DEVBUF, M_NOWAIT | M_ZERO);
-	if (na->tx_rings == NULL) {
-		D("Cannot allocate krings for %s", ifname);
-		goto cleanup;
-	}
-	na->rx_rings = na->tx_rings + ntx;
-
-	if (nma_is_vp(na)) {
-		rx_leases = (uint32_t *)(na->rx_rings + nrx);
-	} else {
-		tx_leases = (uint32_t *)(na->rx_rings + nrx);
-	}
-
 	NMA_LOCK(na->nm_mem);
 
 	for (i = 0; i < ntx; i++) { /* Transmit rings */
 		kring = &na->tx_rings[i];
-		ndesc = na->num_tx_desc;
-		bzero(kring, sizeof(*kring));
+		ndesc = kring->nkr_num_slots;
 		len = sizeof(struct netmap_ring) +
 			  ndesc * sizeof(struct netmap_slot);
 		ring = netmap_ring_malloc(na->nm_mem, len);
@@ -998,26 +969,15 @@ netmap_mem_rings_create(const char *ifname, struct netmap_adapter *na)
 			goto cleanup;
 		}
 		ND("txring[%d] at %p ofs %d", i, ring);
-		kring->na = na;
 		kring->ring = ring;
-		if (tx_leases) {
-			kring->nkr_leases = tx_leases;
-			tx_leases += ndesc;
-		}
-		*(uint32_t *)(uintptr_t)&ring->num_slots = kring->nkr_num_slots = ndesc;
+		*(uint32_t *)(uintptr_t)&ring->num_slots = ndesc;
 		*(ssize_t *)(uintptr_t)&ring->buf_ofs =
 		    (na->nm_mem->pools[NETMAP_IF_POOL].memtotal +
 			na->nm_mem->pools[NETMAP_RING_POOL].memtotal) -
 			netmap_ring_offset(na->nm_mem, ring);
 
-		/*
-		 * IMPORTANT:
-		 * Always keep one slot empty, so we can detect new
-		 * transmissions comparing cur and nr_hwcur (they are
-		 * the same only if there are no new transmissions).
-		 */
-		ring->avail = kring->nr_hwavail = ndesc - 1;
-		ring->cur = kring->nr_hwcur = 0;
+		ring->avail = kring->nr_hwavail;
+		ring->cur = kring->nr_hwcur;
 		*(uint16_t *)(uintptr_t)&ring->nr_buf_size =
 			NETMAP_BDG_BUF_SIZE(na->nm_mem);
 		ND("initializing slots for txring[%d]", i);
@@ -1029,8 +989,7 @@ netmap_mem_rings_create(const char *ifname, struct netmap_adapter *na)
 
 	for (i = 0; i < nrx; i++) { /* Receive rings */
 		kring = &na->rx_rings[i];
-		ndesc = na->num_rx_desc;
-		bzero(kring, sizeof(*kring));
+		ndesc = kring->nkr_num_slots;
 		len = sizeof(struct netmap_ring) +
 			  ndesc * sizeof(struct netmap_slot);
 		ring = netmap_ring_malloc(na->nm_mem, len);
@@ -1040,20 +999,15 @@ netmap_mem_rings_create(const char *ifname, struct netmap_adapter *na)
 		}
 		ND("rxring[%d] at %p ofs %d", i, ring);
 
-		kring->na = na;
 		kring->ring = ring;
-		if (rx_leases && i < na->num_rx_rings) {
-			kring->nkr_leases = rx_leases;
-			rx_leases += ndesc;
-		}
-		*(uint32_t *)(uintptr_t)&ring->num_slots = kring->nkr_num_slots = ndesc;
+		*(uint32_t *)(uintptr_t)&ring->num_slots = ndesc;
 		*(ssize_t *)(uintptr_t)&ring->buf_ofs =
 		    (na->nm_mem->pools[NETMAP_IF_POOL].memtotal +
 		        na->nm_mem->pools[NETMAP_RING_POOL].memtotal) -
 			netmap_ring_offset(na->nm_mem, ring);
 
-		ring->cur = kring->nr_hwcur = 0;
-		ring->avail = kring->nr_hwavail = 0; /* empty */
+		ring->cur = kring->nr_hwcur;
+		ring->avail = kring->nr_hwavail;
 		*(int *)(uintptr_t)&ring->nr_buf_size =
 			NETMAP_BDG_BUF_SIZE(na->nm_mem);
 		ND("initializing slots for rxring[%d]", i);
@@ -1062,15 +1016,6 @@ netmap_mem_rings_create(const char *ifname, struct netmap_adapter *na)
 			goto cleanup;
 		}
 	}
-#ifdef linux
-	// XXX initialize the selrecord structs.
-	for (i = 0; i < ntx; i++)
-		init_waitqueue_head(&na->tx_rings[i].si);
-	for (i = 0; i < nrx; i++)
-		init_waitqueue_head(&na->rx_rings[i].si);
-	init_waitqueue_head(&na->tx_si);
-	init_waitqueue_head(&na->rx_si);
-#endif
 
 	NMA_UNLOCK(na->nm_mem);
 
