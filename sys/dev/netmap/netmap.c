@@ -3681,13 +3681,18 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		uint16_t dst_port, d_i;
 		struct nm_bdg_q *d;
                 uint8_t *buf = ft[i].ft_buf;
-                uint16_t len = ft[i].ft_len;;
+                uint16_t len = ft[i].ft_len;
 
 		ND("slot %d frags %d", i, ft[i].ft_frags);
                 if (ft[i].ft_flags & NS_VNET_HDR) {
                     /* The bridge lookup function must not see the virtio-net header. */
-                    buf += sizeof(struct virtio_net_hdr);
                     len -= sizeof(struct virtio_net_hdr);
+                    if (!len) {
+                        buf = ft[i+1].ft_buf;
+                        len = ft[i+1].ft_len;
+                    } else {
+                        buf += sizeof(struct virtio_net_hdr);
+                    }
                 }
 		dst_port = b->nm_bdg_lookup(buf, len, &dst_ring, na);
 		if (netmap_verbose > 255)
