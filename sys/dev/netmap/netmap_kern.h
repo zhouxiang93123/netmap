@@ -305,6 +305,8 @@ struct netmap_adapter {
 	 */
 	struct netmap_kring *tx_rings; /* array of TX rings. */
 	struct netmap_kring *rx_rings; /* array of RX rings. */
+	void *tailroom;		       /* space below the rings array */
+				       /* (used for leases) */
 
 	NM_SELINFO_T tx_si, rx_si;	/* global wait queues */
 
@@ -332,6 +334,7 @@ struct netmap_adapter {
 	/* return configuration information */
 	int (*nm_config)(struct ifnet *, u_int *txr, u_int *txd,
 					u_int *rxr, u_int *rxd);
+	int (*nm_krings_create)(struct netmap_adapter *);
 
 	/* standard refcount to control the lifetime of the adapter
          * (it should be equal to the lifetime of the corresponding ifp)

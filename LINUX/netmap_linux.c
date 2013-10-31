@@ -37,6 +37,8 @@ int netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct t
 int netmap_poll(struct cdev *dev, int events, struct thread *td);
 int netmap_init(void);
 void netmap_fini(void);
+int netmap_krings_create(struct netmap_adapter *);
+int netmap_hw_krings_create(struct netmap_adapter *);
 
 /* ========================== LINUX-SPECIFIC ROUTINES ================== */
 
@@ -261,6 +263,7 @@ EXPORT_SYMBOL(netmap_bdg_ctl);		/* bridge configuration routine */
 EXPORT_SYMBOL(netmap_bdg_learning);	/* the default lookup function */
 EXPORT_SYMBOL(netmap_disable_all_rings);
 EXPORT_SYMBOL(netmap_enable_all_rings);
+EXPORT_SYMBOL(netmap_krings_create);
 
 
 MODULE_AUTHOR("http://info.iet.unipi.it/~luigi/netmap/");

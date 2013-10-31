@@ -203,7 +203,7 @@ void 	   netmap_mem_fini(void);
 struct netmap_if *
 	   netmap_mem_if_new(const char *, struct netmap_adapter *);
 void 	   netmap_mem_if_delete(struct netmap_adapter *, struct netmap_if *);
-int	   netmap_mem_rings_create(const char *ifname, struct netmap_adapter *);
+int	   netmap_mem_rings_create(struct netmap_adapter *);
 void	   netmap_mem_rings_delete(struct netmap_adapter *);
 void 	   netmap_mem_deref(struct netmap_mem_d *);
 int	   netmap_mem_get_info(struct netmap_mem_d *, u_int *size, u_int *memflags);

@@ -835,51 +835,20 @@ netmap_update_config(struct netmap_adapter *na)
 	return 1;
 }
 
-static struct netmap_if *
-netmap_if_new(const char *ifname, struct netmap_adapter *na)
+int
+netmap_krings_create(struct netmap_adapter *na, u_int ntx, u_int nrx, u_int tailroom)
 {
-	struct netmap_if *nifp;
-	u_int i, len, ntx, nrx, ndesc;
+	u_int i, len, ndesc;
 	struct netmap_kring *kring;
-	uint32_t *tx_leases = NULL, *rx_leases = NULL;
 
-	if (netmap_update_config(na)) {
-		/* configuration mismatch, report and fail */
-		return NULL;
-	}
-
-	if (na->refcount)
-		goto final;
-
-	/*
-	 * verify whether virtual port need the stack ring
-	 */
-	ntx = na->num_tx_rings + 1; /* shorthand, include stack ring */
-	nrx = na->num_rx_rings + 1; /* shorthand, include stack ring */
-
-	len = (ntx + nrx) * sizeof(struct netmap_kring);
-	/*
-	 * Leases are attached to TX rings on NIC/host ports,
-	 * and to RX rings on VALE ports.
-	 */
-	if (nma_is_vp(na)) {
-		len += sizeof(uint32_t) * na->num_rx_desc * na->num_rx_rings;
-	} else {
-		len += sizeof(uint32_t) * na->num_tx_desc * ntx;
-	}
+	len = (ntx + nrx) * sizeof(struct netmap_kring) + tailroom;
 
 	na->tx_rings = malloc((size_t)len, M_DEVBUF, M_NOWAIT | M_ZERO);
 	if (na->tx_rings == NULL) {
-		D("Cannot allocate krings for %s", ifname);
-		goto cleanup;
+		D("Cannot allocate krings");
+		return ENOMEM;
 	}
 	na->rx_rings = na->tx_rings + ntx;
-
-	if (nma_is_vp(na)) {
-		rx_leases = (uint32_t *)(na->rx_rings + nrx);
-	} else {
-		tx_leases = (uint32_t *)(na->rx_rings + nrx);
-	}
 
 	ndesc = na->num_tx_desc;
 	for (i = 0; i < ntx; i++) { /* Transmit rings */
@@ -894,10 +863,6 @@ netmap_if_new(const char *ifname, struct netmap_adapter *na)
 		 * the same only if there are no new transmissions).
 		 */
 		kring->nr_hwavail = ndesc - 1;
-		if (tx_leases) {
-			kring->nkr_leases = tx_leases;
-			tx_leases += na->num_tx_desc;
-		}
 #ifdef linux
 		init_waitqueue_head(&kring->si);
 #endif
@@ -909,10 +874,6 @@ netmap_if_new(const char *ifname, struct netmap_adapter *na)
 		bzero(kring, sizeof(*kring));
 		kring->na = na;
 		kring->nkr_num_slots = ndesc;
-		if (rx_leases && i < na->num_rx_rings) {
-			kring->nkr_leases = rx_leases;
-			rx_leases += na->num_rx_desc;
-		}
 #ifdef linux
 		init_waitqueue_head(&kring->si);
 #endif
@@ -922,7 +883,36 @@ netmap_if_new(const char *ifname, struct netmap_adapter *na)
 	init_waitqueue_head(&na->rx_si);
 #endif
 
-	if (netmap_mem_rings_create(ifname, na))
+	na->tailroom = na->rx_rings + nrx;
+
+	return 0;
+
+}
+
+static void
+netmap_krings_delete(struct netmap_adapter *na)
+{
+	free(na->tx_rings, M_DEVBUF);
+	na->tx_rings = na->rx_rings = NULL;
+}
+
+static struct netmap_if*
+netmap_if_new(const char *ifname, struct netmap_adapter *na)
+{
+	struct netmap_if *nifp;
+
+	if (netmap_update_config(na)) {
+		/* configuration mismatch, report and fail */
+		return NULL;
+	}
+
+	if (na->refcount)
+		goto final;
+
+	if (na->nm_krings_create(na))
+		goto cleanup;
+
+	if (netmap_mem_rings_create(na))
 		goto cleanup;
 
 final:
@@ -934,12 +924,10 @@ final:
 	return (nifp);
 
 cleanup:
-	D("cleanup");
 
 	if (na->refcount == 0) {
 		netmap_mem_rings_delete(na);
-		free(na->tx_rings, M_DEVBUF);
-		na->tx_rings = na->rx_rings = NULL;
+		netmap_krings_delete(na);
 	}
 
 	return NULL;
@@ -1064,9 +1052,7 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 	
 		/* delete rings and buffers */
 		netmap_mem_rings_delete(na);
-
-		free(na->tx_rings, M_DEVBUF);
-		na->tx_rings = na->rx_rings = NULL;
+		netmap_krings_delete(na);
 	}
 	/* delete the nifp */
 	netmap_mem_if_delete(na, nifp);
@@ -2910,6 +2896,9 @@ out:
 
 /*------- driver support routines ------*/
 
+static int netmap_hw_krings_create(struct netmap_adapter *);
+static int netmap_vp_krings_create(struct netmap_adapter *);
+
 int
 netmap_attach_common(struct netmap_adapter *na, u_int num_queues)
 {
@@ -2917,6 +2906,8 @@ netmap_attach_common(struct netmap_adapter *na, u_int num_queues)
 
 	WNA(ifp) = na;
 	NETMAP_SET_CAPABLE(ifp);
+	if (na->nm_krings_create == NULL)
+		na->nm_krings_create = netmap_hw_krings_create;
 	if (na->num_tx_rings == 0)
 		na->num_tx_rings = num_queues;
 	na->num_rx_rings = num_queues;
@@ -2950,13 +2941,14 @@ netmap_detach_common(struct netmap_adapter *na)
 
 	if (na->tx_rings) { /* XXX should not happen */
 		D("freeing leftover tx_rings");
-		free(na->tx_rings, M_DEVBUF);
+		netmap_krings_delete(na);
 	}
 	if (na->na_flags & NAF_MEM_OWNER)
 		netmap_mem_private_delete(na->nm_mem);
 	bzero(na, sizeof(*na));
 	free(na, M_DEVBUF);
 }
+
 
 /*
  * Initialize a ``netmap_adapter`` object created by driver on attach.
@@ -3023,6 +3015,69 @@ netmap_adapter_put(struct netmap_adapter *na)
 	netmap_detach_common(na);
 
 	return 1;
+}
+
+static int
+netmap_hw_krings_create(struct netmap_adapter *na)
+{
+	u_int ntx, nrx, tailroom;
+	int error, i;
+	uint32_t *leases;
+
+	ntx = na->num_tx_rings + 1; /* shorthand, include stack ring */
+	nrx = na->num_rx_rings + 1; /* shorthand, include stack ring */
+
+	/*
+	 * Leases are attached to TX rings on NIC/host ports,
+	 */
+	tailroom = sizeof(uint32_t) * na->num_tx_desc * ntx;
+
+	D("ntx %d nrx %d tailroom %d", ntx, nrx, tailroom);
+
+	error = netmap_krings_create(na, ntx, nrx, tailroom);
+	if (error)
+		return error;
+
+	leases = na->tailroom;
+	
+	for (i = 0; i < ntx; i++) { /* Transmit rings */
+		na->tx_rings[i].nkr_leases = leases;
+		leases += na->num_tx_desc;
+	}
+
+	return 0;
+}
+
+static int
+netmap_vp_krings_create(struct netmap_adapter *na)
+{
+	u_int ntx, nrx, tailroom;
+	int error, i;
+	uint32_t *leases;
+
+	/* XXX vps do not need host rings,
+         * but we crash if we don't have one
+         */
+	ntx = na->num_tx_rings + 1;
+	nrx = na->num_rx_rings + 1;
+
+	/*
+	 * Leases are attached to RX rings on vale ports
+	 */
+	tailroom = sizeof(uint32_t) * na->num_rx_desc * nrx;
+
+	error = netmap_krings_create(na, ntx, nrx, tailroom);
+	if (error)
+		return error;
+
+	leases = na->tailroom;
+	
+	for (i = 0; i < nrx; i++) { /* Receive rings */
+		na->rx_rings[i].nkr_leases = leases;
+		leases += na->num_rx_desc;
+	}
+
+	return 0;
 }
 
 
@@ -3962,6 +4017,7 @@ bdg_netmap_attach(struct netmap_adapter *arg)
 	na->nm_rxsync = bdg_netmap_rxsync;
 	na->nm_register = bdg_netmap_reg;
 	na->nm_dtor = netmap_adapter_vp_dtor;
+	na->nm_krings_create = netmap_vp_krings_create;
 	na->nm_mem = netmap_mem_private_new(arg->ifp->if_xname,
 			na->num_tx_rings, na->num_tx_desc,
 			na->num_rx_rings, na->num_rx_desc);
