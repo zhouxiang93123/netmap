@@ -757,7 +757,8 @@ netmap_mem_private_finalize(struct netmap_mem_d *nmd)
 
 }
 
-static void netmap_mem_private_deref(struct netmap_mem_d *nmd)
+static void
+netmap_mem_private_deref(struct netmap_mem_d *nmd)
 {
 	NMA_LOCK(nmd);
 	if (--nmd->refcount <= 0)
@@ -939,24 +940,16 @@ netmap_free_rings(struct netmap_adapter *na)
 	na->tx_rings = na->rx_rings = NULL;
 }
 
-
-
-/* call with NMA_LOCK held */
-/*
- * Allocate the per-fd structure netmap_if.
- * If this is the first instance, also allocate the krings, rings etc.
+/* call with NMA_LOCK held *
  *
- * We assume that the configuration stored in na
- * (number of tx/rx rings and descs) does not change while
- * the interface is in netmap mode.
+ * Allocate netmap rings and buffers for this card
+ * The rings are contiguous, but have variable size.
  */
 extern int nma_is_vp(struct netmap_adapter *na);
-struct netmap_if *
-netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
+int
+netmap_mem_rings_create(const char *ifname, struct netmap_adapter *na)
 {
-	struct netmap_if *nifp;
 	struct netmap_ring *ring;
-	ssize_t base; /* handy for relative offsets between rings and nifp */
 	u_int i, len, ndesc, ntx, nrx;
 	struct netmap_kring *kring;
 	uint32_t *tx_leases = NULL, *rx_leases = NULL;
@@ -966,30 +959,6 @@ netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
 	 */
 	ntx = na->num_tx_rings + 1; /* shorthand, include stack ring */
 	nrx = na->num_rx_rings + 1; /* shorthand, include stack ring */
-	/*
-	 * the descriptor is followed inline by an array of offsets
-	 * to the tx and rx rings in the shared memory region.
-	 * For virtual rx rings we also allocate an array of
-	 * pointers to assign to nkr_leases.
-	 */
-
-	NMA_LOCK(na->nm_mem);
-
-	len = sizeof(struct netmap_if) + (nrx + ntx) * sizeof(ssize_t);
-	nifp = netmap_if_malloc(na->nm_mem, len);
-	if (nifp == NULL) {
-		NMA_UNLOCK(na->nm_mem);
-		return NULL;
-	}
-
-	/* initialize base fields -- override const */
-	*(u_int *)(uintptr_t)&nifp->ni_tx_rings = na->num_tx_rings;
-	*(u_int *)(uintptr_t)&nifp->ni_rx_rings = na->num_rx_rings;
-	strncpy(nifp->ni_name, ifname, (size_t)IFNAMSIZ);
-
-	if (na->refcount) { /* already setup, we are done */
-		goto final;
-	}
 
 	len = (ntx + nrx) * sizeof(struct netmap_kring);
 	/*
@@ -1015,10 +984,8 @@ netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
 		tx_leases = (uint32_t *)(na->rx_rings + nrx);
 	}
 
-	/*
-	 * First instance, allocate netmap rings and buffers for this card
-	 * The rings are contiguous, but have variable size.
-	 */
+	NMA_LOCK(na->nm_mem);
+
 	for (i = 0; i < ntx; i++) { /* Transmit rings */
 		kring = &na->tx_rings[i];
 		ndesc = na->num_tx_desc;
@@ -1104,7 +1071,87 @@ netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
 	init_waitqueue_head(&na->tx_si);
 	init_waitqueue_head(&na->rx_si);
 #endif
-final:
+
+	NMA_UNLOCK(na->nm_mem);
+
+	return 0;
+
+cleanup:
+	netmap_free_rings(na);
+
+	NMA_UNLOCK(na->nm_mem);
+
+	return ENOMEM;
+}
+
+void
+netmap_mem_rings_delete(struct netmap_adapter *na)
+{
+	/* last instance, release bufs and rings */
+	u_int i, j, lim;
+	struct netmap_ring *ring;
+
+	NMA_LOCK(na->nm_mem);
+
+	for (i = 0; i < na->num_tx_rings + 1; i++) {
+		ring = na->tx_rings[i].ring;
+		lim = na->tx_rings[i].nkr_num_slots;
+		for (j = 0; j < lim; j++)
+			netmap_free_buf(na->nm_mem, ring->slot[j].buf_idx);
+	}
+	for (i = 0; i < na->num_rx_rings + 1; i++) {
+		ring = na->rx_rings[i].ring;
+		lim = na->rx_rings[i].nkr_num_slots;
+		for (j = 0; j < lim; j++)
+			netmap_free_buf(na->nm_mem, ring->slot[j].buf_idx);
+	}
+	netmap_free_rings(na);
+
+	NMA_UNLOCK(na->nm_mem);
+}
+
+
+/* call with NMA_LOCK held */
+/*
+ * Allocate the per-fd structure netmap_if.
+ *
+ * We assume that the configuration stored in na
+ * (number of tx/rx rings and descs) does not change while
+ * the interface is in netmap mode.
+ */
+struct netmap_if *
+netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
+{
+	struct netmap_if *nifp;
+	ssize_t base; /* handy for relative offsets between rings and nifp */
+	u_int i, len, ntx, nrx;
+
+	/*
+	 * verify whether virtual port need the stack ring
+	 */
+	ntx = na->num_tx_rings + 1; /* shorthand, include stack ring */
+	nrx = na->num_rx_rings + 1; /* shorthand, include stack ring */
+	/*
+	 * the descriptor is followed inline by an array of offsets
+	 * to the tx and rx rings in the shared memory region.
+	 * For virtual rx rings we also allocate an array of
+	 * pointers to assign to nkr_leases.
+	 */
+
+	NMA_LOCK(na->nm_mem);
+
+	len = sizeof(struct netmap_if) + (nrx + ntx) * sizeof(ssize_t);
+	nifp = netmap_if_malloc(na->nm_mem, len);
+	if (nifp == NULL) {
+		NMA_UNLOCK(na->nm_mem);
+		return NULL;
+	}
+
+	/* initialize base fields -- override const */
+	*(u_int *)(uintptr_t)&nifp->ni_tx_rings = na->num_tx_rings;
+	*(u_int *)(uintptr_t)&nifp->ni_rx_rings = na->num_rx_rings;
+	strncpy(nifp->ni_name, ifname, (size_t)IFNAMSIZ);
+
 	/*
 	 * fill the slots for the rx and tx rings. They contain the offset
 	 * between the ring and nifp, so the information is usable in
@@ -1123,13 +1170,6 @@ final:
 	NMA_UNLOCK(na->nm_mem);
 
 	return (nifp);
-cleanup:
-	netmap_free_rings(na);
-	netmap_if_free(na->nm_mem, nifp);
-
-	NMA_UNLOCK(na->nm_mem);
-
-	return NULL;
 }
 
 void
@@ -1140,25 +1180,6 @@ netmap_mem_if_delete(struct netmap_adapter *na, struct netmap_if *nifp)
 		return;
 	NMA_LOCK(na->nm_mem);
 
-	if (na->refcount <= 0) {
-		/* last instance, release bufs and rings */
-		u_int i, j, lim;
-		struct netmap_ring *ring;
-
-		for (i = 0; i < na->num_tx_rings + 1; i++) {
-			ring = na->tx_rings[i].ring;
-			lim = na->tx_rings[i].nkr_num_slots;
-			for (j = 0; j < lim; j++)
-				netmap_free_buf(na->nm_mem, ring->slot[j].buf_idx);
-		}
-		for (i = 0; i < na->num_rx_rings + 1; i++) {
-			ring = na->rx_rings[i].ring;
-			lim = na->rx_rings[i].nkr_num_slots;
-			for (j = 0; j < lim; j++)
-				netmap_free_buf(na->nm_mem, ring->slot[j].buf_idx);
-		}
-		netmap_free_rings(na);
-	}
 	netmap_if_free(na->nm_mem, nifp);
 
 	NMA_UNLOCK(na->nm_mem);
@@ -1176,12 +1197,14 @@ netmap_mem_global_deref(struct netmap_mem_d *nmd)
 	NMA_UNLOCK(nmd);
 }
 
-int netmap_mem_finalize(struct netmap_mem_d *nmd)
+int
+netmap_mem_finalize(struct netmap_mem_d *nmd)
 {
 	return nmd->finalize(nmd);
 }
 
-void netmap_mem_deref(struct netmap_mem_d *nmd)
+void
+netmap_mem_deref(struct netmap_mem_d *nmd)
 {
 	return nmd->deref(nmd);
 }

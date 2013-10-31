@@ -840,11 +840,24 @@ netmap_update_config(struct netmap_adapter *na)
 static struct netmap_if *
 netmap_if_new(const char *ifname, struct netmap_adapter *na)
 {
+	struct netmap_if *nifp;
+
 	if (netmap_update_config(na)) {
 		/* configuration mismatch, report and fail */
 		return NULL;
 	}
-	return netmap_mem_if_new(ifname, na);
+
+	if (na->refcount <= 0) {
+		/* first instance, allocate rings and buffers */
+		if (netmap_mem_rings_create(ifname, na))
+			return NULL;
+	}
+		
+	nifp = netmap_mem_if_new(ifname, na);
+	if (nifp == NULL && na->refcount <= 0)
+		netmap_mem_rings_delete(na);
+
+	return nifp;
 }
 
 
