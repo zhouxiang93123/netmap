@@ -256,7 +256,7 @@ struct netmap_if {
 	char		ni_name[IFNAMSIZ]; /* name of the interface. */
 	const uint32_t	ni_version;	/* API version, currently unused */
 	const uint32_t	ni_flags;	/* properties */
-#define	NI_MEM_PRIVATE	0x1	/* private memory region */
+#define	NI_PRIV_MEM	0x1		/* private memory region */
 
 	const uint32_t	ni_rx_rings;	/* number of rx rings */
 	const uint32_t	ni_tx_rings;	/* number of tx rings */
