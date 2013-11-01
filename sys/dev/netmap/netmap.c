@@ -2544,8 +2544,10 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 				nm_if_rele(ifp);
 				break;
 			}
-			if (memflags & NETMAP_MEM_PRIVATE)
+			if (memflags & NETMAP_MEM_PRIVATE) {
 				nmr->nr_ringid |= NETMAP_PRIV_MEM;
+				*(uint32_t *)&nifp->ni_flags |= NI_PRIV_MEM;
+			}
 			nmr->nr_offset = netmap_mem_if_offset(na->nm_mem, nifp);
 		} while (0);
 		NMG_UNLOCK();
@@ -3444,6 +3446,9 @@ linux_netmap_ioctl(struct file *file, u_int cmd, u_long data /* arg */)
 	struct nmreq nmr;
 	bzero(&nmr, sizeof(nmr));
 
+	if (cmd == NIOCTXSYNC || cmd == NIOCRXSYNC) {
+		data = 0;	/* no argument required here */
+	}
 	if (data && copy_from_user(&nmr, (void *)data, sizeof(nmr) ) != 0)
 		return -EFAULT;
 	ret = netmap_ioctl(NULL, cmd, (caddr_t)&nmr, 0, (void *)file);
