@@ -953,7 +953,7 @@ netmap_free_rings(struct netmap_adapter *na)
  * the interface is in netmap mode.
  */
 extern int nma_is_vp(struct netmap_adapter *na);
-void *
+struct netmap_if *
 netmap_mem_if_new(const char *ifname, struct netmap_adapter *na)
 {
 	struct netmap_if *nifp;

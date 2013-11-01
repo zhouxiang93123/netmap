@@ -977,7 +977,7 @@ netmap_update_config(struct netmap_adapter *na)
 	return 1;
 }
 
-static struct netmap_if*
+static struct netmap_if *
 netmap_if_new(const char *ifname, struct netmap_adapter *na)
 {
 	if (netmap_update_config(na)) {
