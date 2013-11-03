@@ -254,6 +254,7 @@ nm_next(uint32_t i, uint32_t lim)
 
 
 
+enum txrx { NR_RX = 0, NR_TX = 1 };
 
 /*
  * This struct extends the 'struct adapter' (or
@@ -335,6 +336,8 @@ struct netmap_adapter {
 	int (*nm_config)(struct ifnet *, u_int *txr, u_int *txd,
 					u_int *rxr, u_int *rxd);
 	int (*nm_krings_create)(struct netmap_adapter *);
+	int (*nm_notify)(struct ifnet *, u_int ring, enum txrx, int flags);
+#define NAF_GLOBAL_NOTIFY 4
 
 	/* standard refcount to control the lifetime of the adapter
          * (it should be equal to the lifetime of the corresponding ifp)
@@ -505,7 +508,6 @@ int netmap_attach_common(struct netmap_adapter *, u_int);
 void netmap_detach_common(struct netmap_adapter *na);
 void netmap_detach(struct ifnet *);
 int netmap_transmit(struct ifnet *, struct mbuf *);
-enum txrx { NR_RX = 0, NR_TX = 1 };
 struct netmap_slot *netmap_reset(struct netmap_adapter *na,
 	enum txrx tx, u_int n, u_int new_cur);
 int netmap_ring_reinit(struct netmap_kring *);

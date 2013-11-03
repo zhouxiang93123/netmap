@@ -339,14 +339,14 @@ void netmap_disable_all_rings(struct ifnet *ifp)
 
 	for (i = 0; i < na->num_tx_rings + 1; i++) {
 		nm_disable_ring(na->tx_rings + i);
-		selwakeuppri(&na->tx_rings[i].si, PI_NET);
+		na->nm_notify(ifp, i, NR_TX, 
+			(i == na->num_tx_rings ? NAF_GLOBAL_NOTIFY: 0));
 	}
 	for (i = 0; i < na->num_rx_rings + 1; i++) {
 		nm_disable_ring(na->rx_rings + i);
-		selwakeuppri(&na->rx_rings[i].si, PI_NET);
+		na->nm_notify(ifp, i, NR_RX, 
+			(i == na->num_rx_rings ? NAF_GLOBAL_NOTIFY: 0));
 	}
-	selwakeuppri(&na->tx_si, PI_NET);
-	selwakeuppri(&na->rx_si, PI_NET);
 }
 
 void netmap_enable_all_rings(struct ifnet *ifp)
@@ -2899,6 +2899,27 @@ out:
 static int netmap_hw_krings_create(struct netmap_adapter *);
 static int netmap_vp_krings_create(struct netmap_adapter *);
 
+static int
+netmap_notify(struct ifnet *ifp, u_int n_ring, enum txrx tx, int flags)
+{
+	struct netmap_adapter *na = NA(ifp);
+	struct netmap_kring *kring;
+
+	if (tx == NR_TX) {
+		kring = na->tx_rings + n_ring;
+		selwakeuppri(&kring->si, PI_NET);
+		if (flags & NAF_GLOBAL_NOTIFY)
+			selwakeuppri(&na->tx_si, PI_NET);
+	} else {
+		kring = na->rx_rings + n_ring;
+		selwakeuppri(&kring->si, PI_NET);
+		if (flags & NAF_GLOBAL_NOTIFY)
+			selwakeuppri(&na->rx_si, PI_NET);
+	}
+	return 0;
+}
+
+
 int
 netmap_attach_common(struct netmap_adapter *na, u_int num_queues)
 {
@@ -2910,6 +2931,8 @@ netmap_attach_common(struct netmap_adapter *na, u_int num_queues)
 		na->nm_krings_create = netmap_hw_krings_create;
 	if (na->num_tx_rings == 0)
 		na->num_tx_rings = num_queues;
+	if (na->nm_notify == NULL)
+		na->nm_notify = netmap_notify;
 	na->num_rx_rings = num_queues;
 	na->refcount = na->na_single = na->na_multi = 0;
 	/* Core lock initialized here, others after netmap_if_new. */
@@ -3189,7 +3212,7 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 		kring->nr_hwavail++;
 		if (netmap_verbose  & NM_VERB_HOST)
 			D("wake up host ring %s %d", na->ifp->if_xname, na->num_rx_rings);
-		selwakeuppri(&kring->si, PI_NET);
+		na->nm_notify(ifp, na->num_rx_rings, NR_RX, 0);
 		error = 0;
 	}
 	mtx_unlock(&kring->q_lock);
@@ -3276,8 +3299,7 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
 	 * We do the wakeup here, but the ring is not yet reconfigured.
 	 * However, we are under lock so there are no races.
 	 */
-	selwakeuppri(&kring->si, PI_NET);
-	selwakeuppri(tx == NR_TX ? &na->tx_si : &na->rx_si, PI_NET);
+	na->nm_notify(na->ifp, n, tx, NAF_GLOBAL_NOTIFY);
 	return kring->ring->slot;
 }
 
@@ -3448,18 +3470,16 @@ netmap_irq_generic(struct ifnet *ifp, u_int q, u_int *work_done, u_int generic)
 		if (na->na_bdg != NULL) {
 			netmap_nic_to_bdg(ifp, q);
 		} else {
-			selwakeuppri(&kring->si, PI_NET);
-			if (na->num_rx_rings > 1 /* or multiple listeners */ )
-				selwakeuppri(&na->rx_si, PI_NET);
+			na->nm_notify(ifp, q, NR_RX,
+				(na->num_rx_rings > 1 ? NAF_GLOBAL_NOTIFY : 0));
 		}
 		*work_done = 1; /* do not fire napi again */
 	} else { /* TX path */
 		if (q >= na->num_tx_rings)
 			return 0;	// not a physical queue
 		kring = na->tx_rings + q;
-		selwakeuppri(&kring->si, PI_NET);
-		if (na->num_tx_rings > 1 /* or multiple listeners */ )
-			selwakeuppri(&na->tx_si, PI_NET);
+		na->nm_notify(ifp, q, NR_TX,
+			(na->num_tx_rings > 1 ? NAF_GLOBAL_NOTIFY : 0));
 	}
 	return 1;
 }
@@ -3874,7 +3894,7 @@ retry:
 				}
 				still_locked = 0;
 				mtx_unlock(&kring->q_lock);
-				selwakeuppri(&kring->si, PI_NET);
+				dst_na->nm_notify(dst_na->ifp, dst_nr, NR_RX, 0);
 			    } else {
 				ring->cur = j;
 				/* XXX update avail ? */
