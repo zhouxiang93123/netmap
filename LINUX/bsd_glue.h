@@ -50,6 +50,7 @@
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/virtio.h>	// virt_to_phys
+#include <linux/hrtimer.h>
 
 #define printf(fmt, arg...)	printk(KERN_ERR fmt, ##arg)
 #define KASSERT(a, b)		BUG_ON(!(a))
@@ -307,5 +308,9 @@ int sysctl_handle_long(SYSCTL_HANDLER_ARGS);
 
 #define NM_ATOMIC_TEST_AND_SET(p)	test_and_set_bit(0, (p))
 #define NM_ATOMIC_CLEAR(p)		clear_bit(0, (p))
+
+#define NM_ATOMIC_SET(p, v)             atomic_set(p, v)
+#define NM_ATOMIC_INC(p)                atomic_inc(p)
+#define NM_ATOMIC_READ_AND_CLEAR(p)     atomic_xchg(p, 0)
 
 #endif /* _BSD_GLUE_H */

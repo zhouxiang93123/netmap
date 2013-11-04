@@ -207,50 +207,12 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z gle
 
 #include "bsd_glue.h"
 
-static netdev_tx_t linux_netmap_start_xmit(struct sk_buff *, struct net_device *);
-
-static struct device_driver*
-linux_netmap_find_driver(struct device *dev)
-{
-	struct device_driver *dd;
-
-	while ( (dd = dev->driver) == NULL ) {
-		if ( (dev = dev->parent) == NULL )
-			return NULL;
-	}
-	return dd;
-}
-
-static struct net_device*
-ifunit_ref(const char *name)
-{
-	struct net_device *ifp = dev_get_by_name(&init_net, name);
-	struct device_driver *dd;
-
-	if (ifp == NULL)
-		return NULL;
-
-	if ( (dd = linux_netmap_find_driver(&ifp->dev)) == NULL )
-		goto error;
-
-	if (!try_module_get(dd->owner))
-		goto error;
-
-	return ifp;
-error:
-	dev_put(ifp);
-	return NULL;
-}
-
-static void
-if_rele(struct net_device *ifp)
-{
-	struct device_driver *dd;
-	dd = linux_netmap_find_driver(&ifp->dev);
-	dev_put(ifp);
-	if (dd)
-		module_put(dd->owner);
-}
+extern struct miscdevice netmap_cdevsw;
+netdev_tx_t linux_netmap_start_xmit(struct sk_buff *, struct net_device *);
+int generic_netmap_register(struct ifnet *ifp, int enable);
+int generic_netmap_attach(struct ifnet *ifp);
+struct net_device* ifunit_ref(const char *name);
+void if_rele(struct net_device *ifp);
 
 // XXX a mtx would suffice here too 20130404 gl
 #define NMG_LOCK_T		struct semaphore
@@ -314,11 +276,18 @@ int netmap_drop = 0;	/* debugging */
 int netmap_flags = 0;	/* debug flags */
 int netmap_fwd = 0;	/* force transparent mode */
 int netmap_mmap_unreg = 0; /* allow mmap of unregistered fds */
+#define NETMAP_ADMODE_NATIVE        1  /* Force native netmap adapter. */
+#define NETMAP_ADMODE_GENERIC       2  /* Force generic netmap adapter. */
+#define NETMAP_ADMODE_BEST          0  /* Priority to native netmap adapter. */
+int netmap_admode = NETMAP_ADMODE_BEST;  /* Choose the netmap adapter to use. */
+int netmap_generic_mit = 100*1000;   /* Generic mitigation interval in nanoseconds. */
 
 SYSCTL_INT(_dev_netmap, OID_AUTO, drop, CTLFLAG_RW, &netmap_drop, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, flags, CTLFLAG_RW, &netmap_flags, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, fwd, CTLFLAG_RW, &netmap_fwd, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, mmap_unreg, CTLFLAG_RW, &netmap_mmap_unreg, 0, "");
+SYSCTL_INT(_dev_netmap, OID_AUTO, admode, CTLFLAG_RW, &netmap_admode, 0 , "");
+SYSCTL_INT(_dev_netmap, OID_AUTO, generic_mit, CTLFLAG_RW, &netmap_generic_mit, 0 , "");
 
 NMG_LOCK_T	netmap_global_lock;
 
@@ -633,6 +602,7 @@ struct nm_bridge nm_bridges[NM_BRIDGES];
  * nma_is_vp()		virtual port
  * nma_is_host()	port connected to the host stack
  * nma_is_hw()		port connected to a NIC
+ * nma_is_generic()	generic netmap adapter XXX stop this madness
  */
 int nma_is_vp(struct netmap_adapter *na);
 int
@@ -648,10 +618,20 @@ nma_is_host(struct netmap_adapter *na)
 }
 
 static __inline int
+nma_is_generic(struct netmap_adapter *na)
+{
+#ifdef linux
+	return na->nm_register == generic_netmap_register;
+#else  /* !linux */
+        return false;
+#endif /* !linux */
+}
+
+static __inline int
 nma_is_hw(struct netmap_adapter *na)
 {
 	/* In case of sw adapter, nm_register is NULL */
-	return !nma_is_vp(na) && !nma_is_host(na);
+	return !nma_is_vp(na) && !nma_is_host(na) && !nma_is_generic(na);
 }
 
 
@@ -989,42 +969,6 @@ netmap_if_new(const char *ifname, struct netmap_adapter *na)
 }
 
 
-/* Structure associated to each thread which registered an interface.
- *
- * The first 4 fields of this structure are written by NIOCREGIF and
- * read by poll() and NIOC?XSYNC.
- * There is low contention among writers (actually, a correct user program
- * should have no contention among writers) and among writers and readers,
- * so we use a single global lock to protect the structure initialization.
- * Since initialization involves the allocation of memory, we reuse the memory
- * allocator lock.
- * Read access to the structure is lock free. Readers must check that
- * np_nifp is not NULL before using the other fields.
- * If np_nifp is NULL initialization has not been performed, so they should
- * return an error to userlevel.
- *
- * The ref_done field is used to regulate access to the refcount in the
- * memory allocator. The refcount must be incremented at most once for
- * each open("/dev/netmap"). The increment is performed by the first
- * function that calls netmap_get_memory() (currently called by
- * mmap(), NIOCGINFO and NIOCREGIF).
- * If the refcount is incremented, it is then decremented when the
- * private structure is destroyed.
- */
-struct netmap_priv_d {
-	struct netmap_if * volatile np_nifp;	/* netmap if descriptor. */
-
-	struct ifnet	*np_ifp;	/* device for which we hold a ref. */
-	int		np_ringid;	/* from the ioctl */
-	u_int		np_qfirst, np_qlast;	/* range of rings to scan */
-	uint16_t	np_txpoll;
-
-	struct netmap_mem_d *np_mref;	/* use with NMG_LOCK held */
-#ifdef __FreeBSD__
-	int		np_refcount;	/* use with NMG_LOCK held */
-#endif /* __FreeBSD__ */
-};
-
 /* grab a reference to the memory allocator, if we don't have one already.  The
  * reference is taken from the netmap_adapter registered with the priv.
  *
@@ -1060,7 +1004,7 @@ netmap_get_memory_locked(struct netmap_priv_d* p)
 	return error;
 }
 
-static int
+int
 netmap_get_memory(struct netmap_priv_d* p)
 {
 	int error;
@@ -1157,18 +1101,34 @@ nm_if_rele(struct ifnet *ifp)
 {
 	int i, is_hw, hw, sw, lim;
 	struct nm_bridge *b;
-	struct netmap_adapter *na;
+	struct netmap_adapter *na = NA(ifp);  /* May be invalid. */
+        struct netmap_adapter *prev_na;
 	uint8_t tmp[NM_BDG_MAXPORTS];
 
 	NMG_LOCK_ASSERT();
+
+	if (NETMAP_CAPABLE(ifp) && nma_is_generic(na) && na->refcount <=0) {
+                /* XXX Move this block to do_unregif() ? */
+                /* Free the generic netmap adapter on the last reference. */
+                prev_na = na->prev;
+		netmap_detach(ifp);
+                D("Released generic NA %p", na);
+                if (prev_na) {
+                    /* Restore the previous netmap_adapter. */
+                    WNA(ifp) = prev_na;
+                    D("Restored native NA %p", prev_na);
+                }
+		if_rele(ifp);
+                return;
+        }
+
 	/* I can be called not only for get_ifp()-ed references where netmap's
 	 * capability is guaranteed, but also for non-netmap-capable NICs.
 	 */
-	if (!NETMAP_CAPABLE(ifp) || !NA(ifp)->na_bdg) {
+	if (!NETMAP_CAPABLE(ifp) || !na->na_bdg) {
 		if_rele(ifp);
 		return;
 	}
-	na = NA(ifp);
 	b = na->na_bdg;
 	is_hw = nma_is_hw(na);
 
@@ -1276,7 +1236,7 @@ netmap_dtor_locked(struct netmap_priv_d *priv)
 	return 1;
 }
 
-static void
+void
 netmap_dtor(void *data)
 {
 	struct netmap_priv_d *priv = data;
@@ -1782,7 +1742,6 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp, int create)
 	const char *name = nmr->nr_name;
 	int namelen = strlen(name);
 	struct ifnet *iter = NULL;
-	int no_prefix = 0;
 
 	/* first try to see if this is a bridge port. */
 	struct nm_bridge *b;
@@ -1793,8 +1752,7 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp, int create)
 	NMG_LOCK_ASSERT();
 	*ifp = NULL;	/* default */
 	if (strncmp(name, NM_NAME, sizeof(NM_NAME) - 1)) {
-		no_prefix = 1;	/* no VALE prefix */
-		goto no_bridge_port;
+		goto no_bridge_port;  /* no VALE prefix */
 	}
 
 	b = nm_find_bridge(name, create);
@@ -1936,16 +1894,41 @@ no_bridge_port:
 	if (*ifp == NULL)
 		return (ENXIO);
 
+#ifdef linux
+        i = netmap_admode;  /* Take a snapshot. */
+        if ((!NETMAP_CAPABLE(*ifp) && (i == NETMAP_ADMODE_BEST ||
+                                       i == NETMAP_ADMODE_GENERIC))
+            || (NETMAP_CAPABLE(*ifp) && !nma_is_generic(NA(*ifp)) &&
+                                        i == NETMAP_ADMODE_GENERIC)) {
+        	int error = 0;
+        	struct netmap_adapter *prev_na;
+
+                prev_na = NA(*ifp);  /* Previously used netmap adapter (can be NULL). */
+                /* We create a generic netmap adapter (which doesn't require
+                   driver support), when the interface is not netmap capable (and we are
+                   not forbidden to use the generic adapter), or when
+                   we explicitely want to use the generic adapter. */
+                error = generic_netmap_attach(*ifp);
+                if (error) {
+                        nm_if_rele(*ifp);
+                        return error;
+                }
+                na = NA(*ifp);
+                na->prev = prev_na; /* Store the previously used netmap_adapter. */
+                D("Created generic NA %p (prev %p)", na, na->prev);
+        }
+#endif  /* !linux */
+
 	if (NETMAP_CAPABLE(*ifp)) {
 		/* Users cannot use the NIC attached to a bridge directly */
-		if (no_prefix && NETMAP_OWNED_BY_KERN(*ifp)) {
+		if (NETMAP_OWNED_BY_KERN(*ifp)) {
 			if_rele(*ifp); /* don't detach from bridge */
 			return EINVAL;
 		} else
 			return 0;	/* valid pointer, we hold the refcount */
 	}
-	nm_if_rele(*ifp);
-	return EINVAL;	// not NETMAP capable
+        nm_if_rele(*ifp);
+        return EINVAL;  /* Not NETMAP capable and we require a native adapter. */
 }
 
 
@@ -2400,7 +2383,7 @@ netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func)
  *
  * Return 0 on success, errno otherwise.
  */
-static int
+int
 netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 	int fflag, struct thread *td)
 {
@@ -2677,7 +2660,7 @@ out:
  * The first one is remapped to pwait as selrecord() uses the name as an
  * hidden argument.
  */
-static int
+int
 netmap_poll(struct cdev *dev, int events, struct thread *td)
 {
 	struct netmap_priv_d *priv = NULL;
@@ -2942,6 +2925,7 @@ netmap_attach(struct netmap_adapter *arg, u_int num_queues)
 	WNA(ifp) = na;
 	*na = *arg; /* copy everything, trust the driver to not pass junk */
 	NETMAP_SET_CAPABLE(ifp);
+        na->prev = NULL;
 	if (na->num_tx_rings == 0)
 		na->num_tx_rings = num_queues;
 	na->num_rx_rings = num_queues;
@@ -3111,7 +3095,7 @@ done:
 /*
  * netmap_reset() is called by the driver routines when reinitializing
  * a ring. The driver is in charge of locking to protect the kring.
- * If netmap mode is not set just return NULL.
+ * If native netmap mode is not set just return NULL.
  */
 struct netmap_slot *
 netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
@@ -3124,7 +3108,7 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
 		D("NULL na, should not happen");
 		return NULL;	/* no netmap support here */
 	}
-	if (!(na->ifp->if_capenable & IFCAP_NETMAP)) {
+	if (!(na->ifp->if_capenable & IFCAP_NETMAP) || nma_is_generic(na)) {
 		D("interface not in netmap mode");
 		return NULL;	/* nothing to reinitialize */
 	}
@@ -3303,11 +3287,17 @@ put_out:
 /*
  * Default functions to handle rx/tx interrupts from a physical device.
  * "work_done" is non-null on the RX path, NULL for the TX path.
+ * "generic" is 0 when we are called by a device driver, and 1 when we
+ * are called by the generic netmap adapter layer.
  * We rely on the OS to make sure that there is only one active
  * instance per queue, and that there is appropriate locking.
  *
  * If the card is not in netmap mode, simply return 0,
  * so that the caller proceeds with regular processing.
+ *
+ * We return 0 also when the card is in netmap mode but the current
+ * netmap adapter is the generic one, because this function will be
+ * called by the generic layer.
  *
  * If the card is connected to a netmap file descriptor,
  * do a selwakeup on the individual queue, plus one on the global one
@@ -3318,19 +3308,18 @@ put_out:
  * calls the proper forwarding routine, and return 1.
  */
 int
-netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
+netmap_irq_generic(struct ifnet *ifp, u_int q, u_int *work_done, u_int generic)
 {
-	struct netmap_adapter *na;
+	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring;
 
-	if (!(ifp->if_capenable & IFCAP_NETMAP))
+	if (!(ifp->if_capenable & IFCAP_NETMAP) || (nma_is_generic(na) && !generic))
 		return 0;
 
 	q &= NETMAP_RING_MASK;
 
 	if (netmap_verbose)
 		RD(5, "received %s queue %d", work_done ? "RX" : "TX" , q);
-	na = NA(ifp);
 	if (na->na_flags & NAF_SKIP_INTR) {
 		ND("use regular interrupt");
 		return 0;
@@ -3361,190 +3350,7 @@ netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 }
 
 
-#ifdef linux	/* linux-specific routines */
-
-
-/*
- * Remap linux arguments into the FreeBSD call.
- * - pwait is the poll table, passed as 'dev';
- *   If pwait == NULL someone else already woke up before. We can report
- *   events but they are filtered upstream.
- *   If pwait != NULL, then pwait->key contains the list of events.
- * - events is computed from pwait as above.
- * - file is passed as 'td';
- */
-static u_int
-linux_netmap_poll(struct file * file, struct poll_table_struct *pwait)
-{
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,28)
-	int events = POLLIN | POLLOUT; /* XXX maybe... */
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(3,4,0)
-	int events = pwait ? pwait->key : POLLIN | POLLOUT;
-#else /* in 3.4.0 field 'key' was renamed to '_key' */
-	int events = pwait ? pwait->_key : POLLIN | POLLOUT;
-#endif
-	return netmap_poll((void *)pwait, events, (void *)file);
-}
-
-
-static int
-linux_netmap_mmap(struct file *f, struct vm_area_struct *vma)
-{
-	int error = 0;
-	unsigned long off, va;
-	vm_ooffset_t pa;
-	struct netmap_priv_d *priv = f->private_data;
-	/*
-	 * vma->vm_start: start of mapping user address space
-	 * vma->vm_end: end of the mapping user address space
-	 * vma->vm_pfoff: offset of first page in the device
-	 */
-
-	// XXX security checks
-
-	error = netmap_get_memory(priv);
-	ND("get_memory returned %d", error);
-	if (error)
-	    return -error;
-
-	if ((vma->vm_start & ~PAGE_MASK) || (vma->vm_end & ~PAGE_MASK)) {
-		ND("vm_start = %lx vm_end = %lx", vma->vm_start, vma->vm_end);
-		return -EINVAL;
-	}
-
-	for (va = vma->vm_start, off = vma->vm_pgoff;
-	     va < vma->vm_end;
-	     va += PAGE_SIZE, off++)
-	{
-		pa = netmap_mem_ofstophys(priv->np_mref, off << PAGE_SHIFT);
-		if (pa == 0) 
-			return -EINVAL;
-	
-		ND("va %lx pa %p", va, pa);	
-		error = remap_pfn_range(vma, va, pa >> PAGE_SHIFT, PAGE_SIZE, vma->vm_page_prot);
-		if (error) 
-			return error;
-	}
-	return 0;
-}
-
-
-/*
- * This one is probably already protected by the netif lock XXX
- */
-static netdev_tx_t
-linux_netmap_start_xmit(struct sk_buff *skb, struct net_device *dev)
-{
-	netmap_transmit(dev, skb);
-	return (NETDEV_TX_OK);
-}
-
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,36)	// XXX was 37
-#define LIN_IOCTL_NAME	.ioctl
-int
-linux_netmap_ioctl(struct inode *inode, struct file *file, u_int cmd, u_long data /* arg */)
-#else
-#define LIN_IOCTL_NAME	.unlocked_ioctl
-long
-linux_netmap_ioctl(struct file *file, u_int cmd, u_long data /* arg */)
-#endif
-{
-	int ret;
-	struct nmreq nmr;
-	bzero(&nmr, sizeof(nmr));
-
-	if (cmd == NIOCTXSYNC || cmd == NIOCRXSYNC) {
-		data = 0;	/* no argument required here */
-	}
-	if (data && copy_from_user(&nmr, (void *)data, sizeof(nmr) ) != 0)
-		return -EFAULT;
-	ret = netmap_ioctl(NULL, cmd, (caddr_t)&nmr, 0, (void *)file);
-	if (data && copy_to_user((void*)data, &nmr, sizeof(nmr) ) != 0)
-		return -EFAULT;
-	return -ret;
-}
-
-
-static int
-netmap_release(struct inode *inode, struct file *file)
-{
-	(void)inode;	/* UNUSED */
-	if (file->private_data)
-		netmap_dtor(file->private_data);
-	return (0);
-}
-
-
-static int
-linux_netmap_open(struct inode *inode, struct file *file)
-{
-	struct netmap_priv_d *priv;
-	(void)inode;	/* UNUSED */
-
-	priv = malloc(sizeof(struct netmap_priv_d), M_DEVBUF,
-			      M_NOWAIT | M_ZERO);
-	if (priv == NULL)
-		return -ENOMEM;
-
-	file->private_data = priv;
-
-	return (0);
-}
-
-
-static struct file_operations netmap_fops = {
-    .owner = THIS_MODULE,
-    .open = linux_netmap_open,
-    .mmap = linux_netmap_mmap,
-    LIN_IOCTL_NAME = linux_netmap_ioctl,
-    .poll = linux_netmap_poll,
-    .release = netmap_release,
-};
-
-
-static struct miscdevice netmap_cdevsw = {	/* same name as FreeBSD */
-	MISC_DYNAMIC_MINOR,
-	"netmap",
-	&netmap_fops,
-};
-
-static int netmap_init(void);
-static void netmap_fini(void);
-
-
-/* Errors have negative values on linux */
-static int linux_netmap_init(void)
-{
-	return -netmap_init();
-}
-
-module_init(linux_netmap_init);
-module_exit(netmap_fini);
-/* export certain symbols to other modules */
-EXPORT_SYMBOL(netmap_attach);		// driver attach routines
-EXPORT_SYMBOL(netmap_detach);		// driver detach routines
-EXPORT_SYMBOL(netmap_ring_reinit);	// ring init on error
-EXPORT_SYMBOL(netmap_buffer_lut);
-EXPORT_SYMBOL(netmap_total_buffers);	// index check
-EXPORT_SYMBOL(netmap_buffer_base);
-EXPORT_SYMBOL(netmap_reset);		// ring init routines
-EXPORT_SYMBOL(netmap_buf_size);
-EXPORT_SYMBOL(netmap_rx_irq);		// default irq handler
-EXPORT_SYMBOL(netmap_no_pendintr);	// XXX mitigation - should go away
-EXPORT_SYMBOL(netmap_bdg_ctl);		// bridge configuration routine
-EXPORT_SYMBOL(netmap_bdg_learning);	// the default lookup function
-EXPORT_SYMBOL(netmap_disable_all_rings);
-EXPORT_SYMBOL(netmap_enable_all_rings);
-
-
-MODULE_AUTHOR("http://info.iet.unipi.it/~luigi/netmap/");
-MODULE_DESCRIPTION("The netmap packet I/O framework");
-MODULE_LICENSE("Dual BSD/GPL"); /* the code here is all BSD. */
-
-#else /* __FreeBSD__ */
-
-
+#ifdef __FreeBSD__
 static struct cdevsw netmap_cdevsw = {
 	.d_version = D_VERSION,
 	.d_name = "netmap",
@@ -4117,7 +3923,7 @@ static struct cdev *netmap_dev; /* /dev/netmap character device. */
  *
  * Return 0 on success, errno on failure.
  */
-static int
+int
 netmap_init(void)
 {
 	int i, error;
@@ -4145,7 +3951,7 @@ netmap_init(void)
  *
  * Free all the memory, and destroy the ``/dev/netmap`` device.
  */
-static void
+void
 netmap_fini(void)
 {
 	destroy_dev(netmap_dev);
