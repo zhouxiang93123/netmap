@@ -59,7 +59,7 @@ Simple
 .Pa ioctl()s
 are used to bind interfaces/ports to file descriptors and
 implement non-blocking I/O, whereas blocking I/O uses
-.Pa select()/poll().
+.Pa select()/poll() .
 .Nm
 can exploit the parallelism in multiqueue devices and
 multicore systems.
@@ -162,8 +162,6 @@ shared only with the kernel.
 All references between the shared data structure
 are relative (offsets or indexes). Some macros help converting
 them into actual pointers.
-.Pp
-.Pp
 .Bl -tag -width XXX
 .It Dv struct netmap_if (one per interface)
 indicates the number of rings supported by an interface, their
@@ -361,14 +359,13 @@ function, which can use it e.g. as the index of the destination
 port instead of doing an address lookup.
 .El
 .Sh IOCTLS
-.Pp
 .Nm
 supports some ioctl() to synchronize the state of the rings
 between the kernel and the user processes, plus some
 to query and configure the interface.
 The former do not require any argument, whereas the latter
 use a
-.Pa struct netmap_req
+.Pa struct nmreq
 defined as follows:
 .Bd -literal
 struct nmreq {
@@ -506,7 +503,7 @@ fd = open("/dev/netmap", O_RDWR);
 bzero(&nmr, sizeof(nmr));
 strcpy(nmr.nr_name, "ix0");
 nmr.nm_version = NETMAP_API;
-ioctl(fd, NIOCREG, &nmr);
+ioctl(fd, NIOCREGIF, &nmr);
 p = mmap(0, nmr.nr_memsize, fd);
 nifp = NETMAP_IF(p, nmr.nr_offset);
 ring = NETMAP_TXRING(nifp, 0);
@@ -545,13 +542,17 @@ Usenix ATC'12, June 2012, Boston
 .An -nosplit
 The
 .Nm
-framework has been designed and implemented at the
+framework has been originally designed and implemented at the
 Universita` di Pisa in 2011 by
 .An Luigi Rizzo ,
-with help from
+and further extended with help from
 .An Matteo Landi ,
 .An Gaetano Catalli ,
-.An Giuseppe Lettieri .
+.An Giuseppe Lettieri ,
+.An Vincenzo Maffione .
 .Pp
 .Nm
-has been funded by the European Commission within FP7 Project CHANGE (257422).
+and
+.Nm VALE
+have been funded by the European Commission within FP7 Projects
+CHANGE (257422) and OPENLAB (287581).
