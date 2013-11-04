@@ -186,7 +186,6 @@ struct netmap_kring {
 #ifdef linux
         /* Generic netmap adapter support. This allows to use netmap with a device driver
            which doesn't support netmap. */
-        atomic_t tx_completed;          /* Completed transmissions. */
         struct sk_buff **tx_pool;
         struct sk_buff_head rx_queue;   /* A queue for intercepted rx sk_buffs. */
         u_int nr_ntc;                   /* Emulation of a next-to-clean RX ring pointer. */
@@ -358,7 +357,13 @@ struct netmap_adapter {
 
 #ifdef linux
 	struct net_device_ops nm_ndo;
+
+        /* With generic netmap adapters we need a net_device_ops structure to override the
+           ndo_select_queue() driver method. */
         struct net_device_ops generic_ndo;
+
+        /* High resolution timer used to mitigate rx notifications with generic netmap
+           adapters. */
         struct hrtimer mit_timer;
         int mit_pending;
 #endif /* linux */

@@ -163,7 +163,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         na->if_transmit = (void *)ifp->netdev_ops;
         na->generic_ndo = *(ifp->netdev_ops);  /* Copy */
         na->generic_ndo.ndo_select_queue = &generic_ndo_select_queue;  /* Replace a field. */
-        ifp->netdev_ops = &na->generic_ndo;  /* Switch the pointer. */
+        ifp->netdev_ops = &na->generic_ndo;  /* Switch the pointers. */
 #ifdef RATE
         if (rate_ctx.refcount == 0) {
             D("setup_timer()");
