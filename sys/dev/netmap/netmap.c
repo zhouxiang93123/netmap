@@ -609,11 +609,7 @@ nma_is_host(struct netmap_adapter *na)
 static __inline int
 nma_is_generic(struct netmap_adapter *na)
 {
-#ifdef linux
 	return na->nm_register == generic_netmap_register;
-#else  /* !linux */
-        return false;
-#endif /* !linux */
 }
 
 static __inline int
@@ -1777,8 +1773,8 @@ no_bridge_port:
 	if (*ifp == NULL)
 		return (ENXIO);
 
-#ifdef linux
-        i = netmap_admode;  /* Take a snapshot. */
+	/* generic support */
+	i = netmap_admode;	/* Take a snapshot. */
         if ((!NETMAP_CAPABLE(*ifp) && (i == NETMAP_ADMODE_BEST ||
                                        i == NETMAP_ADMODE_GENERIC))
             || (NETMAP_CAPABLE(*ifp) && !nma_is_generic(NA(*ifp)) &&
@@ -1800,7 +1796,6 @@ no_bridge_port:
                 na->prev = prev_na; /* Store the previously used netmap_adapter. */
                 D("Created generic NA %p (prev %p)", na, na->prev);
         }
-#endif  /* !linux */
 
 	if (NETMAP_CAPABLE(*ifp)) {
 		/* Users cannot use the NIC attached to a bridge directly */

@@ -23,7 +23,27 @@
  * SUCH DAMAGE.
  */
 
+#ifdef __FreeBSD__
+
+#include <sys/cdefs.h> /* prerequisite */
+__FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257666 2013-11-05 01:06:22Z luigi $");
+
+#include <sys/types.h>
+#include <sys/errno.h>
+#include <sys/malloc.h>
+#include <sys/lock.h>   /* PROT_EXEC */ // XXX also lock.h
+#include <sys/rwlock.h>
+#include <sys/socket.h> /* sockaddrs */
+#include <sys/selinfo.h>
+#include <net/if.h>
+#include <net/if_var.h>
+#include <machine/bus.h>        /* bus_dmamap_* in netmap_kern.h */
+
+typedef int rx_handler_result_t;	// XXX
+
+#else /* linux */
 #include "bsd_glue.h"
+#endif /* linux */
 
 #include <net/netmap.h>
 #include <dev/netmap/netmap_kern.h>
@@ -47,7 +67,10 @@ extern int netmap_generic_mit;
 
 /* ===================== GENERIC NETMAP ADAPTER SUPPORT ================== */
 
+#ifdef linux
 #define RATE  /* Enables communication statistics. */
+#endif
+
 #ifdef RATE
 #define IFRATE(x) x
 struct rate_stats {
@@ -99,6 +122,7 @@ static struct rate_context rate_ctx;
 
 #define GENERIC_BUF_SIZE        netmap_buf_size    /* Size of the sk_buffs in the Tx pool. */
 
+#ifdef linux
 rx_handler_result_t generic_netmap_rx_handler(struct sk_buff **pskb);
 enum hrtimer_restart generic_timer_handler(struct hrtimer *t);
 
@@ -106,12 +130,20 @@ static u16 generic_ndo_select_queue(struct ifnet *ifp, struct sk_buff *skb)
 {
     return skb_get_queue_mapping(skb);
 }
+#endif /* linux */
 
 //#define REG_RESET
 
 /* Enable/disable netmap mode for a generic network interface. */
 int generic_netmap_register(struct ifnet *ifp, int enable)
 {
+#ifdef __FreeBSD__
+    if (enable) {
+	return EINVAL;
+    } else {
+    }
+#else /* linux */
+
     struct netmap_adapter *na = NA(ifp);
     struct sk_buff *skb;
     int error;
@@ -227,8 +259,10 @@ alloc_sk_buffs:
     }
 
     return error;
+#endif /* linux */
 }
 
+#ifdef linux
 /* Invoked when the driver of the attached interface frees a socket buffer used by netmap for
    transmitting a packet. This usually happens when the NIC notifies the driver that the
    transmission is completed. */
@@ -308,6 +342,7 @@ static int generic_set_tx_event(struct netmap_kring *kring, u_int e)
     return generic_netmap_tx_clean(kring); */
     return 0;
 }
+#endif /* linux */
 
 /* The generic txsync method transforms netmap buffers in sk_buffs and the invokes the
    driver ndo_start_xmit() method. This is not done directly, but using dev_queue_xmit(),
@@ -315,6 +350,9 @@ static int generic_set_tx_event(struct netmap_kring *kring, u_int e)
 static int
 generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
+#ifdef __FreeBSD__
+    return EINVAL;
+#else /* linux */
     struct netmap_adapter *na = NA(ifp);
     struct netmap_kring *kring = &na->tx_rings[ring_nr];
     struct netmap_ring *ring = kring->ring;
@@ -389,8 +427,10 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
     }
 
     return 0;
+#endif /* linux */
 }
 
+#ifdef linux
 enum hrtimer_restart generic_timer_handler(struct hrtimer *t)
 {
     struct netmap_adapter *na = container_of(t, struct netmap_adapter, mit_timer);
@@ -446,12 +486,15 @@ rx_handler_result_t generic_netmap_rx_handler(struct sk_buff **pskb)
 
     return RX_HANDLER_CONSUMED;
 }
+#endif /* linux */
 
 /* The generic rxsync() method extracts sk_buffs from the queue filled by
    generic_netmap_rx_handler() and puts their content in the netmap receive ring. */
 static int
 generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
+#ifdef __FreeBSD__
+#else /* linux */
     struct netmap_adapter *na = NA(ifp);
     struct netmap_kring *kring = &na->rx_rings[ring_nr];
     struct netmap_ring *ring = kring->ring;
@@ -523,6 +566,7 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
     IFRATE(rate_ctx.new.rxsync++);
 
     return 0;
+#endif /* linux */
 }
 
 /* Use ethtool to find the current NIC rings lengths, so that the netmap rings can
@@ -530,6 +574,10 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 static int
 generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx)
 {
+
+#ifdef __FreeBSD__
+    D("using default values for %s tx %d rx %d", ifp->if_xname, *tx, *rx);
+#else /* linux */
     struct ethtool_ringparam rp;
 
     if (ifp->ethtool_ops && ifp->ethtool_ops->get_ringparam) {
@@ -537,6 +585,7 @@ generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx)
         *tx = rp.tx_pending;
         *rx = rp.rx_pending;
     }
+#endif /* linux */
 
     return 0;
 }
@@ -574,7 +623,10 @@ generic_netmap_attach(struct ifnet *ifp)
                                         ifp->real_num_tx_queues, ifp->tx_queue_len);
     ND("[GNA] num_rx_queues(%d), real_num_rx_queues(%d)", ifp->num_rx_queues,
                                                             ifp->real_num_rx_queues);
+#ifdef __FreeBSD__
+#else /* linux */
     na->num_tx_rings = ifp->real_num_tx_queues;
+#endif /* linux */
 
     retval = netmap_attach(na, 1); // TODO ifp->real_num_rx_queues);
     free(na, M_DEVBUF);
