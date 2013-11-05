@@ -43,33 +43,25 @@ typedef int rx_handler_result_t;	// XXX
 
 #else /* linux */
 #include "bsd_glue.h"
+
+#include <linux/rtnetlink.h>    /* rtnl_[un]lock() */
+#include <linux/ethtool.h>      /* struct ethtool_ops, get_ringparam */
+#include <linux/hrtimer.h>
+
+#define RATE  /* Enables communication statistics. */
+
 #endif /* linux */
 
 #include <net/netmap.h>
 #include <dev/netmap/netmap_kern.h>
 #include <dev/netmap/netmap_mem2.h>
 
-#ifdef linux
-#include <linux/rtnetlink.h>    /* rtnl_[un]lock() */
-#include <linux/ethtool.h>      /* struct ethtool_ops, get_ringparam */
-#include <linux/hrtimer.h>
-#endif /* linux */
 
 /* ====================== STUFF DEFINED in netmap.c ===================== */
-int netmap_get_memory(struct netmap_priv_d* p);
-void netmap_dtor(void *data);
-int netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td);
-int netmap_poll(struct cdev *dev, int events, struct thread *td);
-int netmap_init(void);
-void netmap_fini(void);
 extern int netmap_generic_mit;
 
 
-/* ===================== GENERIC NETMAP ADAPTER SUPPORT ================== */
-
-#ifdef linux
-#define RATE  /* Enables communication statistics. */
-#endif
+/* ============================= usage stats ============================= */
 
 #ifdef RATE
 #define IFRATE(x) x
@@ -119,6 +111,8 @@ static struct rate_context rate_ctx;
 #define IFRATE(x)
 #endif /* !RATE */
 
+
+/* ===================== GENERIC NETMAP ADAPTER SUPPORT ================== */
 
 #define GENERIC_BUF_SIZE        netmap_buf_size    /* Size of the mbufs in the Tx pool. */
 

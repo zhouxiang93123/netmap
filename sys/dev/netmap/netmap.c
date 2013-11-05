@@ -1354,12 +1354,6 @@ netmap_send_up(struct ifnet *dst, struct mbuf *head)
 	}
 }
 
-struct mbq {
-	struct mbuf *head;
-	struct mbuf *tail;
-	int count;
-};
-
 
 /*
  * put a copy of the buffers marked NS_FORWARD into an mbuf chain.
