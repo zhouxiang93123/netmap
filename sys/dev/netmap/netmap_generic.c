@@ -120,15 +120,15 @@ static struct rate_context rate_ctx;
 #endif /* !RATE */
 
 
-#define GENERIC_BUF_SIZE        netmap_buf_size    /* Size of the sk_buffs in the Tx pool. */
+#define GENERIC_BUF_SIZE        netmap_buf_size    /* Size of the mbufs in the Tx pool. */
 
 #ifdef linux
-rx_handler_result_t generic_netmap_rx_handler(struct sk_buff **pskb);
+rx_handler_result_t generic_netmap_rx_handler(struct mbuf **pm);
 enum hrtimer_restart generic_timer_handler(struct hrtimer *t);
 
-static u16 generic_ndo_select_queue(struct ifnet *ifp, struct sk_buff *skb)
+static u16 generic_ndo_select_queue(struct ifnet *ifp, struct mbuf *m)
 {
-    return skb_get_queue_mapping(skb);
+    return skb_get_queue_mapping(m);
 }
 #endif /* linux */
 
@@ -145,7 +145,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
 #else /* linux */
 
     struct netmap_adapter *na = NA(ifp);
-    struct sk_buff *skb;
+    struct mbuf *m;
     int error;
     int i, r;
 
@@ -171,20 +171,21 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         na->mit_pending = 0;
         for (r=0; r<na->num_tx_rings; r++) {
             na->tx_rings[r].nr_ntc = 0;
-            na->tx_rings[r].tx_pool = kmalloc(na->num_tx_desc * sizeof(struct sk_buff *), GFP_ATOMIC);
+            na->tx_rings[r].tx_pool = malloc(na->num_tx_desc * sizeof(struct mbuf *),
+                                                M_DEVBUF, GFP_ATOMIC);
             if (!na->tx_rings[r].tx_pool) {
                 D("tx_pool allocation failed");
                 error = ENOMEM;
                 goto alloc_tx_pool;
             }
             for (i=0; i<na->num_tx_desc; i++) {
-                skb = alloc_skb(GENERIC_BUF_SIZE, GFP_ATOMIC);
-                if (!skb) {
+                m = alloc_skb(GENERIC_BUF_SIZE, GFP_ATOMIC);
+                if (!m) {
                     D("tx_pool[%d] allocation failed", i);
                     error = ENOMEM;
-                    goto alloc_sk_buffs;
+                    goto alloc_mbufs;
                 }
-                na->tx_rings[r].tx_pool[i] = skb;
+                na->tx_rings[r].tx_pool[i] = m;
             }
         }
         rtnl_lock();
@@ -220,9 +221,9 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         hrtimer_cancel(&na->mit_timer);
         for (r=0; r<na->num_tx_rings; r++) {
             for (i=0; i<na->num_tx_desc; i++) {
-                kfree_skb(na->tx_rings[r].tx_pool[i]);
+                m_freem(na->tx_rings[r].tx_pool[i]);
             }
-            kfree(na->tx_rings[r].tx_pool);
+            free(na->tx_rings[r].tx_pool, M_DEVBUF);
         }
 #ifdef RATE
         if (--rate_ctx.refcount == 0) {
@@ -248,13 +249,13 @@ register_handler:
 alloc_tx_pool:
     r--;
     i = na->num_tx_desc;  /* Useless, but just to stay safe. */
-alloc_sk_buffs:
+alloc_mbufs:
     i--;
     for (; r>=0; r--) {
         for (; i>=0; i--) {
-            kfree_skb(na->tx_rings[r].tx_pool[i]);
+            m_freem(na->tx_rings[r].tx_pool[i]);
         }
-        kfree(na->tx_rings[r].tx_pool);
+        free(na->tx_rings[r].tx_pool, M_DEVBUF);
         i = na->num_tx_desc - 1;
     }
 
@@ -267,10 +268,10 @@ alloc_sk_buffs:
    transmitting a packet. This usually happens when the NIC notifies the driver that the
    transmission is completed. */
 static void
-generic_mbuf_destructor(struct sk_buff *skb)
+generic_mbuf_destructor(struct mbuf *m)
 {
     ND("Tx irq (%p)", arg);
-    netmap_irq_generic(skb->dev, skb_get_queue_mapping(skb), NULL, 1);
+    netmap_irq_generic(m->dev, skb_get_queue_mapping(m), NULL, 1);
     IFRATE(rate_ctx.new.txirq++);
 }
 
@@ -284,7 +285,7 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
     u_int n = 0;
 
     while (ntc != hwcur && (kring->tx_pool[ntc] == NULL
-                || atomic_read(&kring->tx_pool[ntc]->users) == 1)) {
+                || NM_ATOMIC_READ(&kring->tx_pool[ntc]->users) == 1)) {
         if (unlikely(kring->tx_pool[ntc] == NULL)) {
             kring->tx_pool[ntc] = alloc_skb(GENERIC_BUF_SIZE, GFP_ATOMIC);
             if (unlikely(!kring->tx_pool[ntc])) {
@@ -322,20 +323,20 @@ static inline u_int generic_tx_event_middle(struct netmap_kring *kring, u_int j)
 
 static int generic_set_tx_event(struct netmap_kring *kring, u_int e)
 {
-    struct sk_buff *skb;
+    struct mbuf *m;
 
     ND("Event at %d", e);
-    skb = kring->tx_pool[e];
-    if (unlikely(!skb)) {
+    m = kring->tx_pool[e];
+    if (unlikely(!m)) {
         D("ERROR: This should never happen");
         return -EINVAL;
     }
     kring->tx_pool[e] = NULL;
-    //skb_shinfo(skb)->destructor_arg = NULL + e;
-    skb->destructor = &generic_mbuf_destructor;
+    //skb_shinfo(m)->destructor_arg = NULL + e;
+    m->destructor = &generic_mbuf_destructor;
     // XXX wmb() ?
     /* Decrement the refcount an free it if we have the last one. */
-    kfree_skb(skb);
+    m_freem(m);
     smp_mb();
 
     /* Double check here is redundant, because the txsync callback is called twice.
@@ -344,7 +345,7 @@ static int generic_set_tx_event(struct netmap_kring *kring, u_int e)
 }
 #endif /* linux */
 
-/* The generic txsync method transforms netmap buffers in sk_buffs and the invokes the
+/* The generic txsync method transforms netmap buffers in mbufs and the invokes the
    driver ndo_start_xmit() method. This is not done directly, but using dev_queue_xmit(),
    since it implements the TX flow control (and takes some locks). */
 static int
@@ -379,26 +380,26 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
             struct netmap_slot *slot = &ring->slot[j]; /* Current slot in the netmap ring */
             void *addr = NMB(slot);
             u_int len = slot->len;
-            struct sk_buff *skb;
+            struct mbuf *m;
             netdev_tx_t tx_ret;
 
             if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
                 return netmap_ring_reinit(kring);
             }
-            /* Tale a sk_buff from the tx pool and copy in the user packet. */
-            skb = kring->tx_pool[j];
-            if (unlikely(!skb)) {
+            /* Tale a mbuf from the tx pool and copy in the user packet. */
+            m = kring->tx_pool[j];
+            if (unlikely(!m)) {
                 D("This should never happen");
                 return netmap_ring_reinit(kring);
             }
             /* TODO Support the slot flags (NS_FRAG, NS_INDIRECT). */
-            skb_copy_to_linear_data(skb, addr, len); // skb_store_bits(skb, 0, addr, len);
-            skb_put(skb, len);
-            atomic_inc(&skb->users);
-            skb->dev = ifp;
-            skb->priority = 100;
-            skb_set_queue_mapping(skb, ring_nr);
-            tx_ret = dev_queue_xmit(skb);
+            skb_copy_to_linear_data(m, addr, len); // skb_store_bits(m, 0, addr, len);
+            skb_put(m, len);
+            NM_ATOMIC_INC(&m->users);
+            m->dev = ifp;
+            m->priority = 100;
+            skb_set_queue_mapping(m, ring_nr);
+            tx_ret = dev_queue_xmit(m);
             if (unlikely(tx_ret != NET_XMIT_SUCCESS)) {
                 ND("start_xmit failed: err %d [%d,%d,%d]", tx_ret, j, k, kring->nr_hwavail);
                 if (likely(tx_ret == NET_XMIT_DROP)) {
@@ -452,19 +453,19 @@ enum hrtimer_restart generic_timer_handler(struct hrtimer *t)
 }
 
 /* This handler is registered within the attached net_device in the Linux RX subsystem,
-   so that every sk_buff passed up by the driver can be stolen to the network stack.
+   so that every mbuf passed up by the driver can be stolen to the network stack.
    Stolen packets are put in a queue where the generic_netmap_rxsync() callback can
    extract them. */
-rx_handler_result_t generic_netmap_rx_handler(struct sk_buff **pskb)
+rx_handler_result_t generic_netmap_rx_handler(struct mbuf **pm)
 {
-    struct netmap_adapter *na = NA((*pskb)->dev);
+    struct netmap_adapter *na = NA((*pm)->dev);
     unsigned int work_done;
     unsigned int rr = 0;
 
     if (unlikely(skb_queue_len(&na->rx_rings[rr].rx_queue) > 1024)) {
-        kfree_skb(*pskb);
+        m_freem(*pm);
     } else {
-        skb_queue_tail(&na->rx_rings[rr].rx_queue, *pskb);
+        skb_queue_tail(&na->rx_rings[rr].rx_queue, *pm);
     }
 
     if (netmap_generic_mit < 32768) {
@@ -488,12 +489,13 @@ rx_handler_result_t generic_netmap_rx_handler(struct sk_buff **pskb)
 }
 #endif /* linux */
 
-/* The generic rxsync() method extracts sk_buffs from the queue filled by
+/* The generic rxsync() method extracts mbufs from the queue filled by
    generic_netmap_rx_handler() and puts their content in the netmap receive ring. */
 static int
 generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
 #ifdef __FreeBSD__
+    return 0;
 #else /* linux */
     struct netmap_adapter *na = NA(ifp);
     struct netmap_kring *kring = &na->rx_rings[ring_nr];
@@ -508,7 +510,7 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
     /* Import newly received packets into the netmap ring. */
     if (netmap_no_pendintr || force_update) {
         uint16_t slot_flags = kring->nkr_slot_flags;
-        struct sk_buff *skb;
+        struct mbuf *m;
 
         n = 0;
         j = kring->nr_ntc;
@@ -520,13 +522,13 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
             if (addr == netmap_buffer_base) { /* Bad buffer */
                 return netmap_ring_reinit(kring);
             }
-            skb = skb_dequeue(&kring->rx_queue);
-            if (!skb)
+            m = skb_dequeue(&kring->rx_queue);
+            if (!m)
                 break;
-            skb_copy_from_linear_data(skb, addr, skb->len);
-            ring->slot[j].len = skb->len;
+            m_copydata(m, 0, m->len, addr);
+            ring->slot[j].len = m->len;
             ring->slot[j].flags = slot_flags;
-            kfree_skb(skb);
+            m_freem(m);
             if (unlikely(j++ == lim))
                 j = 0;
             n++;

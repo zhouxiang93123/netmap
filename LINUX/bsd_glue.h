@@ -323,5 +323,6 @@ int sysctl_handle_long(SYSCTL_HANDLER_ARGS);
 #define NM_ATOMIC_SET(p, v)             atomic_set(p, v)
 #define NM_ATOMIC_INC(p)                atomic_inc(p)
 #define NM_ATOMIC_READ_AND_CLEAR(p)     atomic_xchg(p, 0)
+#define NM_ATOMIC_READ(p)               atomic_read(p)
 
 #endif /* _BSD_GLUE_H */

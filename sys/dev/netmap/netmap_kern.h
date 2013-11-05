@@ -183,12 +183,13 @@ struct netmap_kring {
 	NM_ATOMIC_T nr_busy;	/* prevent concurrent syscalls */
 
 	volatile int nkr_stopped;
-#ifdef linux
+
         /* Generic netmap adapter support. This allows to use netmap with a device driver
            which doesn't support netmap. */
-        struct sk_buff **tx_pool;
-        struct sk_buff_head rx_queue;   /* A queue for intercepted rx sk_buffs. */
+        struct mbuf **tx_pool;
         u_int nr_ntc;                   /* Emulation of a next-to-clean RX ring pointer. */
+#ifdef linux
+        struct sk_buff_head rx_queue;   /* A queue for intercepted rx sk_buffs. */
 #endif /* linux */
 
 } __attribute__((__aligned__(64)));
