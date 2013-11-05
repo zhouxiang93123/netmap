@@ -2811,9 +2811,8 @@ netmap_attach(struct netmap_adapter *arg, u_int num_queues)
 	na->refcount = na->na_single = na->na_multi = 0;
 	/* Core lock initialized here, others after netmap_if_new. */
 	mtx_init(&na->core_lock, "netmap core lock", MTX_NETWORK_LOCK, MTX_DEF);
+
 #ifdef linux
-	// XXX move to linux_specific code
-	// linux_netmap_attach(na); // XXX complete
 	if (!ifp->netdev_ops) {
 		D("missing netdev_ops, cannot proceed");
 		free(na, M_DEVBUF);
@@ -2867,13 +2866,13 @@ netmap_detach(struct ifnet *ifp)
 	}
 	if (na->na_flags & NAF_MEM_OWNER)
 		netmap_mem_private_delete(na->nm_mem);
-	bzero(na, sizeof(*na));
+	bzero(na, sizeof(*na)); /* safety */
 	WNA(ifp) = NULL;
 	free(na, M_DEVBUF);
 }
 
 
-int
+static int
 nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n,
 	struct netmap_adapter *na, u_int ring_nr);
 
@@ -3366,7 +3365,7 @@ netmap_bdg_learning(char *buf, u_int buf_len, uint8_t *dst_ring,
  * This flush routine supports only unicast and broadcast but a large
  * number of ports, and lets us replace the learn and dispatch functions.
  */
-int
+static int
 nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		u_int ring_nr)
 {
