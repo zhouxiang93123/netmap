@@ -205,8 +205,6 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z gle
 
 extern struct miscdevice netmap_cdevsw;
 netdev_tx_t linux_netmap_start_xmit(struct sk_buff *, struct net_device *);
-int generic_netmap_register(struct ifnet *ifp, int enable);
-int generic_netmap_attach(struct ifnet *ifp);
 struct net_device* ifunit_ref(const char *name);
 void if_rele(struct net_device *ifp);
 
@@ -2816,6 +2814,8 @@ netmap_attach(struct netmap_adapter *arg, u_int num_queues)
 	/* Core lock initialized here, others after netmap_if_new. */
 	mtx_init(&na->core_lock, "netmap core lock", MTX_NETWORK_LOCK, MTX_DEF);
 #ifdef linux
+	// XXX move to linux_specific code
+	// linux_netmap_attach(na); // XXX complete
 	if (ifp->netdev_ops) {
 		ND("netdev_ops %p", ifp->netdev_ops);
 		/* prepare a clone of the netdev ops */
@@ -2827,6 +2827,7 @@ netmap_attach(struct netmap_adapter *arg, u_int num_queues)
 	}
 	na->nm_ndo.ndo_start_xmit = linux_netmap_start_xmit;
 #endif /* linux */
+
 	na->nm_mem = arg->nm_mem ? arg->nm_mem : &nm_mem;
 	if (!nma_is_vp(arg))
 		netmap_attach_sw(ifp);

@@ -104,6 +104,7 @@ struct net_device_ops {
 #define	m_nextpkt		next			// chain of mbufs
 #define m_freem(m)		dev_kfree_skb_any(m)	// free a sk_buff
 
+
 /*
  * m_copydata() copies from mbuf to buffer following the mbuf chain.
  * XXX check which linux equivalent we should use to follow fragmented
@@ -137,6 +138,16 @@ struct net_device_ops {
 #define ifnet           	net_device      /* remap */
 #define	if_xname		name		/* field ifnet-> net_device */
 #define	if_capenable		priv_flags	/* IFCAP_NETMAP */
+
+/* some other FreeBSD APIs */
+struct net_device* ifunit_ref(const char *name);
+void if_rele(struct net_device *ifp);
+
+/* char device support */
+extern struct miscdevice netmap_cdevsw;
+
+/* hook to send from user space */
+netdev_tx_t linux_netmap_start_xmit(struct sk_buff *, struct net_device *);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 27)
 typedef unsigned long phys_addr_t;

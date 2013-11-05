@@ -766,5 +766,12 @@ struct netmap_priv_d {
 #endif /* __FreeBSD__ */
 };
 
+/*
+ * generic netmap emulation for devices that do not have
+ * native netmap support
+ */
+int generic_netmap_register(struct ifnet *ifp, int enable);
+int generic_netmap_attach(struct ifnet *ifp);
+
 
 #endif /* _NET_NETMAP_KERN_H_ */
