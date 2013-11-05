@@ -547,27 +547,36 @@ generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx)
 int
 generic_netmap_attach(struct ifnet *ifp)
 {
-    struct netmap_adapter na;
+    /* if *na is too large we do not want it on stack */
+    struct netmap_adapter *na;
+    int retval;
     unsigned int num_tx_desc = 256, num_rx_desc = 256;
 
     generic_find_num_desc(ifp, &num_tx_desc, &num_rx_desc);
     D("Netmap ring descriptors: TX = %d, RX = %d\n", num_tx_desc, num_rx_desc);
 
-    bzero(&na, sizeof(na));
-    na.ifp = ifp;
-    na.num_tx_desc = num_tx_desc;
-    na.num_rx_desc = num_rx_desc;
-    na.nm_register = &generic_netmap_register;
-    na.nm_txsync = &generic_netmap_txsync;
-    na.nm_rxsync = &generic_netmap_rxsync;
+    na = malloc(sizeof(*na), M_DEVBUF, M_NOWAIT | M_ZERO);
+    if (na == NULL) {
+	D("no memory on attach, give up");
+	return ENOMEM;
+    }
+    bzero(na, sizeof(*na));
+    na->ifp = ifp;
+    na->num_tx_desc = num_tx_desc;
+    na->num_rx_desc = num_rx_desc;
+    na->nm_register = &generic_netmap_register;
+    na->nm_txsync = &generic_netmap_txsync;
+    na->nm_rxsync = &generic_netmap_rxsync;
 
     ND("[GNA] num_tx_queues(%d), real_num_tx_queues(%d), len(%lu)", ifp->num_tx_queues,
                                         ifp->real_num_tx_queues, ifp->tx_queue_len);
     ND("[GNA] num_rx_queues(%d), real_num_rx_queues(%d)", ifp->num_rx_queues,
                                                             ifp->real_num_rx_queues);
-    na.num_tx_rings = ifp->real_num_tx_queues;
+    na->num_tx_rings = ifp->real_num_tx_queues;
 
-    return netmap_attach(&na, 1); // TODO ifp->real_num_rx_queues);
+    retval = netmap_attach(na, 1); // TODO ifp->real_num_rx_queues);
+    free(na, M_DEVBUF);
+    return retval;
 }
 
 
