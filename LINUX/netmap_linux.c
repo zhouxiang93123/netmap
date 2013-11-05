@@ -25,12 +25,6 @@
 
 #include "bsd_glue.h"
 
-#if 0
-#include <linux/rtnetlink.h>    /* rtnl_[un]lock() */
-#include <linux/ethtool.h>      /* struct ethtool_ops, get_ringparam */
-#include <linux/hrtimer.h>
-#endif
-
 #include <net/netmap.h>
 #include <dev/netmap/netmap_kern.h>
 #include <dev/netmap/netmap_mem2.h>
