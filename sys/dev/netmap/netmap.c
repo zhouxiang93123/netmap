@@ -203,11 +203,6 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z gle
 
 #include "bsd_glue.h"
 
-extern struct miscdevice netmap_cdevsw;
-netdev_tx_t linux_netmap_start_xmit(struct sk_buff *, struct net_device *);
-struct net_device* ifunit_ref(const char *name);
-void if_rele(struct net_device *ifp);
-
 // XXX a mtx would suffice here too 20130404 gl
 #define NMG_LOCK_T		struct semaphore
 #define NMG_LOCK_INIT()		sema_init(&netmap_global_lock, 1)
