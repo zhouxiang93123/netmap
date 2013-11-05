@@ -97,12 +97,17 @@ clean:
 		Module.symvers .*.cmd get-drivers )
 
 # the source is not here so we need to specify a dependency
+# XXX can we do better ?
 $(obj)/netmap.o: $(M)/../sys/dev/netmap/netmap.c
 	$(call cmd,cc_o_c)
 	$(call cmd,modversions)
 #	$(call quiet_cmd,cc_o_c)
 
 $(obj)/netmap_mem2.o: $(M)/../sys/dev/netmap/netmap_mem2.c
+	$(call cmd,cc_o_c)
+	$(call cmd,modversions)
+
+$(obj)/netmap_generic.o: $(M)/../sys/dev/netmap/netmap_generic.c
 	$(call cmd,cc_o_c)
 	$(call cmd,modversions)
 
