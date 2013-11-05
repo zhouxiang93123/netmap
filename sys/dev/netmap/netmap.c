@@ -2784,13 +2784,21 @@ netmap_attach(struct netmap_adapter *arg, u_int num_queues)
 {
 	struct netmap_adapter *na = NULL;
 	struct ifnet *ifp = arg ? arg->ifp : NULL;
-	size_t len;
+	int na_entries;
 
 	if (arg == NULL || ifp == NULL)
 		goto fail;
-	/* a VALE port uses two endpoints */
-	len = nma_is_vp(arg) ? sizeof(*na) : sizeof(*na) * 2;
-	na = malloc(len, M_DEVBUF, M_NOWAIT | M_ZERO);
+	/*
+	 * Allocate 1 struct netmap_adapter (or 2 for a NIC,
+	 * the second being used for the host-stack port),
+	 * and memory for a couple of blocks to override
+	 * linux callbacks. These are only used on physical
+	 * ports (entry 0).
+	 */
+	na_entries = nma_is_vp(arg) ? 1 : 2;
+	na = malloc(na_entries * sizeof(*na) +
+		2 * sizeof(struct net_device_ops),
+		M_DEVBUF, M_NOWAIT | M_ZERO);
 	if (na == NULL)
 		goto fail;
 	WNA(ifp) = na;
@@ -2806,18 +2814,26 @@ netmap_attach(struct netmap_adapter *arg, u_int num_queues)
 #ifdef linux
 	// XXX move to linux_specific code
 	// linux_netmap_attach(na); // XXX complete
-	if (ifp->netdev_ops) {
-		ND("netdev_ops %p", ifp->netdev_ops);
-		/* prepare a clone of the netdev ops */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 28)
-		na->nm_ndo.ndo_start_xmit = ifp->netdev_ops;
-#else
-		na->nm_ndo = *ifp->netdev_ops;
-#endif
+	if (!ifp->netdev_ops) {
+		D("missing netdev_ops, cannot proceed");
+		free(na, M_DEVBUF);
+		goto fail;
 	}
-	na->nm_ndo.ndo_start_xmit = linux_netmap_start_xmit;
+
+	/* connect the netdev_ops buffers to na[0] */
+	na->nm_ndo_p = (void *)(na + na_entries);
+	na->generic_ndo_p = na->nm_ndo_p + 1;
+
+	/* prepare a clone of the netdev ops */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 28)
+	na->nm_ndo_p->ndo_start_xmit = ifp->netdev_ops;
+#else
+	*na->nm_ndo_p = *ifp->netdev_ops;
+#endif
+	na->nm_ndo_p->ndo_start_xmit = linux_netmap_start_xmit;
 #endif /* linux */
 
+	/* reference the memory allocator in use */
 	na->nm_mem = arg->nm_mem ? arg->nm_mem : &nm_mem;
 	if (!nma_is_vp(arg))
 		netmap_attach_sw(ifp);

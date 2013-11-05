@@ -196,9 +196,9 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         }
         ifp->if_capenable |= IFCAP_NETMAP;
         na->if_transmit = (void *)ifp->netdev_ops;
-        na->generic_ndo = *(ifp->netdev_ops);  /* Copy */
-        na->generic_ndo.ndo_select_queue = &generic_ndo_select_queue;  /* Replace a field. */
-        ifp->netdev_ops = &na->generic_ndo;  /* Switch the pointers. */
+        *na->generic_ndo_p = *ifp->netdev_ops;  /* Copy */
+        na->generic_ndo_p->ndo_select_queue = &generic_ndo_select_queue;  /* Replace a field. */
+        ifp->netdev_ops = na->generic_ndo_p;  /* Switch the pointers. */
 #ifdef RATE
         if (rate_ctx.refcount == 0) {
             D("setup_timer()");
@@ -600,26 +600,20 @@ generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx)
 int
 generic_netmap_attach(struct ifnet *ifp)
 {
-    /* if *na is too large we do not want it on stack */
-    struct netmap_adapter *na;
+    struct netmap_adapter na;
     int retval;
     unsigned int num_tx_desc = 256, num_rx_desc = 256;
 
     generic_find_num_desc(ifp, &num_tx_desc, &num_rx_desc);
     D("Netmap ring descriptors: TX = %d, RX = %d\n", num_tx_desc, num_rx_desc);
 
-    na = malloc(sizeof(*na), M_DEVBUF, M_NOWAIT | M_ZERO);
-    if (na == NULL) {
-	D("no memory on attach, give up");
-	return ENOMEM;
-    }
-    bzero(na, sizeof(*na));
-    na->ifp = ifp;
-    na->num_tx_desc = num_tx_desc;
-    na->num_rx_desc = num_rx_desc;
-    na->nm_register = &generic_netmap_register;
-    na->nm_txsync = &generic_netmap_txsync;
-    na->nm_rxsync = &generic_netmap_rxsync;
+    bzero(&na, sizeof(na));
+    na.ifp = ifp;
+    na.num_tx_desc = num_tx_desc;
+    na.num_rx_desc = num_rx_desc;
+    na.nm_register = &generic_netmap_register;
+    na.nm_txsync = &generic_netmap_txsync;
+    na.nm_rxsync = &generic_netmap_rxsync;
 
     ND("[GNA] num_tx_queues(%d), real_num_tx_queues(%d), len(%lu)", ifp->num_tx_queues,
                                         ifp->real_num_tx_queues, ifp->tx_queue_len);
@@ -627,10 +621,9 @@ generic_netmap_attach(struct ifnet *ifp)
                                                             ifp->real_num_rx_queues);
 #ifdef __FreeBSD__
 #else /* linux */
-    na->num_tx_rings = ifp->real_num_tx_queues;
+    na.num_tx_rings = ifp->real_num_tx_queues;
 #endif /* linux */
 
-    retval = netmap_attach(na, 1); // TODO ifp->real_num_rx_queues);
-    free(na, M_DEVBUF);
+    retval = netmap_attach(&na, 1); // TODO ifp->real_num_rx_queues);
     return retval;
 }

@@ -45,6 +45,12 @@
 
 #define NM_ATOMIC_T	volatile int
 
+// XXX linux struct, not used in FreeBSD
+struct net_device_ops {
+};
+struct hrtimer {
+};
+
 #elif defined (linux)
 
 #define	NM_LOCK_T	safe_spinlock_t	// see bsd_glue.h
@@ -356,18 +362,16 @@ struct netmap_adapter {
         /* Pointer to a previously used netmap adapter. */
         struct netmap_adapter *prev;
 
-#ifdef linux
-	struct net_device_ops nm_ndo;
+	struct net_device_ops *nm_ndo_p;
 
         /* With generic netmap adapters we need a net_device_ops structure to override the
            ndo_select_queue() driver method. */
-        struct net_device_ops generic_ndo;
+        struct net_device_ops *generic_ndo_p;
 
         /* High resolution timer used to mitigate rx notifications with generic netmap
            adapters. */
         struct hrtimer mit_timer;
         int mit_pending;
-#endif /* linux */
 };
 
 /*
