@@ -40,6 +40,25 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257666 2013-11-05 01:06:22Z lui
 #include <machine/bus.h>        /* bus_dmamap_* in netmap_kern.h */
 
 typedef int rx_handler_result_t;	// XXX
+#define rtnl_lock() D("rtnl_lock called");
+#define rtnl_unlock() D("rtnl_lock called");
+
+static struct mbuf *
+netmap_get_mbuf(int len)
+{
+	struct mbuf *m;
+
+	if (len < 0 || len > MCLBYTES) {
+		D("invalid size %d", len);
+		return NULL;
+	}
+	m = m_getcl(M_NOWAIT, MT_DATA, M_PKTHDR);
+
+	if (m == NULL)
+		return m;
+	m->m_len = m->m_pkthdr.len = len;
+	return m;
+}
 
 #else /* linux */
 #include "bsd_glue.h"
@@ -50,6 +69,7 @@ typedef int rx_handler_result_t;	// XXX
 
 #define RATE  /* Enables communication statistics. */
 
+#define	netmap_get_mbuf(len)	alloc_skb(len, GFP_ATOMIC);
 #endif /* linux */
 
 #include <net/netmap.h>
@@ -154,8 +174,10 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
 #endif /* REG_RESET */
 
     if (enable) { /* Enable netmap mode. */
-        /* Initialize the queue structure, since the generic_netmap_rx_handler() callback can
-           be called as soon after netdev_rx_handler_register() returns. */
+#ifdef linux
+        /* Initialize the rx queue, as generic_netmap_rx_handler() can
+	 * be called as soon as netdev_rx_handler_register() returns.
+	 */
         for (r=0; r<na->num_rx_rings; r++) {
             skb_queue_head_init(&na->rx_rings[r].rx_queue);
             na->rx_rings[r].nr_ntc = 0;
@@ -163,6 +185,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         hrtimer_init(&na->mit_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
         na->mit_timer.function = &generic_timer_handler;
         na->mit_pending = 0;
+#endif /* linux */
         for (r=0; r<na->num_tx_rings; r++) {
             na->tx_rings[r].nr_ntc = 0;
             na->tx_rings[r].tx_pool = malloc(na->num_tx_desc * sizeof(struct mbuf *),
@@ -173,7 +196,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
                 goto alloc_tx_pool;
             }
             for (i=0; i<na->num_tx_desc; i++) {
-                m = alloc_skb(GENERIC_BUF_SIZE, GFP_ATOMIC);
+                m = netmap_get_mbuf(GENERIC_BUF_SIZE);
                 if (!m) {
                     D("tx_pool[%d] allocation failed", i);
                     error = ENOMEM;
@@ -429,7 +452,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 enum hrtimer_restart generic_timer_handler(struct hrtimer *t)
 {
     struct netmap_adapter *na = container_of(t, struct netmap_adapter, mit_timer);
-    unsigned int work_done;
+    uint work_done;
 
     if (na->mit_pending) {
         /* Some work arrived while the timer was counting down: Reset the pending work
@@ -453,8 +476,8 @@ enum hrtimer_restart generic_timer_handler(struct hrtimer *t)
 rx_handler_result_t generic_netmap_rx_handler(struct mbuf **pm)
 {
     struct netmap_adapter *na = NA((*pm)->dev);
-    unsigned int work_done;
-    unsigned int rr = 0;
+    uint work_done;
+    uint rr = 0;
 
     if (unlikely(skb_queue_len(&na->rx_rings[rr].rx_queue) > 1024)) {
         m_freem(*pm);
@@ -483,14 +506,15 @@ rx_handler_result_t generic_netmap_rx_handler(struct mbuf **pm)
 }
 #endif /* linux */
 
-/* The generic rxsync() method extracts mbufs from the queue filled by
-   generic_netmap_rx_handler() and puts their content in the netmap receive ring. */
+/*
+ * generic_netmap_rxsync() extracts mbufs from the queue filled by
+ * generic_netmap_rx_handler() and puts their content in the netmap
+ * receive ring.
+ * Access must be protected because the rx handler is asynchronous,
+ */
 static int
 generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
-#ifdef __FreeBSD__
-    return 0;
-#else /* linux */
     struct netmap_adapter *na = NA(ifp);
     struct netmap_kring *kring = &na->rx_rings[ring_nr];
     struct netmap_ring *ring = kring->ring;
@@ -516,6 +540,7 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
             if (addr == netmap_buffer_base) { /* Bad buffer */
                 return netmap_ring_reinit(kring);
             }
+	    // XXX mbq_dequeue
             m = skb_dequeue(&kring->rx_queue);
             if (!m)
                 break;
@@ -562,13 +587,11 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
     IFRATE(rate_ctx.new.rxsync++);
 
     return 0;
-#endif /* linux */
 }
 
-/* Use ethtool to find the current NIC rings lengths, so that the netmap rings can
-   have the same lengths. */
+/* Use ethtool to find the current NIC rings lengths */
 static int
-generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx)
+generic_find_num_desc(struct ifnet *ifp, uint *tx, uint *rx)
 {
 
 #ifdef __FreeBSD__
@@ -586,20 +609,28 @@ generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx)
     return 0;
 }
 
-/* The generic netmap attach method makes it possible to attach netmap to a network
-   interface that doesn't have explicit netmap support. The netmap ring size has no
-   relationship to the NIC ring size: 256 could be a good default value. However, we
-   usually get the best performance when the netmap ring size matches the NIC ring
-   size. Since this function cannot be called by the driver, it is called by get_ifp(). */
+/*
+ * generic_netmap_attach() makes it possible to use netmap on
+ * a device without native netmap support.
+ * This is less performant than native support but potentially
+ * faster than raw sockets or similar schemes.
+ *
+ * In this "emulated" mode, netmap rings do not necessarily
+ * have the same size as those in the NIC. We use a default
+ * value and possibly override it if the OS has ways to fetch the
+ * actual configuration.
+ */
 int
 generic_netmap_attach(struct ifnet *ifp)
 {
     struct netmap_adapter na;
     int retval;
-    unsigned int num_tx_desc = 256, num_rx_desc = 256;
+    uint num_tx_desc, num_rx_desc;
+
+    num_tx_desc = num_rx_desc = 256; /* starting point */
 
     generic_find_num_desc(ifp, &num_tx_desc, &num_rx_desc);
-    D("Netmap ring descriptors: TX = %d, RX = %d\n", num_tx_desc, num_rx_desc);
+    D("Netmap ring size: TX = %d, RX = %d\n", num_tx_desc, num_rx_desc);
 
     bzero(&na, sizeof(na));
     na.ifp = ifp;
@@ -609,10 +640,11 @@ generic_netmap_attach(struct ifnet *ifp)
     na.nm_txsync = &generic_netmap_txsync;
     na.nm_rxsync = &generic_netmap_rxsync;
 
-    ND("[GNA] num_tx_queues(%d), real_num_tx_queues(%d), len(%lu)", ifp->num_tx_queues,
-                                        ifp->real_num_tx_queues, ifp->tx_queue_len);
-    ND("[GNA] num_rx_queues(%d), real_num_rx_queues(%d)", ifp->num_rx_queues,
-                                                            ifp->real_num_rx_queues);
+    ND("[GNA] num_tx_queues(%d), real_num_tx_queues(%d), len(%lu)",
+		ifp->num_tx_queues, ifp->real_num_tx_queues,
+		ifp->tx_queue_len);
+    ND("[GNA] num_rx_queues(%d), real_num_rx_queues(%d)",
+		ifp->num_rx_queues, ifp->real_num_rx_queues);
 #ifdef __FreeBSD__
 #else /* linux */
     na.num_tx_rings = ifp->real_num_tx_queues;

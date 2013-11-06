@@ -119,6 +119,14 @@ struct nm_bdg_fwd;
 struct nm_bridge;
 struct netmap_priv_d;
 
+/* a generic queue of packet buffers */
+struct mbq {
+	struct mbuf *head;
+	struct mbuf *tail;
+	int count;
+	// XXX do we need a lock ?
+};
+
 const char *nm_dump_buf(char *p, int len, int lim, char *dst);
 
 /*
@@ -190,13 +198,15 @@ struct netmap_kring {
 
 	volatile int nkr_stopped;
 
-        /* Generic netmap adapter support. This allows to use netmap with a device driver
-           which doesn't support netmap. */
-        struct mbuf **tx_pool;
-        u_int nr_ntc;                   /* Emulation of a next-to-clean RX ring pointer. */
-#ifdef linux
-        struct sk_buff_head rx_queue;   /* A queue for intercepted rx sk_buffs. */
-#endif /* linux */
+	/* support for adapters without native netmap support.
+	 * On tx rings we preallocate an array of tx buffers
+	 * (same size as the netmap ring), on rx rings we
+	 * store incoming packets in a queue.
+	 * XXX who writes to the rx queue ?
+	 */
+	struct mbuf **tx_pool;
+	u_int nr_ntc;		/* Emulate the next-to-clean RX ring pointer. */
+	struct sk_buff_head rx_queue;   /* A queue for intercepted rx sk_buffs. */
 
 } __attribute__((__aligned__(64)));
 
@@ -771,13 +781,6 @@ struct netmap_priv_d {
 #endif /* __FreeBSD__ */
 };
 
-
-/* a generic queue of packet buffers */
-struct mbq {
-	struct mbuf *head;
-	struct mbuf *tail;
-	int count;
-};
 
 /*
  * generic netmap emulation for devices that do not have
