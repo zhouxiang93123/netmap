@@ -60,7 +60,7 @@ re_netmap_reg(struct ifnet *ifp, int onoff)
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
 		na->if_transmit = (void *)ifp->netdev_ops;
-		ifp->netdev_ops = &na->nm_ndo;
+		ifp->netdev_ops = na->nm_ndo_p;
 
 		if (rtl8169_open(ifp) < 0) {
 			error = ENOMEM;

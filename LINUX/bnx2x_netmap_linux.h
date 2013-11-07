@@ -143,7 +143,7 @@ else
 		ifp->if_capenable |= IFCAP_NETMAP;
 		/* save if_transmit and replace with our routine */
 		na->if_transmit = (void *)ifp->netdev_ops;
-		ifp->netdev_ops = &na->nm_ndo;
+		ifp->netdev_ops = na->nm_ndo_p;
 		D("-------------- set the SKIP_INTR flag");
 		// XXX na->na_flags |= NAF_SKIP_INTR; /* during load, use regular interrupts */
 	} else { /* reset normal mode */
