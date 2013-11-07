@@ -524,6 +524,13 @@ u_int netmap_bdg_learning(char *, u_int, uint8_t *, struct netmap_adapter *);
 #define	NM_BDG_BROADCAST	NM_BDG_MAXPORTS
 #define	NM_BDG_NOPORT		(NM_BDG_MAXPORTS+1)
 
+/* Various prototypes */
+int netmap_poll(struct cdev *dev, int events, struct thread *td);
+int netmap_irq_generic(struct ifnet *ifp, u_int q, u_int *work_done, u_int generic);
+int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m, void *addr, u_int len, u_int ring_nr);
+int netmap_init(void);
+void netmap_fini(void);
+
 extern u_int netmap_buf_size;
 #define NETMAP_BUF_SIZE	netmap_buf_size	// XXX remove
 extern int netmap_mitigate;

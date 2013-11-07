@@ -3226,10 +3226,10 @@ netmap_irq_generic(struct ifnet *ifp, u_int q, u_int *work_done, u_int generic)
 	return 1;
 }
 
-
 #ifdef __FreeBSD__
 int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m, void *addr, u_int len,
-                              u_int ring_nr) {
+                              u_int ring_nr)
+{
     return -1;
 }
 
