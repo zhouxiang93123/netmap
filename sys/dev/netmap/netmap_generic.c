@@ -100,6 +100,13 @@ netmap_get_mbuf(int len)
  */
 #define GET_MBUF_REFCNT(m)	(*(m)->m_ext.ref_cnt)
 
+/* mbuf destructor, also need to change the type to EXT_EXTREF
+ * and then chain into uma_zfree(zone_clust, m->m_ext.ext_buf)
+ * (or reinstall the buffer ?)
+ */
+
+#define	destructor		m_ext.ext_free
+
 /* we get a cluster, no matter what */
 #define netmap_get_mbuf(size)	m_getcl(M_NOWAIT, MT_DATA, M_PKTHDR)
 
@@ -184,8 +191,45 @@ static struct rate_context rate_ctx;
 #define GENERIC_BUF_SIZE        netmap_buf_size    /* Size of the mbufs in the Tx pool. */
 
 #ifdef linux
+
+/*
+ * XXX Can't we just use netmap_rx_irq ?
+ * Wrapper used by the generic adapter layer to notify
+ * the poller threads.
+ */
+static int
+netmap_generic_irq(struct ifnet *ifp, u_int q, u_int *work_done)
+{
+	if (unlikely(!(ifp->if_capenable & IFCAP_NETMAP)))
+		return 0;
+
+        return netmap_common_irq(ifp, q, work_done);
+}
+
 rx_handler_result_t generic_netmap_rx_handler(struct mbuf **pm);
-enum hrtimer_restart generic_timer_handler(struct hrtimer *t);
+
+static enum hrtimer_restart
+generic_timer_handler(struct hrtimer *t)
+{
+    struct netmap_adapter *na = container_of(t, struct netmap_adapter, mit_timer);
+    uint work_done;
+
+    if (na->mit_pending) {
+        /* Some work arrived while the timer was counting down:
+	 * Reset the pending work flag, restart the timer and issue
+	 * a notification.
+	 */
+        na->mit_pending = 0;
+        netmap_generic_irq(na->ifp, 0, &work_done);
+        IFRATE(rate_ctx.new.rxirq++);
+        hrtimer_forward_now(&na->mit_timer, ktime_set(0, netmap_generic_mit));
+
+        return HRTIMER_RESTART;
+    }
+
+    /* No pending work? Don't restart the timer. */
+    return HRTIMER_NORESTART;
+}
 
 static u16 generic_ndo_select_queue(struct ifnet *ifp, struct mbuf *m)
 {
@@ -350,20 +394,6 @@ alloc_mbufs:
 }
 
 #ifdef linux
-/*
- * XXX Can't we just use netmap_rx_irq ?
- * Wrapper used by the generic adapter layer to notify
- * the poller threads.
- */
-static int
-netmap_generic_irq(struct ifnet *ifp, u_int q, u_int *work_done)
-{
-	if (unlikely(!(ifp->if_capenable & IFCAP_NETMAP)))
-		return 0;
-
-        return netmap_common_irq(ifp, q, work_done);
-}
-
 /*
  * Callback invoked when the device driver frees an mbuf used
  * by netmap to transmit a packet. This usually happens when
@@ -568,25 +598,6 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 }
 
 #ifdef linux
-enum hrtimer_restart generic_timer_handler(struct hrtimer *t)
-{
-    struct netmap_adapter *na = container_of(t, struct netmap_adapter, mit_timer);
-    uint work_done;
-
-    if (na->mit_pending) {
-        /* Some work arrived while the timer was counting down: Reset the pending work
-           flag, restart the timer and issue a notification. */
-        na->mit_pending = 0;
-        netmap_generic_irq(na->ifp, 0, &work_done);
-        IFRATE(rate_ctx.new.rxirq++);
-        hrtimer_forward_now(&na->mit_timer, ktime_set(0, netmap_generic_mit));
-
-        return HRTIMER_RESTART;
-    }
-
-    /* No pending work? Don't restart the timer. */
-    return HRTIMER_NORESTART;
-}
 
 /* This handler is registered within the attached net_device in the Linux RX subsystem,
    so that every mbuf passed up by the driver can be stolen to the network stack.
