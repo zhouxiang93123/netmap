@@ -57,11 +57,6 @@ typedef int rx_handler_result_t;	// XXX
 #include <dev/netmap/netmap_mem2.h>
 
 
-/* ============ Declarations that may go into netmap_generic.h ============= */
-int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m, void *addr, u_int len,
-                              u_int ring_nr);
-
-
 /* ====================== STUFF DEFINED in netmap.c ===================== */
 extern int netmap_generic_mit;
 

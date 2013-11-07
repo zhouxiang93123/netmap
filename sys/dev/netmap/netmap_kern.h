@@ -530,6 +530,9 @@ int netmap_irq_generic(struct ifnet *ifp, u_int q, u_int *work_done, u_int gener
 int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m, void *addr, u_int len, u_int ring_nr);
 int netmap_init(void);
 void netmap_fini(void);
+int netmap_get_memory(struct netmap_priv_d* p);
+void netmap_dtor(void *data);
+int netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td);
 
 extern u_int netmap_buf_size;
 #define NETMAP_BUF_SIZE	netmap_buf_size	// XXX remove
