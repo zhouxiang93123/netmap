@@ -598,11 +598,9 @@ generic_netmap_attach(struct ifnet *ifp)
                                         ifp->real_num_tx_queues, ifp->tx_queue_len);
     ND("[GNA] num_rx_queues(%d), real_num_rx_queues(%d)", ifp->num_rx_queues,
                                                             ifp->real_num_rx_queues);
-#ifdef __FreeBSD__
-#else /* linux */
-    na.num_tx_rings = ifp->real_num_tx_queues;
-#endif /* linux */
 
-    retval = netmap_attach(&na, 1); // TODO ifp->real_num_rx_queues);
+    generic_find_num_queues(ifp, &na.num_tx_rings, &na.num_rx_rings);
+
+    retval = netmap_attach(&na, na.num_rx_rings);
     return retval;
 }

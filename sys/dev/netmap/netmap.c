@@ -3230,6 +3230,7 @@ netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 }
 
 #ifdef __FreeBSD__
+/* FreeBSD specific code. XXX move to a separate file, to get rid of this ifdef. */
 int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m, void *addr, u_int len,
                               u_int ring_nr)
 {
@@ -3242,6 +3243,11 @@ generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx)
     D("using default values for %s tx %d rx %d", ifp->if_xname, *tx, *rx);
 
     return 0;
+}
+
+void generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq)
+{
+    *txq = *rxq = 1;
 }
 
 static struct cdevsw netmap_cdevsw = {

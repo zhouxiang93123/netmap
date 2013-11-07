@@ -76,6 +76,13 @@ generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx)
     return 0;
 }
 
+/* Fills in the output arguments with the number of hardware TX/RX queues. */
+void generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq)
+{
+    *txq = ifp->real_num_tx_queues;
+    *rxq = 1; /* TODO ifp->real_num_rx_queues */
+}
+
 static struct device_driver*
 linux_netmap_find_driver(struct device *dev)
 {
