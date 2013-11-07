@@ -77,11 +77,11 @@ netmap_get_mbuf(int len)
 #include <dev/netmap/netmap_mem2.h>
 
 
-/* ====================== STUFF DEFINED in netmap.c ===================== */
+/* ================== STUFF DEFINED in netmap.c =================== */
 extern int netmap_generic_mit;
 
 
-/* ============================= usage stats ============================= */
+/* ======================== usage stats =========================== */
 
 #ifdef RATE
 #define IFRATE(x) x
@@ -132,7 +132,7 @@ static struct rate_context rate_ctx;
 #endif /* !RATE */
 
 
-/* ===================== GENERIC NETMAP ADAPTER SUPPORT ================== */
+/* =============== GENERIC NETMAP ADAPTER SUPPORT ================= */
 
 #define GENERIC_BUF_SIZE        netmap_buf_size    /* Size of the mbufs in the Tx pool. */
 
@@ -281,9 +281,11 @@ alloc_mbufs:
 }
 
 #ifdef linux
-/* Invoked when the driver of the attached interface frees a socket buffer used by netmap for
-   transmitting a packet. This usually happens when the NIC notifies the driver that the
-   transmission is completed. */
+/*
+ * Callback invoked when the device driver frees an mbuf used
+ * by netmap to transmit a packet. This usually happens when
+ * the NIC notifies the driver that transmission is completed.
+ */
 static void
 generic_mbuf_destructor(struct mbuf *m)
 {
@@ -325,7 +327,8 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
     return n;
 }
 
-static inline u_int generic_tx_event_middle(struct netmap_kring *kring, u_int j)
+static inline u_int
+generic_tx_event_middle(struct netmap_kring *kring, u_int j)
 {
     u_int n = kring->nkr_num_slots;
     u_int e = (kring->nr_ntc + ((((n + j) - kring->nr_ntc) % (n)) / 2)) % (n);
@@ -338,7 +341,8 @@ static inline u_int generic_tx_event_middle(struct netmap_kring *kring, u_int j)
     return e;
 }
 
-static int generic_set_tx_event(struct netmap_kring *kring, u_int e)
+static int
+generic_set_tx_event(struct netmap_kring *kring, u_int e)
 {
     struct mbuf *m;
 
@@ -362,9 +366,13 @@ static int generic_set_tx_event(struct netmap_kring *kring, u_int e)
 }
 #endif /* linux */
 
-/* The generic txsync method transforms netmap buffers in mbufs and the invokes the
-   driver ndo_start_xmit() method. This is not done directly, but using dev_queue_xmit(),
-   since it implements the TX flow control (and takes some locks). */
+/*
+ * generic_netmap_txsync() transforms netmap buffers into mbufs
+ * and passes them to the standard device driver
+ * (ndo_start_xmit() or ifp->if_transmit() ).
+ * On linux this is not done directly, but using dev_queue_xmit(),
+ * since it implements the TX flow control (and takes some locks).
+ */
 static int
 generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
