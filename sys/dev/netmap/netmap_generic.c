@@ -95,6 +95,14 @@ netmap_get_mbuf(int len)
 	return m;
 }
 
+/*
+ * mbuf wrappers
+ */
+#define GET_MBUF_REFCNT(m)	(*(m)->m_ext.ref_cnt)
+
+/* we get a cluster, no matter what */
+#define netmap_get_mbuf(size)	m_getcl(M_NOWAIT, MT_DATA, M_PKTHDR)
+
 #else /* linux */
 #include "bsd_glue.h"
 
@@ -103,6 +111,8 @@ netmap_get_mbuf(int len)
 #include <linux/hrtimer.h>
 
 #define RATE  /* Enables communication statistics. */
+
+#define GET_MBUF_REFCNT(m)	NM_ATOMIC_READ(&((m)->users))
 
 #define netmap_get_mbuf(size)	alloc_skb(size, GFP_ATOMIC)
 
@@ -367,7 +377,10 @@ generic_mbuf_destructor(struct mbuf *m)
     IFRATE(rate_ctx.new.txirq++);
 }
 
-/* Record completed transmissions and update hwavail/avail. */
+/* Record completed transmissions and update hwavail/avail.
+ *
+ * XXX document what nr_ntc is about
+ */
 static int
 generic_netmap_tx_clean(struct netmap_kring *kring)
 {
@@ -375,18 +388,30 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
     u_int ntc = kring->nr_ntc;
     u_int hwcur = kring->nr_hwcur;
     u_int n = 0;
+    struct mbuf **tx_pool = kring->tx_pool;
 
-    while (ntc != hwcur && (kring->tx_pool[ntc] == NULL
-                || NM_ATOMIC_READ(&kring->tx_pool[ntc]->users) == 1)) {
-        if (unlikely(kring->tx_pool[ntc] == NULL)) {
-            kring->tx_pool[ntc] = alloc_skb(GENERIC_BUF_SIZE, GFP_ATOMIC);
-            if (unlikely(!kring->tx_pool[ntc])) {
-                D("mbuf allocation failed");
+    /*
+     * XXX check the termination logic.
+     */
+    while (ntc != hwcur) {
+	struct mbuf *m = tx_pool[ntc];
+
+        if (unlikely(m == NULL)) {
+	    /* try to replenish the entry */
+            tx_pool[ntc] = m = netmap_get_mbuf(GENERIC_BUF_SIZE);
+            if (unlikely(m == NULL)) {
+                D("mbuf allocation failed, XXX error");
+		// XXX how do we proceed ? break ?
                 return -ENOMEM;
             }
+	} else if (GET_MBUF_REFCNT(m) == 1) {
+	    /* XXX maybe unnecessary ? we can deal with that
+	     * in the sending routine
+	     */
+            skb_trim(m, 0);
         } else {
-            skb_trim(kring->tx_pool[ntc], 0);
-        }
+	    break; /* still busy */
+	}
         if (unlikely(++ntc == num_slots)) {
             ntc = 0;
         }
@@ -400,6 +425,11 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
     return n;
 }
 
+
+/*
+ * return a position which is XXX between the current and the
+ * last slot to be sent ?
+ */
 static inline u_int
 generic_tx_event_middle(struct netmap_kring *kring, u_int j)
 {
@@ -487,13 +517,26 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
                 D("This should never happen");
                 return netmap_ring_reinit(kring);
             }
+	    /* XXX we should ask notifications when NS_REPORT is set,
+	     * or roughly every half frame. We can optimize this
+	     * by lazily requesting notifications only when a
+	     * transmission fails. Probably the best way is to
+	     * break on failures and set notifications when
+	     * ring->avail == 0 || j != k
+	     */
             tx_ret = generic_xmit_frame(ifp, m, addr, len, ring_nr);
             if (unlikely(tx_ret)) {
                 ND("start_xmit failed: err %d [%d,%d,%d]", tx_ret, j, k, kring->nr_hwavail);
-                /* If the frame has been dropped in the O.S. TX path, just set a notification
-                   event on a netmap slot that will be cleaned in the future (and possibly
-                   continue the TX processing if the doublecheck reports new available slots).
-                */
+		/*
+		 * XXX this may need some simplifications.
+		 * I do not understand the logic.
+		 *
+                 * If the frame has been dropped, just set a
+		 * notification event on a netmap slot that will
+		 * be cleaned in the future (and possibly continue
+		 * the TX processing if the doublecheck reports
+		 * new available slots).
+                 */
                 if (unlikely(generic_set_tx_event(kring,
                                     generic_tx_event_middle(kring, j)) > 0)) {
                     continue;
@@ -510,9 +553,11 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
         kring->nr_hwavail -= n;
         IFRATE(rate_ctx.new.txpkt += n);
         if (!ring->avail) {
-            /* No more available slots? Set a notification event on a netmap slot
-               that will be cleaned in the future. No doublecheck is performed, since
-               txsync() will be called twice by netmap_poll(). */
+            /* No more available slots? Set a notification event
+	     * on a netmap slot that will be cleaned in the future.
+	     * No doublecheck is performed, since txsync() will be
+	     * called twice by netmap_poll().
+	     */
             generic_set_tx_event(kring, generic_tx_event_middle(kring, j));
         }
         ND("tx #%d, hwavail = %d", n, kring->nr_hwavail);
