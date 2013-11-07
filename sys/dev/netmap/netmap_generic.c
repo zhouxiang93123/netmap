@@ -259,6 +259,8 @@ alloc_mbufs:
 #endif /* linux */
 }
 
+#ifdef linux
+/* Wrapper used by the generic adapter layer to notify the poller threads. */
 static int
 netmap_generic_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 {
@@ -268,7 +270,6 @@ netmap_generic_irq(struct ifnet *ifp, u_int q, u_int *work_done)
         return netmap_common_irq(ifp, q, work_done);
 }
 
-#ifdef linux
 /* Invoked when the driver of the attached interface frees a socket buffer used by netmap for
    transmitting a packet. This usually happens when the NIC notifies the driver that the
    transmission is completed. */
