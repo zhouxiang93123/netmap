@@ -57,11 +57,16 @@ typedef int rx_handler_result_t;	// XXX
 #include <dev/netmap/netmap_mem2.h>
 
 
+/* ============ Declarations that may go into netmap_generic.h ============= */
+int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m, void *addr, u_int len,
+                              u_int ring_nr);
+
+
 /* ====================== STUFF DEFINED in netmap.c ===================== */
 extern int netmap_generic_mit;
 
 
-/* ============================= usage stats ============================= */
+/* ============================= USAGE STATS ============================= */
 
 #ifdef RATE
 #define IFRATE(x) x
@@ -375,7 +380,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
             void *addr = NMB(slot);
             u_int len = slot->len;
             struct mbuf *m;
-            netdev_tx_t tx_ret;
+            int tx_ret;
 
             if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
                 return netmap_ring_reinit(kring);
@@ -386,26 +391,20 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
                 D("This should never happen");
                 return netmap_ring_reinit(kring);
             }
-            /* TODO Support the slot flags (NS_FRAG, NS_INDIRECT). */
-            skb_copy_to_linear_data(m, addr, len); // skb_store_bits(m, 0, addr, len);
-            skb_put(m, len);
-            NM_ATOMIC_INC(&m->users);
-            m->dev = ifp;
-            m->priority = 100;
-            skb_set_queue_mapping(m, ring_nr);
-            tx_ret = dev_queue_xmit(m);
-            if (unlikely(tx_ret != NET_XMIT_SUCCESS)) {
+            tx_ret = generic_xmit_frame(ifp, m, addr, len, ring_nr);
+            if (unlikely(tx_ret)) {
                 ND("start_xmit failed: err %d [%d,%d,%d]", tx_ret, j, k, kring->nr_hwavail);
-                if (likely(tx_ret == NET_XMIT_DROP)) {
-                    if (unlikely(generic_set_tx_event(kring,
-                                            generic_tx_event_middle(kring, j)) > 0)) {
-                        continue;
-                    }
-                    break;
+                /* If the frame has been dropped in the O.S. TX path, just set a notification
+                   event on a netmap slot that will be cleaned in the future (and possibly
+                   continue the TX processing if the doublecheck reports new available slots).
+                */
+                if (unlikely(generic_set_tx_event(kring,
+                                        generic_tx_event_middle(kring, j)) > 0)) {
+                    continue;
                 }
-                D("start_xmit failed: HARD ERROR %d", tx_ret);
-                return netmap_ring_reinit(kring);
+                break;
             }
+
             slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
             if (unlikely(j++ == lim))
                 j = 0;
@@ -415,7 +414,10 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
         kring->nr_hwcur = j;
         kring->nr_hwavail -= n;
         IFRATE(rate_ctx.new.txpkt += n);
-        if (ring->avail < 1) {
+        if (!ring->avail) {
+            /* No more available slots? Set a notification event on a netmap slot
+               that will be cleaned in the future. No doublecheck is performed, since
+               txsync() will be called twice by netmap_poll(). */
             generic_set_tx_event(kring, generic_tx_event_middle(kring, j));
         }
         ND("tx #%d, hwavail = %d", n, kring->nr_hwavail);
