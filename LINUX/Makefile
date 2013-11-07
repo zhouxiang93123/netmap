@@ -15,7 +15,7 @@ CONFIG_IXGBE:=m
 CONFIG_IGB:=m
 CONFIG_BNX2X:=m
 
-netmap_lin-objs := netmap.o netmap_mem2.o netmap_linux.o netmap_generic.o
+netmap_lin-objs := netmap.o netmap_mem2.o netmap_linux.o netmap_generic.o netmap_mbq.o
 
 obj-$(CONFIG_NETMAP) = netmap_lin.o
 ifndef NODRIVERS
@@ -108,6 +108,10 @@ $(obj)/netmap_mem2.o: $(M)/../sys/dev/netmap/netmap_mem2.c
 	$(call cmd,modversions)
 
 $(obj)/netmap_generic.o: $(M)/../sys/dev/netmap/netmap_generic.c
+	$(call cmd,cc_o_c)
+	$(call cmd,modversions)
+
+$(obj)/netmap_mbq.o: $(M)/../sys/dev/netmap/netmap_mbq.c
 	$(call cmd,cc_o_c)
 	$(call cmd,modversions)
 

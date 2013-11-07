@@ -771,14 +771,6 @@ struct netmap_priv_d {
 #endif /* __FreeBSD__ */
 };
 
-
-/* a generic queue of packet buffers */
-struct mbq {
-	struct mbuf *head;
-	struct mbuf *tail;
-	int count;
-};
-
 /*
  * generic netmap emulation for devices that do not have
  * native netmap support

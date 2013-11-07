@@ -229,6 +229,7 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z gle
 #include <net/netmap.h>
 #include <dev/netmap/netmap_kern.h>
 #include <dev/netmap/netmap_mem2.h>
+#include <dev/netmap/netmap_mbq.h>
 
 
 MALLOC_DEFINE(M_NETMAP, "netmap", "Network memory map");
@@ -1340,18 +1341,17 @@ netmap_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
  * pass a chain of buffers to the host stack as coming from 'dst'
  */
 static void
-netmap_send_up(struct ifnet *dst, struct mbuf *head)
+netmap_send_up(struct ifnet *dst, struct mbq *q)
 {
 	struct mbuf *m;
 
 	/* send packets up, outside the lock */
-	while ((m = head) != NULL) {
-		head = head->m_nextpkt;
-		m->m_nextpkt = NULL;
+	while ((m = mbq_dequeue(q)) != NULL) {
 		if (netmap_verbose & NM_VERB_HOST)
 			D("sending up pkt %p size %d", m, MBUF_LEN(m));
 		NM_SEND_UP(dst, m);
 	}
+        mbq_destroy(q);
 }
 
 
@@ -1368,7 +1368,7 @@ netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
 	 * XXX handle reserved
 	 */
 	u_int lim = kring->nkr_num_slots - 1;
-	struct mbuf *m, *tail = q->tail;
+	struct mbuf *m;
 	u_int k = kring->ring->cur, n = kring->ring->reserved;
 	struct netmap_mem_d *nmd = kring->na->nm_mem;
 
@@ -1394,15 +1394,8 @@ netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
 
 		if (m == NULL)
 			break;
-		if (tail)
-			tail->m_nextpkt = m;
-		else
-			q->head = m;
-		tail = m;
-		q->count++;
-		m->m_nextpkt = NULL;
+                mbq_enqueue(q, m);
 	}
-	q->tail = tail;
 }
 
 
@@ -1485,7 +1478,7 @@ netmap_txsync_to_host(struct netmap_adapter *na)
 	struct netmap_kring *kring = &na->tx_rings[na->num_tx_rings];
 	struct netmap_ring *ring = kring->ring;
 	u_int k, lim = kring->nkr_num_slots - 1;
-	struct mbq q = { NULL, NULL, 0 };
+	struct mbq q;
 
 	if (nm_kr_tryget(kring)) {
 		D("ring %p busy (user error)", kring);
@@ -1503,12 +1496,13 @@ netmap_txsync_to_host(struct netmap_adapter *na)
 	 * In case of no buffers we give up. At the end of the loop,
 	 * the queue is drained in all cases.
 	 */
+        mbq_init(&q);
 	netmap_grab_packets(kring, &q, 1);
 	kring->nr_hwcur = k;
 	kring->nr_hwavail = ring->avail = lim;
 
 	nm_kr_put(kring);
-	netmap_send_up(na->ifp, q.head);
+	netmap_send_up(na->ifp, &q);
 }
 
 
@@ -2534,12 +2528,13 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	struct netmap_kring *kring;
 	u_int i, check_all_tx, check_all_rx, want_tx, want_rx, revents = 0;
 	u_int lim_tx, lim_rx, host_forwarded = 0;
-	struct mbq q = { NULL, NULL, 0 };
+	struct mbq q;
 	void *pwait = dev;	/* linux compatibility */
 
 		int retry_tx = 1;
 
 	(void)pwait;
+        mbq_init(&q);
 
 	if (devfs_get_cdevpriv((void **)&priv) != 0 || priv == NULL)
 		return POLLERR;
@@ -2748,8 +2743,8 @@ do_retry_rx:
 		goto flush_tx;
 	}
 
-	if (q.head)
-		netmap_send_up(na->ifp, q.head);
+        if (q.head)
+	        netmap_send_up(na->ifp, &q);
 
 out:
 
