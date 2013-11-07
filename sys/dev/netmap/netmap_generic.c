@@ -23,6 +23,41 @@
  * SUCH DAMAGE.
  */
 
+/*
+ * This module implemnts netmap support on top of standard,
+ * unmodified device drivers.
+ *
+ * A NIOCREGIF request is handled here if the device does not
+ * have native support. TX and RX rings are emulated as follows:
+ *
+ * NIOCREGIF
+ *	We preallocate a block of TX mbufs (roughly as many as
+ *	tx descriptors; the number is not critical) to speed up
+ *	operation during transmissions. The refcount on most of
+ *	these buffers is artificially bumped up so we can recycle
+ *	them more easily. Also, the destructor is intercepted
+ *	so we use it as an interrupt notification to wake up
+ *	processes blocked on a poll().
+ *
+ *	For each receive rings, we allocate one "struct mbq"
+ *	(an mbuf tailq plus a spinlock). We intercept packets
+ *	(through if_input)
+ *	on the receive path and put them in the mbq from which
+ *	netmap receive routines can grab them.
+ *
+ * TX:
+ *	in the generic_txsync() routine, netmap buffers are copied
+ *	(or linked, in a future) to the preallocated mbufs
+ *	and pushed to the transmit queue. A few of these mbufs
+ *	(those with NS_REPORT, or otherwise every half ring)
+ *	have the refcount=1, others have refcount=2.
+ *	When the destructor is invoked, we take that as
+ *	a notification that all mbufs up to that one in
+ *	the specific ring have been completed.
+ *
+ * RX:
+ *
+ */
 #ifdef __FreeBSD__
 
 #include <sys/cdefs.h> /* prerequisite */
@@ -136,7 +171,6 @@ static struct rate_context rate_ctx;
 
 
 /* =============== GENERIC NETMAP ADAPTER SUPPORT ================= */
-
 #define GENERIC_BUF_SIZE        netmap_buf_size    /* Size of the mbufs in the Tx pool. */
 
 #ifdef linux
@@ -176,7 +210,6 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
 #endif /* REG_RESET */
 
     if (enable) { /* Enable netmap mode. */
-#ifdef linux
         /* Initialize the rx queue, as generic_netmap_rx_handler() can
 	 * be called as soon as netdev_rx_handler_register() returns.
 	 */
@@ -187,7 +220,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         hrtimer_init(&na->mit_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
         na->mit_timer.function = &generic_timer_handler;
         na->mit_pending = 0;
-#endif /* linux */
+
         for (r=0; r<na->num_tx_rings; r++) {
             na->tx_rings[r].nr_ntc = 0;
             na->tx_rings[r].tx_pool = malloc(na->num_tx_desc * sizeof(struct mbuf *),
@@ -214,10 +247,21 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
             goto register_handler;
         }
         ifp->if_capenable |= IFCAP_NETMAP;
+#ifdef linux
+	/*
+	 * save the old pointer to the netdev_op
+	 * create an updated netdev ops replacing the
+	 * ndo_select_queue function with our custom one,
+	 * and make the driver use it.
+	 */
         na->if_transmit = (void *)ifp->netdev_ops;
         *na->generic_ndo_p = *ifp->netdev_ops;  /* Copy */
-        na->generic_ndo_p->ndo_select_queue = &generic_ndo_select_queue;  /* Replace a field. */
-        ifp->netdev_ops = na->generic_ndo_p;  /* Switch the pointers. */
+        na->generic_ndo_p->ndo_select_queue = &generic_ndo_select_queue;
+        ifp->netdev_ops = na->generic_ndo_p;
+#else
+	XXX do the same for FreeBSD
+#endif /* __FreeBSD__ */
+
 #ifdef RATE
         if (rate_ctx.refcount == 0) {
             D("setup_timer()");
@@ -228,23 +272,35 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
             }
         }
         rate_ctx.refcount++;
-#endif
+#endif /* RATE */
+
     } else { /* Disable netmap mode. */
         rtnl_lock();
         ifp->if_capenable &= ~IFCAP_NETMAP;
+	/* restore the netdev_ops */
         ifp->netdev_ops = (void *)na->if_transmit;
+
+	/* do not intercept packets on the rx path */
         netdev_rx_handler_unregister(ifp);
+
+	/* XXX maybe we should try and put this outside
+	 * the lock
+	 */
+	/* Free the mbufs going to the netmap rings */
         for (r=0; r<na->num_rx_rings; r++) {
             mbq_safe_purge(&na->rx_rings[r].rx_queue);
             mbq_safe_destroy(&na->rx_rings[r].rx_queue);
         }
+
         hrtimer_cancel(&na->mit_timer);
+
         for (r=0; r<na->num_tx_rings; r++) {
             for (i=0; i<na->num_tx_desc; i++) {
                 m_freem(na->tx_rings[r].tx_pool[i]);
             }
             free(na->tx_rings[r].tx_pool, M_DEVBUF);
         }
+
 #ifdef RATE
         if (--rate_ctx.refcount == 0) {
             D("del_timer()");
@@ -284,7 +340,11 @@ alloc_mbufs:
 }
 
 #ifdef linux
-/* Wrapper used by the generic adapter layer to notify the poller threads. */
+/*
+ * XXX Can't we just use netmap_rx_irq ?
+ * Wrapper used by the generic adapter layer to notify
+ * the poller threads.
+ */
 static int
 netmap_generic_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 {
