@@ -34,8 +34,8 @@
 
 /* Transmit routine used by generic_netmap_txsync(). Returns 0 on success
    and -1 on error (which may be packet drops or other errors). */
-int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m, void *addr, u_int len,
-                              u_int ring_nr)
+int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m,
+	void *addr, u_int len, u_int ring_nr)
 {
     netdev_tx_t ret;
 
@@ -77,13 +77,14 @@ generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx)
 }
 
 /* Fills in the output arguments with the number of hardware TX/RX queues. */
-void generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq)
+void
+generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq)
 {
     *txq = ifp->real_num_tx_queues;
     *rxq = 1; /* TODO ifp->real_num_rx_queues */
 }
 
-static struct device_driver*
+static struct device_driver *
 linux_netmap_find_driver(struct device *dev)
 {
 	struct device_driver *dd;
@@ -95,7 +96,7 @@ linux_netmap_find_driver(struct device *dev)
 	return dd;
 }
 
-struct net_device*
+struct net_device *
 ifunit_ref(const char *name)
 {
 	struct net_device *ifp = dev_get_by_name(&init_net, name);
