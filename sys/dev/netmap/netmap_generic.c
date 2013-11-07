@@ -69,6 +69,8 @@ netmap_get_mbuf(int len)
 
 #define RATE  /* Enables communication statistics. */
 
+#define netmap_get_mbuf(size)	alloc_skb(size, GFP_ATOMIC)
+
 //#define REG_RESET
 
 #endif /* linux */

@@ -119,14 +119,6 @@ struct nm_bdg_fwd;
 struct nm_bridge;
 struct netmap_priv_d;
 
-/* a generic queue of packet buffers */
-struct mbq {
-	struct mbuf *head;
-	struct mbuf *tail;
-	int count;
-	// XXX do we need a lock ?
-};
-
 const char *nm_dump_buf(char *p, int len, int lim, char *dst);
 
 #include "netmap_mbq.h"
