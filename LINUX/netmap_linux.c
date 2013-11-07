@@ -291,7 +291,7 @@ EXPORT_SYMBOL(netmap_total_buffers);	/* index check */
 EXPORT_SYMBOL(netmap_buffer_base);
 EXPORT_SYMBOL(netmap_reset);		/* ring init routines */
 EXPORT_SYMBOL(netmap_buf_size);
-EXPORT_SYMBOL(netmap_irq_generic);	/* default irq handler */
+EXPORT_SYMBOL(netmap_rx_irq);	        /* default irq handler */
 EXPORT_SYMBOL(netmap_no_pendintr);	/* XXX mitigation - should go away */
 EXPORT_SYMBOL(netmap_bdg_ctl);		/* bridge configuration routine */
 EXPORT_SYMBOL(netmap_bdg_learning);	/* the default lookup function */

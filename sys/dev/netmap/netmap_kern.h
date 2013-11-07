@@ -526,7 +526,6 @@ u_int netmap_bdg_learning(char *, u_int, uint8_t *, struct netmap_adapter *);
 
 /* Various prototypes */
 int netmap_poll(struct cdev *dev, int events, struct thread *td);
-int netmap_irq_generic(struct ifnet *ifp, u_int q, u_int *work_done, u_int generic);
 int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m, void *addr, u_int len, u_int ring_nr);
 int generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx);
 int netmap_init(void);
@@ -733,9 +732,9 @@ PNMB(struct netmap_slot *slot, uint64_t *pp)
 }
 
 /* default functions to handle rx/tx interrupts */
-int netmap_irq_generic(struct ifnet *, u_int, u_int *, u_int);
-#define netmap_rx_irq(_n, _q, _w) netmap_irq_generic(_n, _q, _w, 0)
+int netmap_rx_irq(struct ifnet *, u_int, u_int *);
 #define netmap_tx_irq(_n, _q) netmap_rx_irq(_n, _q, NULL)
+int netmap_common_irq(struct ifnet *, u_int, uint *work_done);
 
 #ifdef __FreeBSD__
 MALLOC_DECLARE(M_NETMAP);

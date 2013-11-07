@@ -50,6 +50,8 @@ typedef int rx_handler_result_t;	// XXX
 
 #define RATE  /* Enables communication statistics. */
 
+//#define REG_RESET
+
 #endif /* linux */
 
 #include <net/netmap.h>
@@ -125,8 +127,6 @@ static u16 generic_ndo_select_queue(struct ifnet *ifp, struct mbuf *m)
     return skb_get_queue_mapping(m);
 }
 #endif /* linux */
-
-//#define REG_RESET
 
 /* Enable/disable netmap mode for a generic network interface. */
 int generic_netmap_register(struct ifnet *ifp, int enable)
@@ -259,6 +259,15 @@ alloc_mbufs:
 #endif /* linux */
 }
 
+static int
+netmap_generic_irq(struct ifnet *ifp, u_int q, u_int *work_done)
+{
+	if (unlikely(!(ifp->if_capenable & IFCAP_NETMAP)))
+		return 0;
+
+        return netmap_common_irq(ifp, q, work_done);
+}
+
 #ifdef linux
 /* Invoked when the driver of the attached interface frees a socket buffer used by netmap for
    transmitting a packet. This usually happens when the NIC notifies the driver that the
@@ -267,7 +276,7 @@ static void
 generic_mbuf_destructor(struct mbuf *m)
 {
     ND("Tx irq (%p)", arg);
-    netmap_irq_generic(m->dev, skb_get_queue_mapping(m), NULL, 1);
+    netmap_generic_irq(m->dev, skb_get_queue_mapping(m), NULL);
     IFRATE(rate_ctx.new.txirq++);
 }
 
@@ -430,7 +439,7 @@ enum hrtimer_restart generic_timer_handler(struct hrtimer *t)
         /* Some work arrived while the timer was counting down: Reset the pending work
            flag, restart the timer and issue a notification. */
         na->mit_pending = 0;
-        netmap_irq_generic(na->ifp, 0, &work_done, 1);
+        netmap_generic_irq(na->ifp, 0, &work_done);
         IFRATE(rate_ctx.new.rxirq++);
         hrtimer_forward_now(&na->mit_timer, ktime_set(0, netmap_generic_mit));
 
@@ -459,7 +468,7 @@ rx_handler_result_t generic_netmap_rx_handler(struct mbuf **pm)
 
     if (netmap_generic_mit < 32768) {
         /* When rx mitigation is not used, never filter the notification. */
-        netmap_irq_generic(na->ifp, rr, &work_done, 1);
+        netmap_generic_irq(na->ifp, rr, &work_done);
         IFRATE(rate_ctx.new.rxirq++);
     } else {
         /* Filter the notification when there is a pending timer, otherwise
@@ -468,7 +477,7 @@ rx_handler_result_t generic_netmap_rx_handler(struct mbuf **pm)
             /* Record that there is some pending work. */
             na->mit_pending = 1;
         } else {
-            netmap_irq_generic(na->ifp, rr, &work_done, 1);
+            netmap_generic_irq(na->ifp, rr, &work_done);
             IFRATE(rate_ctx.new.rxirq++);
             hrtimer_start(&na->mit_timer, ktime_set(0, netmap_generic_mit), HRTIMER_MODE_REL);
         }
@@ -582,6 +591,7 @@ generic_netmap_attach(struct ifnet *ifp)
     na.nm_register = &generic_netmap_register;
     na.nm_txsync = &generic_netmap_txsync;
     na.nm_rxsync = &generic_netmap_rxsync;
+    na.na_flags = NAF_SKIP_INTR;
 
     ND("[GNA] num_tx_queues(%d), real_num_tx_queues(%d), len(%lu)", ifp->num_tx_queues,
                                         ifp->real_num_tx_queues, ifp->tx_queue_len);

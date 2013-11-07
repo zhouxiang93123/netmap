@@ -3161,46 +3161,16 @@ put_out:
 }
 
 
-/*
- * Default functions to handle rx/tx interrupts from a physical device.
- * "work_done" is non-null on the RX path, NULL for the TX path.
- * "generic" is 0 when we are called by a device driver, and 1 when we
- * are called by the generic netmap adapter layer.
- * We rely on the OS to make sure that there is only one active
- * instance per queue, and that there is appropriate locking.
- *
- * If the card is not in netmap mode, simply return 0,
- * so that the caller proceeds with regular processing.
- *
- * We return 0 also when the card is in netmap mode but the current
- * netmap adapter is the generic one, because this function will be
- * called by the generic layer.
- *
- * If the card is connected to a netmap file descriptor,
- * do a selwakeup on the individual queue, plus one on the global one
- * if needed (multiqueue card _and_ there are multiqueue listeners),
- * and return 1.
- *
- * Finally, if called on rx from an interface connected to a switch,
- * calls the proper forwarding routine, and return 1.
- */
-int
-netmap_irq_generic(struct ifnet *ifp, u_int q, u_int *work_done, u_int generic)
+int netmap_common_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 {
-	struct netmap_adapter *na = NA(ifp);
-	struct netmap_kring *kring;
-
-	if (!(ifp->if_capenable & IFCAP_NETMAP) || (nma_is_generic(na) && !generic))
-		return 0;
+        struct netmap_adapter *na = NA(ifp);
+        struct netmap_kring *kring;
 
 	q &= NETMAP_RING_MASK;
 
-	if (netmap_verbose)
-		RD(5, "received %s queue %d", work_done ? "RX" : "TX" , q);
-	if (na->na_flags & NAF_SKIP_INTR) {
-		ND("use regular interrupt");
-		return 0;
-	}
+	if (netmap_verbose) {
+	        RD(5, "received %s queue %d", work_done ? "RX" : "TX" , q);
+        }
 
 	if (work_done) { /* RX path */
 		if (q >= na->num_rx_rings)
@@ -3224,6 +3194,39 @@ netmap_irq_generic(struct ifnet *ifp, u_int q, u_int *work_done, u_int generic)
 			selwakeuppri(&na->tx_si, PI_NET);
 	}
 	return 1;
+}
+
+/*
+ * Default functions to handle rx/tx interrupts from a physical device.
+ * "work_done" is non-null on the RX path, NULL for the TX path.
+ * "generic" is 0 when we are called by a device driver, and 1 when we
+ * are called by the generic netmap adapter layer.
+ * We rely on the OS to make sure that there is only one active
+ * instance per queue, and that there is appropriate locking.
+ *
+ * If the card is not in netmap mode, simply return 0,
+ * so that the caller proceeds with regular processing.
+ *
+ * If the card is connected to a netmap file descriptor,
+ * do a selwakeup on the individual queue, plus one on the global one
+ * if needed (multiqueue card _and_ there are multiqueue listeners),
+ * and return 1.
+ *
+ * Finally, if called on rx from an interface connected to a switch,
+ * calls the proper forwarding routine, and return 1.
+ */
+int
+netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
+{
+	if (!(ifp->if_capenable & IFCAP_NETMAP))
+		return 0;
+
+	if (NA(ifp)->na_flags & NAF_SKIP_INTR) {
+		ND("use regular interrupt");
+		return 0;
+	}
+
+        return netmap_common_irq(ifp, q, work_done);
 }
 
 #ifdef __FreeBSD__
