@@ -30,14 +30,6 @@
 #include <dev/netmap/netmap_mem2.h>
 
 
-/* ====================== STUFF DEFINED in netmap.c ===================== */
-int netmap_get_memory(struct netmap_priv_d* p);
-void netmap_dtor(void *data);
-int netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td);
-int netmap_poll(struct cdev *dev, int events, struct thread *td);
-int netmap_init(void);
-void netmap_fini(void);
-
 /* ========================== LINUX-SPECIFIC ROUTINES ================== */
 
 /* Transmit routine used by generic_netmap_txsync(). Returns 0 on success
@@ -66,6 +58,22 @@ int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m, void *addr, u_int len,
         RD(5, "dev_queue_xmit failed: HARD ERROR %d", ret);
     }
     return -1;
+}
+
+/* Use ethtool to find the current NIC rings lengths, so that the netmap rings can
+   have the same lengths. */
+int
+generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx)
+{
+    struct ethtool_ringparam rp;
+
+    if (ifp->ethtool_ops && ifp->ethtool_ops->get_ringparam) {
+        ifp->ethtool_ops->get_ringparam(ifp, &rp);
+        *tx = rp.tx_pending;
+        *rx = rp.rx_pending;
+    }
+
+    return 0;
 }
 
 static struct device_driver*

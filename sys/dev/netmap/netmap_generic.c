@@ -359,14 +359,11 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 
     generic_netmap_tx_clean(kring);
 
-    if (!netif_carrier_ok(ifp)) {
-        return 0;
-    }
-
     /* Take a copy of ring->cur now, and never read it again. */
     k = ring->cur;
-    if (k > lim)
-        return netmap_ring_reinit(kring);
+    if (unlikely(k > lim)) {
+            return netmap_ring_reinit(kring);
+    }
 
     rmb();
     j = kring->nr_hwcur;
@@ -379,8 +376,8 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
             struct mbuf *m;
             int tx_ret;
 
-            if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
-                return netmap_ring_reinit(kring);
+            if (unlikely(addr == netmap_buffer_base || len > NETMAP_BUF_SIZE)) {
+                    return netmap_ring_reinit(kring);
             }
             /* Tale a mbuf from the tx pool and copy in the user packet. */
             m = kring->tx_pool[j];
@@ -396,12 +393,11 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
                    continue the TX processing if the doublecheck reports new available slots).
                 */
                 if (unlikely(generic_set_tx_event(kring,
-                                        generic_tx_event_middle(kring, j)) > 0)) {
+                                    generic_tx_event_middle(kring, j)) > 0)) {
                     continue;
                 }
                 break;
             }
-
             slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
             if (unlikely(j++ == lim))
                 j = 0;
@@ -562,27 +558,6 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 
     return 0;
 #endif /* linux */
-}
-
-/* Use ethtool to find the current NIC rings lengths, so that the netmap rings can
-   have the same lengths. */
-static int
-generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx)
-{
-
-#ifdef __FreeBSD__
-    D("using default values for %s tx %d rx %d", ifp->if_xname, *tx, *rx);
-#else /* linux */
-    struct ethtool_ringparam rp;
-
-    if (ifp->ethtool_ops && ifp->ethtool_ops->get_ringparam) {
-        ifp->ethtool_ops->get_ringparam(ifp, &rp);
-        *tx = rp.tx_pending;
-        *rx = rp.rx_pending;
-    }
-#endif /* linux */
-
-    return 0;
 }
 
 /* The generic netmap attach method makes it possible to attach netmap to a network

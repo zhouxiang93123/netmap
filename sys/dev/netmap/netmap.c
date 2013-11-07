@@ -3233,6 +3233,14 @@ int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m, void *addr, u_int len,
     return -1;
 }
 
+int
+generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx)
+{
+    D("using default values for %s tx %d rx %d", ifp->if_xname, *tx, *rx);
+
+    return 0;
+}
+
 static struct cdevsw netmap_cdevsw = {
 	.d_version = D_VERSION,
 	.d_name = "netmap",

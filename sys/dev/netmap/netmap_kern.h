@@ -528,6 +528,7 @@ u_int netmap_bdg_learning(char *, u_int, uint8_t *, struct netmap_adapter *);
 int netmap_poll(struct cdev *dev, int events, struct thread *td);
 int netmap_irq_generic(struct ifnet *ifp, u_int q, u_int *work_done, u_int generic);
 int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m, void *addr, u_int len, u_int ring_nr);
+int generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx);
 int netmap_init(void);
 void netmap_fini(void);
 int netmap_get_memory(struct netmap_priv_d* p);
