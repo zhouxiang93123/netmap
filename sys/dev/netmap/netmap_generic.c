@@ -135,6 +135,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
     if (enable) {
 	return EINVAL;
     } else {
+        return 0;
     }
 #else /* linux */
 

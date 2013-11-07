@@ -85,7 +85,7 @@ struct mbuf *mbq_dequeue(struct mbq *q)
     return __mbq_dequeue(q);
 }
 
-void __mbq_purge(struct mbq *q, int safe)
+static void __mbq_purge(struct mbq *q, int safe)
 {
     struct mbuf *m;
 
