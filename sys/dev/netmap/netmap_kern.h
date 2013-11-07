@@ -121,6 +121,8 @@ struct netmap_priv_d;
 
 const char *nm_dump_buf(char *p, int len, int lim, char *dst);
 
+#include "netmap_mbq.h"
+
 /*
  * private, kernel view of a ring. Keeps track of the status of
  * a ring across system calls.
@@ -194,9 +196,7 @@ struct netmap_kring {
            which doesn't support netmap. */
         struct mbuf **tx_pool;
         u_int nr_ntc;                   /* Emulation of a next-to-clean RX ring pointer. */
-#ifdef linux
-        struct sk_buff_head rx_queue;   /* A queue for intercepted rx sk_buffs. */
-#endif /* linux */
+        struct mbq rx_queue;            /* A queue for intercepted rx mbufs. */
 
 } __attribute__((__aligned__(64)));
 

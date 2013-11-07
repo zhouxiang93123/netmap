@@ -229,7 +229,6 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z gle
 #include <net/netmap.h>
 #include <dev/netmap/netmap_kern.h>
 #include <dev/netmap/netmap_mem2.h>
-#include <dev/netmap/netmap_mbq.h>
 
 
 MALLOC_DEFINE(M_NETMAP, "netmap", "Network memory map");

@@ -162,7 +162,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         /* Initialize the queue structure, since the generic_netmap_rx_handler() callback can
            be called as soon after netdev_rx_handler_register() returns. */
         for (r=0; r<na->num_rx_rings; r++) {
-            skb_queue_head_init(&na->rx_rings[r].rx_queue);
+            mbq_safe_init(&na->rx_rings[r].rx_queue);
             na->rx_rings[r].nr_ntc = 0;
         }
         hrtimer_init(&na->mit_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
@@ -215,7 +215,8 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         ifp->netdev_ops = (void *)na->if_transmit;
         netdev_rx_handler_unregister(ifp);
         for (r=0; r<na->num_rx_rings; r++) {
-            skb_queue_purge(&na->rx_rings[r].rx_queue);
+            mbq_safe_purge(&na->rx_rings[r].rx_queue);
+            mbq_safe_destroy(&na->rx_rings[r].rx_queue);
         }
         hrtimer_cancel(&na->mit_timer);
         for (r=0; r<na->num_tx_rings; r++) {
@@ -458,10 +459,10 @@ rx_handler_result_t generic_netmap_rx_handler(struct mbuf **pm)
     unsigned int work_done;
     unsigned int rr = 0;
 
-    if (unlikely(skb_queue_len(&na->rx_rings[rr].rx_queue) > 1024)) {
+    if (unlikely(mbq_len(&na->rx_rings[rr].rx_queue) > 1024)) {
         m_freem(*pm);
     } else {
-        skb_queue_tail(&na->rx_rings[rr].rx_queue, *pm);
+        mbq_safe_enqueue(&na->rx_rings[rr].rx_queue, *pm);
     }
 
     if (netmap_generic_mit < 32768) {
@@ -518,7 +519,7 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
             if (addr == netmap_buffer_base) { /* Bad buffer */
                 return netmap_ring_reinit(kring);
             }
-            m = skb_dequeue(&kring->rx_queue);
+            m = mbq_safe_dequeue(&kring->rx_queue);
             if (!m)
                 break;
             m_copydata(m, 0, m->len, addr);
