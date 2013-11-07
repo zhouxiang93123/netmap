@@ -320,6 +320,9 @@ struct netmap_adapter {
 
 	NM_LOCK_T core_lock;	/* used if no device lock available */
 
+	/* private cleanup. Must return 1 iff the adapter can be freed */
+	int (*nm_dtor)(struct netmap_adapter *);
+
 	int (*nm_register)(struct ifnet *, int onoff);
 
 	int (*nm_txsync)(struct ifnet *, u_int ring, int flags);
@@ -330,18 +333,18 @@ struct netmap_adapter {
 	int (*nm_config)(struct ifnet *, u_int *txr, u_int *txd,
 					u_int *rxr, u_int *rxd);
 
+	/* standard refcount to control the lifetime of the adapter
+         * (it should be equal to the lifetime of the corresponding ifp)
+         */
+	int na_refcount;
+
 	/*
 	 * Bridge support:
 	 *
 	 * bdg_port is the port number used in the bridge;
-	 * na_bdg_refcount is a refcount used for bridge ports,
-	 *	when it goes to 0 we can detach+free this port
-	 *	(a bridge port is always attached if it exists;
-	 *	it is not always registered)
 	 * na_bdg points to the bridge this NA is attached to.
 	 */
 	int bdg_port;
-	int na_bdg_refcount;
 	struct nm_bridge *na_bdg;
 	/* When we attach a physical interface to the bridge, we
 	 * allow the controlling process to terminate, so we need
@@ -495,6 +498,8 @@ nm_kr_lease(struct netmap_kring *k, u_int n, int is_rx)
  *	when reinitializing a ring.
  */
 int netmap_attach(struct netmap_adapter *, u_int);
+int netmap_attach_common(struct netmap_adapter *, u_int);
+void netmap_detach_common(struct netmap_adapter *na);
 void netmap_detach(struct ifnet *);
 int netmap_transmit(struct ifnet *, struct mbuf *);
 enum txrx { NR_RX = 0, NR_TX = 1 };

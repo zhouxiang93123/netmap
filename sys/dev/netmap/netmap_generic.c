@@ -63,6 +63,7 @@ int netmap_poll(struct cdev *dev, int events, struct thread *td);
 int netmap_init(void);
 void netmap_fini(void);
 extern int netmap_generic_mit;
+extern void netmap_adapter_put(struct netmap_adapter *);
 
 
 /* ===================== GENERIC NETMAP ADAPTER SUPPORT ================== */
@@ -592,6 +593,21 @@ generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx)
     return 0;
 }
 
+static int
+generic_netmap_dtor(struct netmap_adapter *na)
+{
+    struct ifnet *ifp = na->ifp;
+    struct netmap_adapter *prev_na = na->prev;
+
+    D("Released generic NA %p", na);
+    WNA(ifp) = prev_na;
+    netmap_adapter_put(prev_na);
+    D("Restored native NA %p", prev_na);
+    if_rele(ifp);
+    na->ifp = NULL;
+    return 1;
+}
+
 /* The generic netmap attach method makes it possible to attach netmap to a network
    interface that doesn't have explicit netmap support. The netmap ring size has no
    relationship to the NIC ring size: 256 could be a good default value. However, we
@@ -620,6 +636,7 @@ generic_netmap_attach(struct ifnet *ifp)
     na->nm_register = &generic_netmap_register;
     na->nm_txsync = &generic_netmap_txsync;
     na->nm_rxsync = &generic_netmap_rxsync;
+    na->nm_dtor = &generic_netmap_dtor;
 
     ND("[GNA] num_tx_queues(%d), real_num_tx_queues(%d), len(%lu)", ifp->num_tx_queues,
                                         ifp->real_num_tx_queues, ifp->tx_queue_len);
@@ -630,7 +647,10 @@ generic_netmap_attach(struct ifnet *ifp)
     na->num_tx_rings = ifp->real_num_tx_queues;
 #endif /* linux */
 
-    retval = netmap_attach(na, 1); // TODO ifp->real_num_rx_queues);
-    free(na, M_DEVBUF);
-    return retval;
+    retval = netmap_attach_common(na, 1); // TODO ifp->real_num_rx_queues);
+    if (retval) {
+        free(na, M_DEVBUF);
+        return retval;
+    }
+    return 0;
 }

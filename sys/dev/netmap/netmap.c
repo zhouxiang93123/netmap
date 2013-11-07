@@ -368,6 +368,10 @@ void netmap_enable_all_rings(struct ifnet *ifp)
 	}
 }
 
+/* netmap_adapter creation/destruction */
+void netmap_adapter_get(struct netmap_adapter *na);
+int netmap_adapter_put(struct netmap_adapter *na);
+
 
 /*
  * generic bound_checking function
@@ -439,6 +443,7 @@ nm_dump_buf(char *p, int len, int lim, char *dst)
 	return dst;
 }
 
+
 /*
  * system parameters (most of them in netmap_kern.h)
  * NM_NAME	prefix for switch port names, default "vale"
@@ -477,12 +482,6 @@ nm_dump_buf(char *p, int len, int lim, char *dst)
 int bridge_batch = NM_BDG_BATCH; /* bridge batch size */
 SYSCTL_INT(_dev_netmap, OID_AUTO, bridge_batch, CTLFLAG_RW, &bridge_batch, 0 , "");
 
-
-/*
- * These are used to handle reference counters for bridge ports.
- */
-#define	ADD_BDG_REF(ifp)	refcount_acquire(&NA(ifp)->na_bdg_refcount)
-#define	DROP_BDG_REF(ifp)	refcount_release(&NA(ifp)->na_bdg_refcount)
 
 /* The bridge references the buffers using the device specific look up table */
 static inline void *
@@ -1073,6 +1072,24 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 	netmap_mem_if_delete(na, nifp);
 }
 
+static struct ifnet *
+nm_if_ref(const char *name)
+{
+	struct ifnet *ifp;
+
+	NMG_LOCK_ASSERT();
+
+	ifp = ifunit_ref(name);
+	if (ifp == NULL)
+		return NULL;
+
+	if (NETMAP_CAPABLE(ifp))
+		netmap_adapter_get(NA(ifp));
+
+	return ifp;
+}
+
+
 
 /* we assume netmap adapter exists
  * Called with NMG_LOCK held
@@ -1080,43 +1097,24 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 static void
 nm_if_rele(struct ifnet *ifp)
 {
-	int i, is_hw, hw, sw, lim;
-	struct nm_bridge *b;
-	struct netmap_adapter *na = NA(ifp);  /* May be invalid. */
-        struct netmap_adapter *prev_na;
-	uint8_t tmp[NM_BDG_MAXPORTS];
-
 	NMG_LOCK_ASSERT();
-
-	if (NETMAP_CAPABLE(ifp) && nma_is_generic(na) && na->refcount <=0) {
-                /* XXX Move this block to do_unregif() ? */
-                /* Free the generic netmap adapter on the last reference. */
-                prev_na = na->prev;
-		netmap_detach(ifp);
-                D("Released generic NA %p", na);
-                if (prev_na) {
-                    /* Restore the previous netmap_adapter. */
-                    WNA(ifp) = prev_na;
-                    D("Restored native NA %p", prev_na);
-                }
-		if_rele(ifp);
-                return;
-        }
 
 	/* I can be called not only for get_ifp()-ed references where netmap's
 	 * capability is guaranteed, but also for non-netmap-capable NICs.
 	 */
-	if (!NETMAP_CAPABLE(ifp) || !na->na_bdg) {
+	if (!NETMAP_CAPABLE(ifp)) {
 		if_rele(ifp);
 		return;
 	}
-	b = na->na_bdg;
-	is_hw = nma_is_hw(na);
+	netmap_adapter_put(NA(ifp));
+}
 
-	ND("%s has %d references", ifp->if_xname, NA(ifp)->na_bdg_refcount);
-
-	if (!DROP_BDG_REF(ifp))
-		return;
+static void
+netmap_bdg_detach_common(struct nm_bridge *b, int hw, int sw)
+{
+	int s_hw = hw, s_sw = sw;
+	int i, lim =b->bdg_active_ports;
+	uint8_t tmp[NM_BDG_MAXPORTS];
 
 	/*
 	New algorithm:
@@ -1128,10 +1126,6 @@ nm_if_rele(struct ifnet *ifp)
 	acquire BDG_WLOCK() and copy back the array.
 	 */
 	
-	hw = NA(ifp)->bdg_port;
-	sw = (is_hw && SWNA(ifp)->na_bdg) ? SWNA(ifp)->bdg_port : -1;
-	lim = b->bdg_active_ports;
-
 	ND("detach %d and %d (lim %d)", hw, sw, lim);
 	/* make a copy of the list of active ports, update it,
 	 * and then copy back within BDG_WLOCK().
@@ -1157,15 +1151,11 @@ nm_if_rele(struct ifnet *ifp)
 	if (hw >= 0 || sw >= 0) {
 		D("XXX delete failed hw %d sw %d, should panic...", hw, sw);
 	}
-	hw = NA(ifp)->bdg_port;
-	sw = (is_hw && SWNA(ifp)->na_bdg) ?  SWNA(ifp)->bdg_port : -1;
 
 	BDG_WLOCK(b);
-	b->bdg_ports[hw] = NULL;
-	na->na_bdg = NULL;
-	if (sw >= 0) {
-		b->bdg_ports[sw] = NULL;
-		SWNA(ifp)->na_bdg = NULL;
+	b->bdg_ports[s_hw] = NULL;
+	if (s_sw >= 0) {
+		b->bdg_ports[s_sw] = NULL;
 	}
 	memcpy(b->bdg_port_index, tmp, sizeof(tmp));
 	b->bdg_active_ports = lim;
@@ -1176,19 +1166,59 @@ nm_if_rele(struct ifnet *ifp)
 		ND("marking bridge %s as free", b->bdg_basename);
 		b->nm_bdg_lookup = NULL;
 	}
-
-	if (is_hw) {
-		if_rele(ifp);
-	} else {
-		if (na->na_flags & NAF_MEM_OWNER)
-			netmap_mem_private_delete(na->nm_mem);
-		bzero(na, sizeof(*na));
-		free(na, M_DEVBUF);
-		bzero(ifp, sizeof(*ifp));
-		free(ifp, M_DEVBUF);
-	}
 }
 
+static void
+netmap_bdg_hw_detach(struct netmap_adapter *na)
+{
+	int hw, sw;
+	struct nm_bridge *b = na->na_bdg;
+	struct netmap_adapter *swna = SWNA(na->ifp);
+
+	hw = na->bdg_port;
+	sw = (swna->na_bdg) ? swna->bdg_port : -1;
+	netmap_bdg_detach_common(b, hw, sw);
+	na->na_bdg = swna->na_bdg = NULL;
+}
+
+static int
+netmap_adapter_hw_dtor(struct netmap_adapter *na)
+{
+	struct ifnet *ifp = na->ifp;
+
+	D("%s has %d references", ifp->if_xname, na->na_refcount);
+
+	if (na->na_bdg) {
+		netmap_bdg_hw_detach(na);
+	}
+
+	if_rele(ifp);
+
+	/* hw netmap_adapters are only destroyed on nic module unload
+         * (i.e., by netmap_detach()
+         */
+	return 0;
+}
+
+static int
+netmap_adapter_vp_dtor(struct netmap_adapter *na)
+{
+	struct nm_bridge *b = na->na_bdg;
+	struct ifnet *ifp = na->ifp;
+
+	D("%s has %d references", ifp->if_xname, na->na_refcount);
+
+	if (b) {
+		netmap_bdg_detach_common(b, na->bdg_port, -1);
+	}
+
+	bzero(ifp, sizeof(*ifp));
+	free(ifp, M_DEVBUF);
+	na->ifp = NULL;
+
+	/* destroy the adapter */
+	return 1;
+}
 
 /*
  * returns 1 if this is the last instance and we can free priv
@@ -1197,6 +1227,8 @@ static int
 netmap_dtor_locked(struct netmap_priv_d *priv)
 {
 	struct ifnet *ifp = priv->np_ifp;
+
+	D("dtor %s", (ifp ? ifp->if_xname : "NULL"));
 
 #ifdef __FreeBSD__
 	/*
@@ -1759,7 +1791,7 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp, int create)
 		if (!strcmp(iter->if_xname, name) /* virtual port */ ||
 		    (namelen > b->bdg_namelen && !strcmp(iter->if_xname,
 		    name + b->bdg_namelen + 1)) /* NIC */) {
-			ADD_BDG_REF(iter);
+			netmap_adapter_get(NA(iter));
 			ND("found existing if %s refs %d", name,
 				NA(iter)->na_bdg_refcount);
 			*ifp = iter;
@@ -1786,7 +1818,7 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp, int create)
 	 * try see if there is a matching NIC with this name
 	 * (after the bridge's name)
 	 */
-	iter = ifunit_ref(name + b->bdg_namelen + 1);
+	iter = nm_if_ref(name + b->bdg_namelen + 1);
 	if (!iter) { /* this is a virtual port */
 		/* Create a temporary NA with arguments, then
 		 * bdg_netmap_attach() will allocate the real one
@@ -1836,13 +1868,13 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp, int create)
 		if (NETMAP_OWNED_BY_ANY(iter)) {
 			D("NIC %s busy, cannot attach to bridge",
 				iter->if_xname);
-			if_rele(iter); /* don't detach from bridge */
+			nm_if_rele(iter);
 			return EINVAL;
 		}
 		if (nmr->nr_arg1 != NETMAP_BDG_HOST)
 			cand2 = -1; /* only need one port */
 	} else { /* not a netmap-capable NIC */
-		if_rele(iter); /* don't detach from bridge */
+		nm_if_rele(iter);
 		return EINVAL;
 	}
 	na = NA(iter);
@@ -1862,7 +1894,7 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp, int create)
 		b->bdg_active_ports++;
 		ND("host %p to bridge port %d", SWNA(iter), cand2);
 	}
-	ADD_BDG_REF(iter);	// XXX one or two ?
+	netmap_adapter_get(na);
 	ND("if %s refs %d", name, NA(iter)->na_bdg_refcount);
 	BDG_WUNLOCK(b);
 	*ifp = iter;
@@ -1871,7 +1903,7 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp, int create)
 no_bridge_port:
 	*ifp = iter;
 	if (! *ifp)
-		*ifp = ifunit_ref(name);
+		*ifp = nm_if_ref(name);
 	if (*ifp == NULL)
 		return (ENXIO);
 
@@ -1895,14 +1927,21 @@ no_bridge_port:
                         return error;
                 }
                 na = NA(*ifp);
+		netmap_adapter_get(na);
                 na->prev = prev_na; /* Store the previously used netmap_adapter. */
+		if (prev_na) {
+			/* we are holding two netmap adapters for the same ifp,
+			 * we need another ref
+			 */
+			ifunit_ref(name);
+		}
                 D("Created generic NA %p (prev %p)", na, na->prev);
         }
 
 	if (NETMAP_CAPABLE(*ifp)) {
 		/* Users cannot use the NIC attached to a bridge directly */
 		if (NETMAP_OWNED_BY_KERN(*ifp)) {
-			if_rele(*ifp); /* don't detach from bridge */
+			nm_if_rele(*ifp);
 			return EINVAL;
 		} else
 			return 0;	/* valid pointer, we hold the refcount */
@@ -2132,8 +2171,7 @@ nm_bdg_attach(struct nmreq *nmr)
 
 	if (NA(ifp)->refcount > 0) { /* already registered */
 		error = EBUSY;
-		DROP_BDG_REF(ifp);
-		goto unlock_exit;
+		goto unref_exit;
 	}
 
 	nifp = netmap_do_regif(npriv, ifp, nmr->nr_ringid, &error);
@@ -2142,6 +2180,7 @@ nm_bdg_attach(struct nmreq *nmr)
 	}
 
 	NA(ifp)->na_kpriv = npriv;
+	nm_if_rele(ifp);
 	NMG_UNLOCK();
 	ND("registered %s to netmap-mode", ifp->if_xname);
 	return 0;
@@ -2160,6 +2199,7 @@ nm_bdg_detach(struct nmreq *nmr)
 {
 	struct ifnet *ifp;
 	int error;
+	struct netmap_adapter *na;
 	int last_instance;
 
 	NMG_LOCK();
@@ -2175,25 +2215,29 @@ nm_bdg_detach(struct nmreq *nmr)
 		error = EINVAL;
 		goto unref_exit;
 	}
+	
+	na = NA(ifp);
 
-	if (NA(ifp)->refcount == 0) { /* not registered */
+	if (na->refcount == 0) { /* not registered */
 		error = EINVAL;
 		goto unref_exit;
 	}
 
-	DROP_BDG_REF(ifp); /* the one from get_ifp */
 	last_instance = netmap_dtor_locked(NA(ifp)->na_kpriv); /* unregister */
-	NMG_UNLOCK();
 	if (!last_instance) {
 		D("--- error, trying to detach an entry with active mmaps");
 		error = EINVAL;
 	} else {
 		struct netmap_priv_d *npriv = NA(ifp)->na_kpriv;
+
 		NA(ifp)->na_kpriv = NULL;
+		D("deleting priv");
 
 		bzero(npriv, sizeof(*npriv));
 		free(npriv, M_DEVBUF);
 	}
+	nm_if_rele(ifp);
+	NMG_UNLOCK();
 	return error;
 
 unref_exit:
@@ -2866,6 +2910,53 @@ out:
 
 /*------- driver support routines ------*/
 
+int
+netmap_attach_common(struct netmap_adapter *na, u_int num_queues)
+{
+	struct ifnet *ifp = na->ifp;
+
+	WNA(ifp) = na;
+	NETMAP_SET_CAPABLE(ifp);
+	if (na->num_tx_rings == 0)
+		na->num_tx_rings = num_queues;
+	na->num_rx_rings = num_queues;
+	na->refcount = na->na_single = na->na_multi = 0;
+	/* Core lock initialized here, others after netmap_if_new. */
+	mtx_init(&na->core_lock, "netmap core lock", MTX_NETWORK_LOCK, MTX_DEF);
+#ifdef linux
+	if (ifp->netdev_ops) {
+		ND("netdev_ops %p", ifp->netdev_ops);
+		/* prepare a clone of the netdev ops */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 28)
+		na->nm_ndo.ndo_start_xmit = ifp->netdev_ops;
+#else
+		na->nm_ndo = *ifp->netdev_ops;
+#endif
+	}
+	na->nm_ndo.ndo_start_xmit = linux_netmap_start_xmit;
+#endif /* linux */
+	if (na->nm_mem == NULL)
+		na->nm_mem = &nm_mem;
+	return 0;
+}
+
+void
+netmap_detach_common(struct netmap_adapter *na)
+{
+	if (na->ifp)
+		WNA(na->ifp) = NULL;
+
+	mtx_destroy(&na->core_lock);
+
+	if (na->tx_rings) { /* XXX should not happen */
+		D("freeing leftover tx_rings");
+		free(na->tx_rings, M_DEVBUF);
+	}
+	if (na->na_flags & NAF_MEM_OWNER)
+		netmap_mem_private_delete(na->nm_mem);
+	bzero(na, sizeof(*na));
+	free(na, M_DEVBUF);
+}
 
 /*
  * Initialize a ``netmap_adapter`` object created by driver on attach.
@@ -2886,43 +2977,18 @@ netmap_attach(struct netmap_adapter *arg, u_int num_queues)
 {
 	struct netmap_adapter *na = NULL;
 	struct ifnet *ifp = arg ? arg->ifp : NULL;
-	size_t len;
 
 	if (arg == NULL || ifp == NULL)
 		goto fail;
-	/* a VALE port uses two endpoints */
-	len = nma_is_vp(arg) ? sizeof(*na) : sizeof(*na) * 2;
-	na = malloc(len, M_DEVBUF, M_NOWAIT | M_ZERO);
+	/* we need two adapters to support bdg<->host connectivity */
+	na = malloc(sizeof(*na) * 2, M_DEVBUF, M_NOWAIT | M_ZERO);
 	if (na == NULL)
 		goto fail;
-	WNA(ifp) = na;
-	*na = *arg; /* copy everything, trust the driver to not pass junk */
-	NETMAP_SET_CAPABLE(ifp);
-        na->prev = NULL;
-	if (na->num_tx_rings == 0)
-		na->num_tx_rings = num_queues;
-	na->num_rx_rings = num_queues;
-	na->refcount = na->na_single = na->na_multi = 0;
-	/* Core lock initialized here, others after netmap_if_new. */
-	mtx_init(&na->core_lock, "netmap core lock", MTX_NETWORK_LOCK, MTX_DEF);
-#ifdef linux
-	// XXX move to linux_specific code
-	// linux_netmap_attach(na); // XXX complete
-	if (ifp->netdev_ops) {
-		ND("netdev_ops %p", ifp->netdev_ops);
-		/* prepare a clone of the netdev ops */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 28)
-		na->nm_ndo.ndo_start_xmit = ifp->netdev_ops;
-#else
-		na->nm_ndo = *ifp->netdev_ops;
-#endif
-	}
-	na->nm_ndo.ndo_start_xmit = linux_netmap_start_xmit;
-#endif /* linux */
-
-	na->nm_mem = arg->nm_mem ? arg->nm_mem : &nm_mem;
-	if (!nma_is_vp(arg))
-		netmap_attach_sw(ifp);
+	*na = *arg;
+	na->nm_dtor = netmap_adapter_hw_dtor;
+	if (netmap_attach_common(na, num_queues))
+		goto fail;
+	netmap_attach_sw(ifp);
 	D("success for %s", ifp->if_xname);
 	return 0;
 
@@ -2930,6 +2996,33 @@ fail:
 	D("fail, arg %p ifp %p na %p", arg, ifp, na);
 	netmap_detach(ifp);
 	return (na ? EINVAL : ENOMEM);
+}
+
+void
+netmap_adapter_get(struct netmap_adapter *na)
+{
+	D("getting %s (%d)", na->ifp->if_xname, na->na_refcount);
+	refcount_acquire(&na->na_refcount);
+}
+
+/* returns 1 iff the netmap_adapter is destroyed */
+int
+netmap_adapter_put(struct netmap_adapter *na)
+{
+	if (!na)
+		return 1;
+
+	D("putting %s (%d)", na->ifp->if_xname, na->na_refcount);
+
+	if (!refcount_release(&na->na_refcount))
+		return 0;
+
+	if (na->nm_dtor && !na->nm_dtor(na))
+		return 0;
+
+	netmap_detach_common(na);
+
+	return 1;
 }
 
 
@@ -2942,20 +3035,11 @@ netmap_detach(struct ifnet *ifp)
 {
 	struct netmap_adapter *na = NA(ifp);
 
-	if (!na)
-		return;
-
-	mtx_destroy(&na->core_lock);
-
-	if (na->tx_rings) { /* XXX should not happen */
-		D("freeing leftover tx_rings");
-		free(na->tx_rings, M_DEVBUF);
-	}
-	if (na->na_flags & NAF_MEM_OWNER)
-		netmap_mem_private_delete(na->nm_mem);
-	bzero(na, sizeof(*na));
-	WNA(ifp) = NULL;
-	free(na, M_DEVBUF);
+	if (na->na_refcount)
+		D("BUG: freeing na of %s with refcount %d",
+			ifp->if_xname, na->na_refcount);
+	
+	netmap_detach_common(na);
 }
 
 
@@ -3863,28 +3947,30 @@ done:
 	return n;
 }
 
-
 static int
 bdg_netmap_attach(struct netmap_adapter *arg)
 {
-	struct netmap_adapter na;
+	struct netmap_adapter *na;
+	int error;
 
-	ND("attaching virtual bridge");
-	bzero(&na, sizeof(na));
-
-	na.ifp = arg->ifp;
-	na.na_flags = NAF_BDG_MAYSLEEP | NAF_MEM_OWNER;
-	na.num_tx_rings = arg->num_tx_rings;
-	na.num_rx_rings = arg->num_rx_rings;
-	na.num_tx_desc = arg->num_tx_desc;
-	na.num_rx_desc = arg->num_rx_desc;
-	na.nm_txsync = bdg_netmap_txsync;
-	na.nm_rxsync = bdg_netmap_rxsync;
-	na.nm_register = bdg_netmap_reg;
-	na.nm_mem = netmap_mem_private_new(arg->ifp->if_xname,
-			na.num_tx_rings, na.num_tx_desc,
-			na.num_rx_rings, na.num_rx_desc);
-	return netmap_attach(&na, na.num_tx_rings);
+	na = malloc(sizeof(*na), M_DEVBUF, M_NOWAIT | M_ZERO);
+	if (na == NULL)
+		return ENOMEM;
+	*na = *arg;
+	na->na_flags |= NAF_BDG_MAYSLEEP | NAF_MEM_OWNER;
+	na->nm_txsync = bdg_netmap_txsync;
+	na->nm_rxsync = bdg_netmap_rxsync;
+	na->nm_register = bdg_netmap_reg;
+	na->nm_dtor = netmap_adapter_vp_dtor;
+	na->nm_mem = netmap_mem_private_new(arg->ifp->if_xname,
+			na->num_tx_rings, na->num_tx_desc,
+			na->num_rx_rings, na->num_rx_desc);
+	error = netmap_attach_common(na, na->num_tx_rings);
+	if (error) {
+		free(na, M_DEVBUF);
+		return error;
+	}
+	return 0;
 }
 
 
