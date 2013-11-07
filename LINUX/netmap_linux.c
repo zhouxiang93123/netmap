@@ -30,15 +30,58 @@
 #include <dev/netmap/netmap_mem2.h>
 
 
-/* ====================== STUFF DEFINED in netmap.c ===================== */
-int netmap_get_memory(struct netmap_priv_d* p);
-void netmap_dtor(void *data);
-int netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td);
-int netmap_poll(struct cdev *dev, int events, struct thread *td);
-int netmap_init(void);
-void netmap_fini(void);
-
 /* ========================== LINUX-SPECIFIC ROUTINES ================== */
+
+/* Transmit routine used by generic_netmap_txsync(). Returns 0 on success
+   and -1 on error (which may be packet drops or other errors). */
+int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m, void *addr, u_int len,
+                              u_int ring_nr)
+{
+    netdev_tx_t ret;
+
+    /* TODO Support the slot flags (NS_FRAG, NS_INDIRECT). */
+    skb_copy_to_linear_data(m, addr, len); // skb_store_bits(m, 0, addr, len);
+    skb_put(m, len);
+    NM_ATOMIC_INC(&m->users);
+    m->dev = ifp;
+    m->priority = 100;
+    skb_set_queue_mapping(m, ring_nr);
+
+    ret = dev_queue_xmit(m);
+
+    if (likely(ret == NET_XMIT_SUCCESS)) {
+        return 0;
+    }
+    if (unlikely(ret != NET_XMIT_DROP)) {
+        /* If something goes wrong in the TX path, there is nothing intelligent
+           we can do (for now) apart from error reporting. */
+        RD(5, "dev_queue_xmit failed: HARD ERROR %d", ret);
+    }
+    return -1;
+}
+
+/* Use ethtool to find the current NIC rings lengths, so that the netmap rings can
+   have the same lengths. */
+int
+generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx)
+{
+    struct ethtool_ringparam rp;
+
+    if (ifp->ethtool_ops && ifp->ethtool_ops->get_ringparam) {
+        ifp->ethtool_ops->get_ringparam(ifp, &rp);
+        *tx = rp.tx_pending;
+        *rx = rp.rx_pending;
+    }
+
+    return 0;
+}
+
+/* Fills in the output arguments with the number of hardware TX/RX queues. */
+void generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq)
+{
+    *txq = ifp->real_num_tx_queues;
+    *rxq = 1; /* TODO ifp->real_num_rx_queues */
+}
 
 static struct device_driver*
 linux_netmap_find_driver(struct device *dev)
@@ -255,7 +298,7 @@ EXPORT_SYMBOL(netmap_total_buffers);	/* index check */
 EXPORT_SYMBOL(netmap_buffer_base);
 EXPORT_SYMBOL(netmap_reset);		/* ring init routines */
 EXPORT_SYMBOL(netmap_buf_size);
-EXPORT_SYMBOL(netmap_irq_generic);	/* default irq handler */
+EXPORT_SYMBOL(netmap_rx_irq);	        /* default irq handler */
 EXPORT_SYMBOL(netmap_no_pendintr);	/* XXX mitigation - should go away */
 EXPORT_SYMBOL(netmap_bdg_ctl);		/* bridge configuration routine */
 EXPORT_SYMBOL(netmap_bdg_learning);	/* the default lookup function */

@@ -1340,18 +1340,17 @@ netmap_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
  * pass a chain of buffers to the host stack as coming from 'dst'
  */
 static void
-netmap_send_up(struct ifnet *dst, struct mbuf *head)
+netmap_send_up(struct ifnet *dst, struct mbq *q)
 {
 	struct mbuf *m;
 
 	/* send packets up, outside the lock */
-	while ((m = head) != NULL) {
-		head = head->m_nextpkt;
-		m->m_nextpkt = NULL;
+	while ((m = mbq_dequeue(q)) != NULL) {
 		if (netmap_verbose & NM_VERB_HOST)
 			D("sending up pkt %p size %d", m, MBUF_LEN(m));
 		NM_SEND_UP(dst, m);
 	}
+        mbq_destroy(q);
 }
 
 
@@ -1368,7 +1367,7 @@ netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
 	 * XXX handle reserved
 	 */
 	u_int lim = kring->nkr_num_slots - 1;
-	struct mbuf *m, *tail = q->tail;
+	struct mbuf *m;
 	u_int k = kring->ring->cur, n = kring->ring->reserved;
 	struct netmap_mem_d *nmd = kring->na->nm_mem;
 
@@ -1394,15 +1393,8 @@ netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
 
 		if (m == NULL)
 			break;
-		if (tail)
-			tail->m_nextpkt = m;
-		else
-			q->head = m;
-		tail = m;
-		q->count++;
-		m->m_nextpkt = NULL;
+                mbq_enqueue(q, m);
 	}
-	q->tail = tail;
 }
 
 
@@ -1485,7 +1477,7 @@ netmap_txsync_to_host(struct netmap_adapter *na)
 	struct netmap_kring *kring = &na->tx_rings[na->num_tx_rings];
 	struct netmap_ring *ring = kring->ring;
 	u_int k, lim = kring->nkr_num_slots - 1;
-	struct mbq q = { NULL, NULL, 0 };
+	struct mbq q;
 
 	if (nm_kr_tryget(kring)) {
 		D("ring %p busy (user error)", kring);
@@ -1503,12 +1495,13 @@ netmap_txsync_to_host(struct netmap_adapter *na)
 	 * In case of no buffers we give up. At the end of the loop,
 	 * the queue is drained in all cases.
 	 */
+        mbq_init(&q);
 	netmap_grab_packets(kring, &q, 1);
 	kring->nr_hwcur = k;
 	kring->nr_hwavail = ring->avail = lim;
 
 	nm_kr_put(kring);
-	netmap_send_up(na->ifp, q.head);
+	netmap_send_up(na->ifp, &q);
 }
 
 
@@ -2534,12 +2527,13 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	struct netmap_kring *kring;
 	u_int i, check_all_tx, check_all_rx, want_tx, want_rx, revents = 0;
 	u_int lim_tx, lim_rx, host_forwarded = 0;
-	struct mbq q = { NULL, NULL, 0 };
+	struct mbq q;
 	void *pwait = dev;	/* linux compatibility */
 
 		int retry_tx = 1;
 
 	(void)pwait;
+        mbq_init(&q);
 
 	if (devfs_get_cdevpriv((void **)&priv) != 0 || priv == NULL)
 		return POLLERR;
@@ -2748,8 +2742,8 @@ do_retry_rx:
 		goto flush_tx;
 	}
 
-	if (q.head)
-		netmap_send_up(na->ifp, q.head);
+        if (q.head)
+	        netmap_send_up(na->ifp, &q);
 
 out:
 
@@ -2992,7 +2986,7 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
 		return NULL;	/* no netmap support here */
 	}
 	if (!(na->ifp->if_capenable & IFCAP_NETMAP) || nma_is_generic(na)) {
-		D("interface not in netmap mode");
+		ND("interface not in netmap mode");
 		return NULL;	/* nothing to reinitialize */
 	}
 
@@ -3167,46 +3161,16 @@ put_out:
 }
 
 
-/*
- * Default functions to handle rx/tx interrupts from a physical device.
- * "work_done" is non-null on the RX path, NULL for the TX path.
- * "generic" is 0 when we are called by a device driver, and 1 when we
- * are called by the generic netmap adapter layer.
- * We rely on the OS to make sure that there is only one active
- * instance per queue, and that there is appropriate locking.
- *
- * If the card is not in netmap mode, simply return 0,
- * so that the caller proceeds with regular processing.
- *
- * We return 0 also when the card is in netmap mode but the current
- * netmap adapter is the generic one, because this function will be
- * called by the generic layer.
- *
- * If the card is connected to a netmap file descriptor,
- * do a selwakeup on the individual queue, plus one on the global one
- * if needed (multiqueue card _and_ there are multiqueue listeners),
- * and return 1.
- *
- * Finally, if called on rx from an interface connected to a switch,
- * calls the proper forwarding routine, and return 1.
- */
-int
-netmap_irq_generic(struct ifnet *ifp, u_int q, u_int *work_done, u_int generic)
+int netmap_common_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 {
-	struct netmap_adapter *na = NA(ifp);
-	struct netmap_kring *kring;
-
-	if (!(ifp->if_capenable & IFCAP_NETMAP) || (nma_is_generic(na) && !generic))
-		return 0;
+        struct netmap_adapter *na = NA(ifp);
+        struct netmap_kring *kring;
 
 	q &= NETMAP_RING_MASK;
 
-	if (netmap_verbose)
-		RD(5, "received %s queue %d", work_done ? "RX" : "TX" , q);
-	if (na->na_flags & NAF_SKIP_INTR) {
-		ND("use regular interrupt");
-		return 0;
-	}
+	if (netmap_verbose) {
+	        RD(5, "received %s queue %d", work_done ? "RX" : "TX" , q);
+        }
 
 	if (work_done) { /* RX path */
 		if (q >= na->num_rx_rings)
@@ -3232,8 +3196,60 @@ netmap_irq_generic(struct ifnet *ifp, u_int q, u_int *work_done, u_int generic)
 	return 1;
 }
 
+/*
+ * Default functions to handle rx/tx interrupts from a physical device.
+ * "work_done" is non-null on the RX path, NULL for the TX path.
+ * "generic" is 0 when we are called by a device driver, and 1 when we
+ * are called by the generic netmap adapter layer.
+ * We rely on the OS to make sure that there is only one active
+ * instance per queue, and that there is appropriate locking.
+ *
+ * If the card is not in netmap mode, simply return 0,
+ * so that the caller proceeds with regular processing.
+ *
+ * If the card is connected to a netmap file descriptor,
+ * do a selwakeup on the individual queue, plus one on the global one
+ * if needed (multiqueue card _and_ there are multiqueue listeners),
+ * and return 1.
+ *
+ * Finally, if called on rx from an interface connected to a switch,
+ * calls the proper forwarding routine, and return 1.
+ */
+int
+netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
+{
+	if (!(ifp->if_capenable & IFCAP_NETMAP))
+		return 0;
+
+	if (NA(ifp)->na_flags & NAF_SKIP_INTR) {
+		ND("use regular interrupt");
+		return 0;
+	}
+
+        return netmap_common_irq(ifp, q, work_done);
+}
 
 #ifdef __FreeBSD__
+/* FreeBSD specific code. XXX move to a separate file, to get rid of this ifdef. */
+int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m, void *addr, u_int len,
+                              u_int ring_nr)
+{
+    return -1;
+}
+
+int
+generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx)
+{
+    D("using default values for %s tx %d rx %d", ifp->if_xname, *tx, *rx);
+
+    return 0;
+}
+
+void generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq)
+{
+    *txq = *rxq = 1;
+}
+
 static struct cdevsw netmap_cdevsw = {
 	.d_version = D_VERSION,
 	.d_name = "netmap",

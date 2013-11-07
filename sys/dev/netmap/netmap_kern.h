@@ -129,6 +129,8 @@ struct mbq {
 
 const char *nm_dump_buf(char *p, int len, int lim, char *dst);
 
+#include "netmap_mbq.h"
+
 /*
  * private, kernel view of a ring. Keeps track of the status of
  * a ring across system calls.
@@ -205,8 +207,8 @@ struct netmap_kring {
 	 * XXX who writes to the rx queue ?
 	 */
 	struct mbuf **tx_pool;
-	u_int nr_ntc;		/* Emulate the next-to-clean RX ring pointer. */
-	struct sk_buff_head rx_queue;   /* A queue for intercepted rx sk_buffs. */
+        u_int nr_ntc;                   /* Emulation of a next-to-clean RX ring pointer. */
+        struct mbq rx_queue;            /* A queue for intercepted rx mbufs. */
 
 } __attribute__((__aligned__(64)));
 
@@ -534,6 +536,17 @@ u_int netmap_bdg_learning(char *, u_int, uint8_t *, struct netmap_adapter *);
 #define	NM_BDG_BROADCAST	NM_BDG_MAXPORTS
 #define	NM_BDG_NOPORT		(NM_BDG_MAXPORTS+1)
 
+/* Various prototypes */
+int netmap_poll(struct cdev *dev, int events, struct thread *td);
+int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m, void *addr, u_int len, u_int ring_nr);
+int generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx);
+void generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq);
+int netmap_init(void);
+void netmap_fini(void);
+int netmap_get_memory(struct netmap_priv_d* p);
+void netmap_dtor(void *data);
+int netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td);
+
 extern u_int netmap_buf_size;
 #define NETMAP_BUF_SIZE	netmap_buf_size	// XXX remove
 extern int netmap_mitigate;
@@ -732,9 +745,9 @@ PNMB(struct netmap_slot *slot, uint64_t *pp)
 }
 
 /* default functions to handle rx/tx interrupts */
-int netmap_irq_generic(struct ifnet *, u_int, u_int *, u_int);
-#define netmap_rx_irq(_n, _q, _w) netmap_irq_generic(_n, _q, _w, 0)
+int netmap_rx_irq(struct ifnet *, u_int, u_int *);
 #define netmap_tx_irq(_n, _q) netmap_rx_irq(_n, _q, NULL)
+int netmap_common_irq(struct ifnet *, u_int, u_int *work_done);
 
 #ifdef __FreeBSD__
 MALLOC_DECLARE(M_NETMAP);
