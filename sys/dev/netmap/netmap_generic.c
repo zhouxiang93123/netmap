@@ -78,6 +78,9 @@ typedef int rx_handler_result_t;	// XXX
 #define rtnl_lock() D("rtnl_lock called");
 #define rtnl_unlock() D("rtnl_lock called");
 
+/*
+ * mbuf wrappers
+ */
 static struct mbuf *
 netmap_get_mbuf(int len)
 {
@@ -91,13 +94,11 @@ netmap_get_mbuf(int len)
 
 	if (m == NULL)
 		return m;
+	/* XXX not sure we should set the len now */
 	m->m_len = m->m_pkthdr.len = len;
 	return m;
 }
 
-/*
- * mbuf wrappers
- */
 #define GET_MBUF_REFCNT(m)	(*(m)->m_ext.ref_cnt)
 
 /* mbuf destructor, also need to change the type to EXT_EXTREF
@@ -107,8 +108,6 @@ netmap_get_mbuf(int len)
 
 #define	destructor		m_ext.ext_free
 
-/* we get a cluster, no matter what */
-#define netmap_get_mbuf(size)	m_getcl(M_NOWAIT, MT_DATA, M_PKTHDR)
 
 #else /* linux */
 #include "bsd_glue.h"
@@ -206,7 +205,43 @@ netmap_generic_irq(struct ifnet *ifp, u_int q, u_int *work_done)
         return netmap_common_irq(ifp, q, work_done);
 }
 
+
 rx_handler_result_t generic_netmap_rx_handler(struct mbuf **pm);
+
+/*
+ * second argument is non-zero to intercept, 0 to restore
+ */
+static int
+netmap_catch_rx(struct netmap_adapter *na, int intercept)
+{
+	struct ifnet *ifp = na->ifp;
+
+#ifdef __FreeBSD__
+	if (intercept) {
+		if (na->save_if_input) {
+			D("cannot intercept again");
+			return EINVAL; /* already set */
+		}
+		na->save_if_input = ifp->if_input;
+		ifp->if_input = generic_netmap_rx_handler;
+	} else {
+		if (!na->save_if_input){
+			D("cannot restore");
+			return EINVAL;  /* not saved */
+		}
+		ifp->if_input = na->save_if_input;
+		na->save_if_input = NULL;
+	}
+#else /* linux */
+	if (intercept) {
+		return netdev_rx_handler_register(na->ifp,
+			&generic_netmap_rx_handler, na);
+	} else {
+		netdev_rx_handler_unregister(ifp);
+		return 0;
+	}
+#endif /* linux */
+}
 
 static enum hrtimer_restart
 generic_timer_handler(struct hrtimer *t)
@@ -275,6 +310,9 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         na->mit_timer.function = &generic_timer_handler;
         na->mit_pending = 0;
 
+	/*
+	 * preallocate buffers for the tx rings
+	 */
         for (r=0; r<na->num_tx_rings; r++) {
             na->tx_rings[r].nr_ntc = 0;
             na->tx_rings[r].tx_pool = malloc(na->num_tx_desc * sizeof(struct mbuf *),
@@ -295,7 +333,8 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
             }
         }
         rtnl_lock();
-        error = netdev_rx_handler_register(ifp, &generic_netmap_rx_handler, na);
+	/* prepare to intercept incoming traffic */
+        error = netmap_catch_rx(na, 1);
         if (error) {
             D("netdev_rx_handler_register() failed");
             goto register_handler;
@@ -335,7 +374,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         ifp->netdev_ops = (void *)na->if_transmit;
 
 	/* do not intercept packets on the rx path */
-        netdev_rx_handler_unregister(ifp);
+        netmap_catch_rx(na, 0);
 
 	/* XXX maybe we should try and put this outside
 	 * the lock
@@ -599,16 +638,22 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 
 #ifdef linux
 
-/* This handler is registered within the attached net_device in the Linux RX subsystem,
-   so that every mbuf passed up by the driver can be stolen to the network stack.
-   Stolen packets are put in a queue where the generic_netmap_rxsync() callback can
-   extract them. */
+/*
+ * This handler is registered within the attached net_device
+ * in the Linux RX subsystem, so that every mbuf passed up by
+ * the driver can be stolen to the network stack.
+ * Stolen packets are put in a queue where the
+ * generic_netmap_rxsync() callback can extract them.
+ *
+ * The FreeBSD equivalent is ether_input(m->m_pkthdr.rcvif, m)
+ */
 rx_handler_result_t generic_netmap_rx_handler(struct mbuf **pm)
 {
     struct netmap_adapter *na = NA((*pm)->dev);
     uint work_done;
     uint rr = 0;
 
+    /* limit the size of the queue */
     if (unlikely(mbq_len(&na->rx_rings[rr].rx_queue) > 1024)) {
         m_freem(*pm);
     } else {
@@ -616,12 +661,13 @@ rx_handler_result_t generic_netmap_rx_handler(struct mbuf **pm)
     }
 
     if (netmap_generic_mit < 32768) {
-        /* When rx mitigation is not used, never filter the notification. */
+        /* no rx mitigation, pass notification up */
         netmap_generic_irq(na->ifp, rr, &work_done);
         IFRATE(rate_ctx.new.rxirq++);
     } else {
-        /* Filter the notification when there is a pending timer, otherwise
-           start the timer and don't filter. */
+	/* same as send combining, filter notification if there is a
+	 * pending timer, otherwise pass it up and start a timer.
+         */
         if (likely(hrtimer_active(&na->mit_timer))) {
             /* Record that there is some pending work. */
             na->mit_pending = 1;

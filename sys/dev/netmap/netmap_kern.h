@@ -368,12 +368,14 @@ struct netmap_adapter {
 
 	struct net_device_ops *nm_ndo_p;
 
-        /* With generic netmap adapters we need a net_device_ops structure to override the
-           ndo_select_queue() driver method. */
+        /* generic netmap adapters support:
+	 * a net_device_ops struct overrides ndo_select_queue(),
+	 * save_if_input saves the if_input hook (FreeBSD),
+	 * mit_timer and mit_pending implement rx interrupt mitigation,
+	 */
         struct net_device_ops *generic_ndo_p;
+	void (*save_if_input)(struct ifnet *, struct mbuf *);
 
-        /* High resolution timer used to mitigate rx notifications with generic netmap
-           adapters. */
         struct hrtimer mit_timer;
         int mit_pending;
 };
