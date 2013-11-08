@@ -108,8 +108,8 @@ netmap_get_mbuf(int len)
 
 #define	destructor		m_ext.ext_free
 
-
 #else /* linux */
+
 #include "bsd_glue.h"
 
 #include <linux/rtnetlink.h>    /* rtnl_[un]lock() */
@@ -118,14 +118,12 @@ netmap_get_mbuf(int len)
 
 #define RATE  /* Enables communication statistics. */
 
-#define GET_MBUF_REFCNT(m)	NM_ATOMIC_READ(&((m)->users))
-
-#define netmap_get_mbuf(size)	alloc_skb(size, GFP_ATOMIC)
-
 //#define REG_RESET
 
 #endif /* linux */
 
+
+/* Common headers. */
 #include <net/netmap.h>
 #include <dev/netmap/netmap_kern.h>
 #include <dev/netmap/netmap_mem2.h>
