@@ -69,6 +69,7 @@ static int
 forcedeth_netmap_reg(struct ifnet *dev, int onoff)
 {
 	struct netmap_adapter *na = NA(dev);
+	struct netmap_hw_adapter *hwna = (struct netmap_hw_adapter *)na;
 	struct SOFTC_T *np = netdev_priv(dev);
 	int error = 0;
 	u8 __iomem *base = get_hwbase(dev);
@@ -90,7 +91,7 @@ forcedeth_netmap_reg(struct ifnet *dev, int onoff)
 	if (onoff) {
 		dev->if_capenable |= IFCAP_NETMAP;
 		na->if_transmit = (void *)dev->netdev_ops;
-		dev->netdev_ops = &na->nm_ndo;
+		dev->netdev_ops = &hwna->nm_ndo;
 	} else {
 		/* restore if_transmit */
 		dev->netdev_ops = (void *)na->if_transmit;

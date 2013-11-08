@@ -146,6 +146,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
 #else /* linux */
 
     struct netmap_adapter *na = NA(ifp);
+    struct netmap_generic_adapter *gna = (struct netmap_generic_adapter*)na;
     struct mbuf *m;
     int error;
     int i, r;
@@ -167,9 +168,9 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
             skb_queue_head_init(&na->rx_rings[r].rx_queue);
             na->rx_rings[r].nr_ntc = 0;
         }
-        hrtimer_init(&na->mit_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-        na->mit_timer.function = &generic_timer_handler;
-        na->mit_pending = 0;
+        hrtimer_init(&gna->mit_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+        gna->mit_timer.function = &generic_timer_handler;
+        gna->mit_pending = 0;
         for (r=0; r<na->num_tx_rings; r++) {
             na->tx_rings[r].nr_ntc = 0;
             na->tx_rings[r].tx_pool = malloc(na->num_tx_desc * sizeof(struct mbuf *),
@@ -197,9 +198,9 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         }
         ifp->if_capenable |= IFCAP_NETMAP;
         na->if_transmit = (void *)ifp->netdev_ops;
-        na->generic_ndo = *(ifp->netdev_ops);  /* Copy */
-        na->generic_ndo.ndo_select_queue = &generic_ndo_select_queue;  /* Replace a field. */
-        ifp->netdev_ops = &na->generic_ndo;  /* Switch the pointers. */
+        gna->generic_ndo = *(ifp->netdev_ops);  /* Copy */
+        gna->generic_ndo.ndo_select_queue = &generic_ndo_select_queue;  /* Replace a field. */
+        ifp->netdev_ops = &gna->generic_ndo;  /* Switch the pointers. */
 #ifdef RATE
         if (rate_ctx.refcount == 0) {
             D("setup_timer()");
@@ -219,7 +220,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         for (r=0; r<na->num_rx_rings; r++) {
             skb_queue_purge(&na->rx_rings[r].rx_queue);
         }
-        hrtimer_cancel(&na->mit_timer);
+        hrtimer_cancel(&gna->mit_timer);
         for (r=0; r<na->num_tx_rings; r++) {
             for (i=0; i<na->num_tx_desc; i++) {
                 m_freem(na->tx_rings[r].tx_pool[i]);
@@ -435,16 +436,17 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 #ifdef linux
 enum hrtimer_restart generic_timer_handler(struct hrtimer *t)
 {
-    struct netmap_adapter *na = container_of(t, struct netmap_adapter, mit_timer);
+    struct netmap_generic_adapter *gna = container_of(t, struct netmap_generic_adapter, mit_timer);
+    struct netmap_adapter *na = &gna->up.up;
     unsigned int work_done;
 
-    if (na->mit_pending) {
+    if (gna->mit_pending) {
         /* Some work arrived while the timer was counting down: Reset the pending work
            flag, restart the timer and issue a notification. */
-        na->mit_pending = 0;
+        gna->mit_pending = 0;
         netmap_irq_generic(na->ifp, 0, &work_done, 1);
         IFRATE(rate_ctx.new.rxirq++);
-        hrtimer_forward_now(&na->mit_timer, ktime_set(0, netmap_generic_mit));
+        hrtimer_forward_now(&gna->mit_timer, ktime_set(0, netmap_generic_mit));
 
         return HRTIMER_RESTART;
     }
@@ -460,6 +462,7 @@ enum hrtimer_restart generic_timer_handler(struct hrtimer *t)
 rx_handler_result_t generic_netmap_rx_handler(struct mbuf **pm)
 {
     struct netmap_adapter *na = NA((*pm)->dev);
+    struct netmap_generic_adapter *gna = (struct netmap_generic_adapter*)na;
     unsigned int work_done;
     unsigned int rr = 0;
 
@@ -476,13 +479,13 @@ rx_handler_result_t generic_netmap_rx_handler(struct mbuf **pm)
     } else {
         /* Filter the notification when there is a pending timer, otherwise
            start the timer and don't filter. */
-        if (likely(hrtimer_active(&na->mit_timer))) {
+        if (likely(hrtimer_active(&gna->mit_timer))) {
             /* Record that there is some pending work. */
-            na->mit_pending = 1;
+            gna->mit_pending = 1;
         } else {
             netmap_irq_generic(na->ifp, rr, &work_done, 1);
             IFRATE(rate_ctx.new.rxirq++);
-            hrtimer_start(&na->mit_timer, ktime_set(0, netmap_generic_mit), HRTIMER_MODE_REL);
+            hrtimer_start(&gna->mit_timer, ktime_set(0, netmap_generic_mit), HRTIMER_MODE_REL);
         }
     }
 
@@ -597,7 +600,8 @@ static int
 generic_netmap_dtor(struct netmap_adapter *na)
 {
     struct ifnet *ifp = na->ifp;
-    struct netmap_adapter *prev_na = na->prev;
+    struct netmap_generic_adapter *gna = (struct netmap_generic_adapter*)na;
+    struct netmap_adapter *prev_na = gna->prev;
 
     D("Released generic NA %p", na);
     WNA(ifp) = prev_na;

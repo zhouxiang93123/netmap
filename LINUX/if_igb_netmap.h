@@ -63,6 +63,7 @@ igb_netmap_reg(struct ifnet *ifp, int onoff)
 {
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct netmap_adapter *na = NA(ifp);
+	struct netmap_hw_adapter *hwna = (struct netmap_hw_adapter*)na;
 	int error = 0;
 
 	if (na == NULL)
@@ -79,7 +80,7 @@ igb_netmap_reg(struct ifnet *ifp, int onoff)
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
 		na->if_transmit = (void *)ifp->netdev_ops;
-		ifp->netdev_ops = &na->nm_ndo;
+		ifp->netdev_ops = &hwna->nm_ndo;
 	} else {
 		ifp->if_capenable &= ~IFCAP_NETMAP;
 		ifp->netdev_ops = (void *)na->if_transmit;

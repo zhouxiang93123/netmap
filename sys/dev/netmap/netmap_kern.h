@@ -309,6 +309,7 @@ struct netmap_adapter {
 	void *tailroom;		       /* space below the rings array */
 				       /* (used for leases) */
 
+
 	NM_SELINFO_T tx_si, rx_si;	/* global wait queues */
 
 	/* copy of if_qflush and if_transmit pointers, to intercept
@@ -344,6 +345,13 @@ struct netmap_adapter {
          */
 	int na_refcount;
 
+	/* memory allocator */
+ 	struct netmap_mem_d *nm_mem;
+};
+
+struct netmap_vp_adapter {
+	struct netmap_adapter up;
+
 	/*
 	 * Bridge support:
 	 *
@@ -352,6 +360,11 @@ struct netmap_adapter {
 	 */
 	int bdg_port;
 	struct nm_bridge *na_bdg;
+};
+
+struct netmap_hw_adapter {
+	struct netmap_adapter up;
+
 	/* When we attach a physical interface to the bridge, we
 	 * allow the controlling process to terminate, so we need
 	 * a place to store the netmap_priv_d data structure.
@@ -359,15 +372,18 @@ struct netmap_adapter {
 	 */
 	struct netmap_priv_d *na_kpriv;
 
-	/* memory allocator */
- 	struct netmap_mem_d *nm_mem;
+#ifdef linux
+	struct net_device_ops nm_ndo;
+#endif /* linux */
+};
+
+struct netmap_generic_adapter {
+	struct netmap_hw_adapter up;
 
         /* Pointer to a previously used netmap adapter. */
         struct netmap_adapter *prev;
 
 #ifdef linux
-	struct net_device_ops nm_ndo;
-
         /* With generic netmap adapters we need a net_device_ops structure to override the
            ndo_select_queue() driver method. */
         struct net_device_ops generic_ndo;
@@ -376,7 +392,7 @@ struct netmap_adapter {
            adapters. */
         struct hrtimer mit_timer;
         int mit_pending;
-#endif /* linux */
+#endif
 };
 
 /*
@@ -522,9 +538,9 @@ u_int nm_bound_var(u_int *v, u_int dflt, u_int lo, u_int hi, const char *msg);
  * XXX in practice "unknown" might be handled same as broadcast.
  */
 typedef u_int (*bdg_lookup_fn_t)(char *buf, u_int len, uint8_t *ring_nr,
-		struct netmap_adapter *);
+		struct netmap_vp_adapter *);
 int netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func);
-u_int netmap_bdg_learning(char *, u_int, uint8_t *, struct netmap_adapter *);
+u_int netmap_bdg_learning(char *, u_int, uint8_t *, struct netmap_vp_adapter *);
 #define	NM_NAME			"vale"	/* prefix for the bridge port name */
 #define	NM_BDG_MAXPORTS		254	/* up to 32 for bitmap, 254 ok otherwise */
 #define	NM_BDG_BROADCAST	NM_BDG_MAXPORTS

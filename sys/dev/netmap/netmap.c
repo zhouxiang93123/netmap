@@ -553,7 +553,7 @@ struct nm_bridge {
 	 */
 	uint8_t		bdg_port_index[NM_BDG_MAXPORTS];
 
-	struct netmap_adapter *bdg_ports[NM_BDG_MAXPORTS];
+	struct netmap_vp_adapter *bdg_ports[NM_BDG_MAXPORTS];
 
 
 	/*
@@ -624,9 +624,14 @@ nma_is_hw(struct netmap_adapter *na)
  * if the NIC is owned by a user, only users can share it.
  * Evaluation must be done under NMG_LOCK().
  */
+#if 0
 #define NETMAP_OWNED_BY_KERN(ifp)	(!nma_is_vp(NA(ifp)) && NA(ifp)->na_bdg)
 #define NETMAP_OWNED_BY_ANY(ifp) \
 	(NETMAP_OWNED_BY_KERN(ifp) || (NA(ifp)->refcount > 0))
+#else
+#define NETMAP_OWNED_BY_KERN(ifp)	0
+#define NETMAP_OWNED_BY_ANY(ifp)	0
+#endif
 
 /*
  * NA(ifp)->bdg_port	port index
@@ -1154,6 +1159,7 @@ netmap_bdg_detach_common(struct nm_bridge *b, int hw, int sw)
 	}
 }
 
+#if 0
 static void
 netmap_bdg_hw_detach(struct netmap_adapter *na)
 {
@@ -1166,6 +1172,7 @@ netmap_bdg_hw_detach(struct netmap_adapter *na)
 	netmap_bdg_detach_common(b, hw, sw);
 	na->na_bdg = swna->na_bdg = NULL;
 }
+#endif
 
 static int
 netmap_adapter_hw_dtor(struct netmap_adapter *na)
@@ -1174,9 +1181,11 @@ netmap_adapter_hw_dtor(struct netmap_adapter *na)
 
 	D("%s has %d references", ifp->if_xname, na->na_refcount);
 
+#if  0
 	if (na->na_bdg) {
 		netmap_bdg_hw_detach(na);
 	}
+#endif
 
 	if_rele(ifp);
 
@@ -1189,13 +1198,14 @@ netmap_adapter_hw_dtor(struct netmap_adapter *na)
 static int
 netmap_adapter_vp_dtor(struct netmap_adapter *na)
 {
-	struct nm_bridge *b = na->na_bdg;
+	struct netmap_vp_adapter *vpna = (struct netmap_vp_adapter*)na;
+	struct nm_bridge *b = vpna->na_bdg;
 	struct ifnet *ifp = na->ifp;
 
 	D("%s has %d references", ifp->if_xname, na->na_refcount);
 
 	if (b) {
-		netmap_bdg_detach_common(b, na->bdg_port, -1);
+		netmap_bdg_detach_common(b, vpna->bdg_port, -1);
 	}
 
 	bzero(ifp, sizeof(*ifp));
@@ -1638,6 +1648,7 @@ netmap_txsync_to_host(struct netmap_adapter *na)
 }
 
 
+#if 0
 /*
  * This is the 'txsync' handler to send from a software ring to the
  * host stack.
@@ -1653,6 +1664,7 @@ netmap_bdg_to_host(struct ifnet *ifp, u_int ring_nr, int flags)
 	netmap_txsync_to_host(NA(ifp));
 	return 0;
 }
+#endif
 
 
 /*
@@ -1739,12 +1751,11 @@ static int
 get_ifp(struct nmreq *nmr, struct ifnet **ifp, int create)
 {
 	const char *name = nmr->nr_name;
-	int namelen = strlen(name);
 	struct ifnet *iter = NULL;
 
 	/* first try to see if this is a bridge port. */
 	struct nm_bridge *b;
-	struct netmap_adapter *na;
+	struct netmap_vp_adapter *vpna;
 	int i, j, cand = -1, cand2 = -1;
 	int needed;
 
@@ -1770,16 +1781,14 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp, int create)
 	/* lookup in the local list of ports */
 	for (j = 0; j < b->bdg_active_ports; j++) {
 		i = b->bdg_port_index[j];
-		na = b->bdg_ports[i];
+		vpna = b->bdg_ports[i];
 		// KASSERT(na != NULL);
-		iter = na->ifp;
+		iter = vpna->up.ifp;
 		/* XXX make sure the name only contains one : */
-		if (!strcmp(iter->if_xname, name) /* virtual port */ ||
-		    (namelen > b->bdg_namelen && !strcmp(iter->if_xname,
-		    name + b->bdg_namelen + 1)) /* NIC */) {
-			netmap_adapter_get(NA(iter));
+		if (!strcmp(iter->if_xname, name)) {
+			netmap_adapter_get(&vpna->up);
 			ND("found existing if %s refs %d", name,
-				NA(iter)->na_bdg_refcount);
+				vpna->na_bdg_refcount);
 			*ifp = iter;
 			/* we are done, this is surely netmap capable */
 			return 0;
@@ -1863,15 +1872,16 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp, int create)
 		nm_if_rele(iter);
 		return EINVAL;
 	}
-	na = NA(iter);
+	vpna = (struct netmap_vp_adapter *)NA(iter);
 
 	BDG_WLOCK(b);
-	na->bdg_port = cand;
-	ND("NIC  %p to bridge port %d", NA(iter), cand);
+	vpna->bdg_port = cand;
+	D("NIC  %p to bridge port %d", vpna, cand);
 	/* bind the port to the bridge (virtual ports are not active) */
-	b->bdg_ports[cand] = na;
-	na->na_bdg = b;
+	b->bdg_ports[cand] = vpna;
+	vpna->na_bdg = b;
 	b->bdg_active_ports++;
+#if 0
 	if (cand2 >= 0) {
 		/* also bind the host stack to the bridge */
 		b->bdg_ports[cand2] = SWNA(iter);
@@ -1880,8 +1890,9 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp, int create)
 		b->bdg_active_ports++;
 		ND("host %p to bridge port %d", SWNA(iter), cand2);
 	}
-	netmap_adapter_get(na);
-	ND("if %s refs %d", name, NA(iter)->na_bdg_refcount);
+#endif
+	netmap_adapter_get(&vpna->up);
+	D("if %s refs %d", name, vpna->up.na_refcount);
 	BDG_WUNLOCK(b);
 	*ifp = iter;
 	return 0;
@@ -1901,6 +1912,7 @@ no_bridge_port:
                                         i == NETMAP_ADMODE_GENERIC)) {
         	int error = 0;
         	struct netmap_adapter *prev_na;
+		struct netmap_generic_adapter *gna;
 
                 prev_na = NA(*ifp);  /* Previously used netmap adapter (can be NULL). */
                 /* We create a generic netmap adapter (which doesn't require
@@ -1912,16 +1924,16 @@ no_bridge_port:
                         nm_if_rele(*ifp);
                         return error;
                 }
-                na = NA(*ifp);
-		netmap_adapter_get(na);
-                na->prev = prev_na; /* Store the previously used netmap_adapter. */
+                gna = (struct netmap_generic_adapter*)NA(*ifp);
+		netmap_adapter_get(&gna->up.up);
+                gna->prev = prev_na; /* Store the previously used netmap_adapter. */
 		if (prev_na) {
 			/* we are holding two netmap adapters for the same ifp,
 			 * we need another ref
 			 */
 			ifunit_ref(name);
 		}
-                D("Created generic NA %p (prev %p)", na, na->prev);
+                D("Created generic NA %p (prev %p)", gna, gna->prev);
         }
 
 	if (NETMAP_CAPABLE(*ifp)) {
@@ -2085,8 +2097,10 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 		 *
 		 * If the interface is attached to a bridge, lock it.
 		 */
+#if 0
 		if (NETMAP_OWNED_BY_KERN(ifp))
 			BDG_WLOCK(NA(ifp)->na_bdg);
+#endif
 		for (i = 0 ; i < na->num_tx_rings + 1; i++)
 			mtx_init(&na->tx_rings[i].q_lock, "nm_txq_lock",
 			    NULL, MTX_DEF);
@@ -2094,10 +2108,12 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 			mtx_init(&na->rx_rings[i].q_lock, "nm_rxq_lock",
 			    NULL, MTX_DEF);
 		}
+#if 0
 		if (nma_is_hw(na)) {
 			SWNA(ifp)->tx_rings = &na->tx_rings[na->num_tx_rings];
 			SWNA(ifp)->rx_rings = &na->rx_rings[na->num_rx_rings];
 		}
+#endif
 		/*
 		 * do not core lock because the race is harmless here,
 		 * there cannot be any traffic to netmap_transmit()
@@ -2110,8 +2126,10 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 			netmap_do_unregif(priv, nifp);
 			nifp = NULL;
 		}
+#if 0
 		if (NETMAP_OWNED_BY_KERN(ifp))
 			BDG_WUNLOCK(NA(ifp)->na_bdg);
+#endif
 
 	}
 out:
@@ -2128,6 +2146,7 @@ out:
 	return nifp;
 }
 
+#if 0
 /* Process NETMAP_BDG_ATTACH and NETMAP_BDG_DETACH */
 static int
 nm_bdg_attach(struct nmreq *nmr)
@@ -2257,6 +2276,7 @@ netmap_attach_sw(struct ifnet *ifp)
 	 * the hw adapter */
 	na->nm_mem = hw_na->nm_mem;
 }
+#endif
 
 
 /* exported to kernel callers, e.g. OVS ?
@@ -2266,6 +2286,7 @@ netmap_attach_sw(struct ifnet *ifp)
 int
 netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func)
 {
+#if 0
 	struct nm_bridge *b;
 	struct netmap_adapter *na;
 	struct ifnet *iter;
@@ -2377,6 +2398,9 @@ netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func)
 		break;
 	}
 	return error;
+#else
+	return 0;
+#endif
 }
 
 
@@ -2937,18 +2961,6 @@ netmap_attach_common(struct netmap_adapter *na, u_int num_queues)
 	na->refcount = na->na_single = na->na_multi = 0;
 	/* Core lock initialized here, others after netmap_if_new. */
 	mtx_init(&na->core_lock, "netmap core lock", MTX_NETWORK_LOCK, MTX_DEF);
-#ifdef linux
-	if (ifp->netdev_ops) {
-		ND("netdev_ops %p", ifp->netdev_ops);
-		/* prepare a clone of the netdev ops */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 28)
-		na->nm_ndo.ndo_start_xmit = ifp->netdev_ops;
-#else
-		na->nm_ndo = *ifp->netdev_ops;
-#endif
-	}
-	na->nm_ndo.ndo_start_xmit = linux_netmap_start_xmit;
-#endif /* linux */
 	if (na->nm_mem == NULL)
 		na->nm_mem = &nm_mem;
 	return 0;
@@ -2990,27 +3002,40 @@ netmap_detach_common(struct netmap_adapter *na)
 int
 netmap_attach(struct netmap_adapter *arg, u_int num_queues)
 {
-	struct netmap_adapter *na = NULL;
+	struct netmap_hw_adapter *hwna = NULL;
 	struct ifnet *ifp = arg ? arg->ifp : NULL;
 
 	if (arg == NULL || ifp == NULL)
 		goto fail;
-	/* we need two adapters to support bdg<->host connectivity */
-	na = malloc(sizeof(*na) * 2, M_DEVBUF, M_NOWAIT | M_ZERO);
-	if (na == NULL)
+	hwna = malloc(sizeof(*hwna), M_DEVBUF, M_NOWAIT | M_ZERO);
+	if (hwna == NULL)
 		goto fail;
-	*na = *arg;
-	na->nm_dtor = netmap_adapter_hw_dtor;
-	if (netmap_attach_common(na, num_queues))
+	hwna->up = *arg;
+	hwna->up.nm_dtor = netmap_adapter_hw_dtor;
+	if (netmap_attach_common(&hwna->up, num_queues))
 		goto fail;
+#ifdef linux
+	if (ifp->netdev_ops) {
+		ND("netdev_ops %p", ifp->netdev_ops);
+		/* prepare a clone of the netdev ops */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 28)
+		hwna->nm_ndo.ndo_start_xmit = ifp->netdev_ops;
+#else
+		hwna->nm_ndo = *ifp->netdev_ops;
+#endif
+	}
+	hwna->nm_ndo.ndo_start_xmit = linux_netmap_start_xmit;
+#endif /* linux */
+#if 0
 	netmap_attach_sw(ifp);
+#endif
 	D("success for %s", ifp->if_xname);
 	return 0;
 
 fail:
-	D("fail, arg %p ifp %p na %p", arg, ifp, na);
+	D("fail, arg %p ifp %p na %p", arg, ifp, hwna);
 	netmap_detach(ifp);
-	return (na ? EINVAL : ENOMEM);
+	return (hwna ? EINVAL : ENOMEM);
 }
 
 void
@@ -3123,7 +3148,7 @@ netmap_detach(struct ifnet *ifp)
 
 int
 nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n,
-	struct netmap_adapter *na, u_int ring_nr);
+	struct netmap_vp_adapter *na, u_int ring_nr);
 
 
 /*
@@ -3164,6 +3189,7 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 			len, NETMAP_BDG_BUF_SIZE(na->nm_mem));
 		goto done;
 	}
+#if 0
 	if (SWNA(ifp)->na_bdg) {
 		struct nm_bdg_fwd *ft;
 		char *dst;
@@ -3190,6 +3216,7 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 		error = 0;
 		goto done;
 	}
+#endif
 
 	/* protect against other instances of netmap_transmit,
 	 * and userspace invocations of rxsync().
@@ -3311,7 +3338,7 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
  * Returns the next position in the ring.
  */
 static int
-nm_bdg_preflush(struct netmap_adapter *na, u_int ring_nr,
+nm_bdg_preflush(struct netmap_vp_adapter *na, u_int ring_nr,
 	struct netmap_kring *kring, u_int end)
 {
 	struct netmap_ring *ring = kring->ring;
@@ -3326,7 +3353,7 @@ nm_bdg_preflush(struct netmap_adapter *na, u_int ring_nr,
 	 * attached to a user process) or with a trylock otherwise (NICs).
 	 */
 	ND("wait rlock for %d packets", ((j > end ? lim+1 : 0) + end) - j);
-	if (na->na_flags & NAF_BDG_MAYSLEEP)
+	if (na->up.na_flags & NAF_BDG_MAYSLEEP)
 		BDG_RLOCK(b);
 	else if (!BDG_RTRYLOCK(b))
 		return 0;
@@ -3344,7 +3371,7 @@ nm_bdg_preflush(struct netmap_adapter *na, u_int ring_nr,
 		/* this slot goes into a list so initialize the link field */
 		ft[ft_i].ft_next = NM_FT_NULL;
 		buf = ft[ft_i].ft_buf = (slot->flags & NS_INDIRECT) ?
-			(void *)(uintptr_t)slot->ptr : BDG_NMB(na->nm_mem, slot);
+			(void *)(uintptr_t)slot->ptr : BDG_NMB(na->up.nm_mem, slot);
 		prefetch(buf);
 		++ft_i;
 		if (slot->flags & NS_MOREFRAG) {
@@ -3371,6 +3398,7 @@ nm_bdg_preflush(struct netmap_adapter *na, u_int ring_nr,
 }
 
 
+#if 0
 /*
  * Pass packets from nic to the bridge.
  * XXX TODO check locking: this is called from the interrupt
@@ -3419,6 +3447,7 @@ put_out:
 	nm_kr_put(kring);
 	return;
 }
+#endif
 
 
 /*
@@ -3467,12 +3496,17 @@ netmap_irq_generic(struct ifnet *ifp, u_int q, u_int *work_done, u_int generic)
 			return 0;	// not a physical queue
 		kring = na->rx_rings + q;
 		kring->nr_kflags |= NKR_PENDINTR;	// XXX atomic ?
+#if 0
 		if (na->na_bdg != NULL) {
 			netmap_nic_to_bdg(ifp, q);
 		} else {
 			na->nm_notify(ifp, q, NR_RX,
 				(na->num_rx_rings > 1 ? NAF_GLOBAL_NOTIFY : 0));
 		}
+#else
+		na->nm_notify(ifp, q, NR_RX,
+			(na->num_rx_rings > 1 ? NAF_GLOBAL_NOTIFY : 0));
+#endif
 		*work_done = 1; /* do not fire napi again */
 	} else { /* TX path */
 		if (q >= na->num_tx_rings)
@@ -3565,7 +3599,7 @@ bdg_netmap_reg(struct ifnet *ifp, int onoff)
  */
 u_int
 netmap_bdg_learning(char *buf, u_int buf_len, uint8_t *dst_ring,
-		struct netmap_adapter *na)
+		struct netmap_vp_adapter *na)
 {
 	struct nm_hash_ent *ht = na->na_bdg->ht;
 	uint32_t sh, dh;
@@ -3612,7 +3646,7 @@ netmap_bdg_learning(char *buf, u_int buf_len, uint8_t *dst_ring,
  * number of ports, and lets us replace the learn and dispatch functions.
  */
 int
-nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
+nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_vp_adapter *na,
 		u_int ring_nr)
 {
 	struct nm_bdg_q *dst_ents, *brddst;
@@ -3691,10 +3725,10 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 	/* second pass: scan destinations (XXX will be modular somehow) */
 	for (i = 0; i < num_dsts; i++) {
 		struct ifnet *dst_ifp;
-		struct netmap_adapter *dst_na;
+		struct netmap_vp_adapter *dst_na;
 		struct netmap_kring *kring;
 		struct netmap_ring *ring;
-		u_int dst_nr, is_vp, lim, j, sent = 0, d_i, next, brd_next;
+		u_int dst_nr, lim, j, sent = 0, d_i, next, brd_next;
 		u_int needed, howmany;
 		int retry = netmap_txsync_retry;
 		struct nm_bdg_q *d;
@@ -3711,9 +3745,9 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		 */
 		if (unlikely(dst_na == NULL))
 			goto cleanup;
-		if (dst_na->na_flags & NAF_SW_ONLY)
+		if (dst_na->up.na_flags & NAF_SW_ONLY)
 			goto cleanup;
-		dst_ifp = dst_na->ifp;
+		dst_ifp = dst_na->up.ifp;
 		/*
 		 * The interface may be in !netmap mode in two cases:
 		 * - when na is attached but not activated yet;
@@ -3736,23 +3770,17 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		 */
 		needed = d->bq_len + brddst->bq_len;
 
-		is_vp = nma_is_vp(dst_na);
 		ND(5, "pass 2 dst %d is %x %s",
 			i, d_i, is_vp ? "virtual" : "nic/host");
 		dst_nr = d_i & (NM_BDG_MAXRINGS-1);
-		if (is_vp) { /* virtual port */
-			nrings = dst_na->num_rx_rings;
-		} else {
-			nrings = dst_na->num_tx_rings;
-		}
+		nrings = dst_na->up.num_rx_rings;
 		if (dst_nr >= nrings)
 			dst_nr = dst_nr % nrings;
-		kring = is_vp ?  &dst_na->rx_rings[dst_nr] :
-				&dst_na->tx_rings[dst_nr];
+		kring = &dst_na->up.rx_rings[dst_nr];
 		ring = kring->ring;
 		lim = kring->nkr_num_slots - 1;
 
-retry:
+//retry:
 
 		/* reserve the buffers in the queue and an entry
 		 * to report completion, and drop lock.
@@ -3763,19 +3791,11 @@ retry:
 			mtx_unlock(&kring->q_lock);
 			goto cleanup;
 		}
-		/* on physical interfaces, do a txsync to recover
-		 * slots for packets already transmitted.
-		 * XXX maybe we could be optimistic and rely on a retry
-		 * in case of failure.
-		 */
-		if (nma_is_hw(dst_na)) {
-			dst_na->nm_txsync(dst_ifp, dst_nr, 0);
-		}
 		my_start = j = kring->nkr_hwlease;
-		howmany = nm_kr_space(kring, is_vp);
+		howmany = nm_kr_space(kring, 1);
 		if (needed < howmany)
 			howmany = needed;
-		lease_idx = nm_kr_lease(kring, howmany, is_vp);
+		lease_idx = nm_kr_lease(kring, howmany, 1);
 		mtx_unlock(&kring->q_lock);
 
 		/* only retry if we need more than available slots */
@@ -3813,7 +3833,7 @@ retry:
 			    size_t len = (ft_p->ft_len + 63) & ~63;
 
 			    slot = &ring->slot[j];
-			    dst = BDG_NMB(dst_na->nm_mem, slot);
+			    dst = BDG_NMB(dst_na->up.nm_mem, slot);
 			    /* round to a multiple of 64 */
 
 			    ND("send %d %d bytes at %s:%d",
@@ -3865,7 +3885,7 @@ retry:
 		    }
 		    p[lease_idx] = j; /* report I am done */
 
-		    update_pos = is_vp ? nm_kr_rxpos(kring) : ring->cur;
+		    update_pos = nm_kr_rxpos(kring);
 
 		    if (my_start == update_pos) {
 			/* all slots before my_start have been reported,
@@ -3882,7 +3902,6 @@ retry:
 			 * means there are new buffers to report
 			 */
 			if (likely(j != my_start)) {
-			    if (is_vp) {
 				uint32_t old_avail = kring->nr_hwavail;
 
 				kring->nr_hwavail = (j >= kring->nr_hwcur) ?
@@ -3894,18 +3913,7 @@ retry:
 				}
 				still_locked = 0;
 				mtx_unlock(&kring->q_lock);
-				dst_na->nm_notify(dst_na->ifp, dst_nr, NR_RX, 0);
-			    } else {
-				ring->cur = j;
-				/* XXX update avail ? */
-				still_locked = 0;
-				dst_na->nm_txsync(dst_ifp, dst_nr, 0);
-				mtx_unlock(&kring->q_lock);
-
-				/* retry to send more packets */
-				if (nma_is_hw(dst_na) && retry--)
-					goto retry;
-			    }
+				dst_na->up.nm_notify(dst_na->up.ifp, dst_nr, NR_RX, 0);
 			}
 		    }
 		    if (still_locked)
@@ -3929,8 +3937,8 @@ cleanup:
 static int
 bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
-	struct netmap_adapter *na = NA(ifp);
-	struct netmap_kring *kring = &na->tx_rings[ring_nr];
+	struct netmap_vp_adapter *na = (struct netmap_vp_adapter*)NA(ifp);
+	struct netmap_kring *kring = &na->up.tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k, lim = kring->nkr_num_slots - 1;
 
@@ -4025,12 +4033,14 @@ done:
 static int
 bdg_netmap_attach(struct netmap_adapter *arg)
 {
+	struct netmap_vp_adapter *vpna;
 	struct netmap_adapter *na;
 	int error;
 
-	na = malloc(sizeof(*na), M_DEVBUF, M_NOWAIT | M_ZERO);
-	if (na == NULL)
+	vpna = malloc(sizeof(*vpna), M_DEVBUF, M_NOWAIT | M_ZERO);
+	if (vpna == NULL)
 		return ENOMEM;
+ 	na = &vpna->up;
 	*na = *arg;
 	na->na_flags |= NAF_BDG_MAYSLEEP | NAF_MEM_OWNER;
 	na->nm_txsync = bdg_netmap_txsync;
@@ -4043,7 +4053,7 @@ bdg_netmap_attach(struct netmap_adapter *arg)
 			na->num_rx_rings, na->num_rx_desc);
 	error = netmap_attach_common(na, na->num_tx_rings);
 	if (error) {
-		free(na, M_DEVBUF);
+		free(vpna, M_DEVBUF);
 		return error;
 	}
 	return 0;
