@@ -2238,13 +2238,13 @@ nm_bdg_detach(struct nmreq *nmr)
 		goto unlock_exit;
 	}
 	/* XXX do we need to check this ? */
-	if (!NETMAP_OWNED_BY_KERN(ifp)) {
-		/* got reference to a virtual port or direct access to a NIC.
-		 * perhaps specified no bridge's prefix or wrong NIC's name
-		 */
-		error = EINVAL;
-		goto unref_exit;
-	}
+	//if (!NETMAP_OWNED_BY_KERN(ifp)) {
+	//	/* got reference to a virtual port or direct access to a NIC.
+	//	 * perhaps specified no bridge's prefix or wrong NIC's name
+	//	 */
+	//	error = EINVAL;
+	//	goto unref_exit;
+	//}
 	
 	na = NA(ifp);
 	bna = (struct netmap_bwrap_adapter *)na;
@@ -4158,14 +4158,37 @@ netmap_bwrap_config(struct ifnet *ifp, u_int *txr, u_int *txd,
 static int
 netmap_bwrap_krings_create(struct netmap_adapter *na)
 {
+	struct netmap_bwrap_adapter *bna =
+		(struct netmap_bwrap_adapter *)na;
+	struct netmap_adapter *hwna = bna->hwna;
+	int error;
+
 	D("%s", na->ifp->if_xname);
+
+	error = netmap_vp_krings_create(na);
+	if (error)
+		return error;
+
+	error = hwna->nm_krings_create(hwna);
+	if (error) {
+		netmap_vp_krings_delete(na);
+		return error;
+	}
+	
 	return 0;
 }
 
 static void
 netmap_bwrap_krings_delete(struct netmap_adapter *na)
 {
+	struct netmap_bwrap_adapter *bna =
+		(struct netmap_bwrap_adapter *)na;
+	struct netmap_adapter *hwna = bna->hwna;
+
 	D("%s", na->ifp->if_xname);
+
+	hwna->nm_krings_delete(hwna);
+	netmap_vp_krings_delete(na);
 }
 
 static int
