@@ -3818,7 +3818,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_vp_adapter *na,
 		ring = kring->ring;
 		lim = kring->nkr_num_slots - 1;
 
-//retry:
+retry:
 
 		/* reserve the buffers in the queue and an entry
 		 * to report completion, and drop lock.
@@ -3829,6 +3829,9 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_vp_adapter *na,
 			mtx_unlock(&kring->q_lock);
 			goto cleanup;
 		}
+		if (dst_na->retry) {
+			dst_na->up.nm_notify(dst_na->up.ifp, dst_nr, NR_RX, 0);
+		}	
 		my_start = j = kring->nkr_hwlease;
 		howmany = nm_kr_space(kring, 1);
 		if (needed < howmany)
@@ -3949,9 +3952,11 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_vp_adapter *na,
 					D("avail shrink %d -> %d",
 						old_avail, kring->nr_hwavail);
 				}
+				dst_na->up.nm_notify(dst_na->up.ifp, dst_nr, NR_RX, 0);
 				still_locked = 0;
 				mtx_unlock(&kring->q_lock);
-				dst_na->up.nm_notify(dst_na->up.ifp, dst_nr, NR_RX, 0);
+				if (dst_na->retry && retry--)
+					goto retry;
 			}
 		    }
 		    if (still_locked)
@@ -4248,7 +4253,7 @@ netmap_bwrap_notify(struct ifnet *ifp, u_int ring_n, enum txrx tx, int flags)
 	}
 	
 	n = hw_kring->nr_hwcur;
-	D("%s[%d] PRE hwvail %d hwcur %d cur %d rhwcur %d",
+	ND("%s[%d] PRE hwvail %d hwcur %d cur %d rhwcur %d",
 	        ifp->if_xname, ring_n, kring->nr_hwavail, kring->nr_hwcur, ring->cur, hw_kring->nr_hwcur);
 	hwna->nm_txsync(hwna->ifp, ring_n, flags);
 	n = hw_kring->nr_hwcur - n;
@@ -4258,7 +4263,7 @@ netmap_bwrap_notify(struct ifnet *ifp, u_int ring_n, enum txrx tx, int flags)
 	if (kring->nr_hwcur > lim)
 	        kring->nr_hwcur -= lim + 1;
 	kring->nr_hwavail -= n;
-	D("%s[%d] PST hwvail %d hwcur %d cur %d rhwcur %d",
+	ND("%s[%d] PST hwvail %d hwcur %d cur %d rhwcur %d",
 	        ifp->if_xname, ring_n, kring->nr_hwavail, kring->nr_hwcur, ring->cur, hw_kring->nr_hwcur);
 	
 	nm_kr_put(hw_kring);
@@ -4294,6 +4299,7 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 	na->nm_notify = netmap_bwrap_notify;
 	na->nm_mem = hwna->nm_mem;
 	bna->hwna = hwna;
+	bna->up.retry = 1; /* XXX maybe this should depend on the hwna */
 
 	D("%s<->%s txr %d txd %d rxr %d rxd %d", fake->if_xname, real->if_xname,
 		na->num_tx_rings, na->num_tx_desc,

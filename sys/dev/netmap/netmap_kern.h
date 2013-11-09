@@ -361,6 +361,7 @@ struct netmap_vp_adapter {
 	 */
 	int bdg_port;
 	struct nm_bridge *na_bdg;
+	int retry;
 };
 
 struct netmap_hw_adapter {
