@@ -750,8 +750,10 @@ nm_free_bdgfwd(struct netmap_adapter *na)
 			kring[i].nkr_ft = NULL; /* protect from freeing twice */
 		}
 	}
+#if 0
 	if (nma_is_hw(na))
 		nm_free_bdgfwd(SWNA(na->ifp));
+#endif
 }
 
 
@@ -771,8 +773,8 @@ nm_alloc_bdgfwd(struct netmap_adapter *na)
 	l += sizeof(struct nm_bdg_q) * num_dstq;
 	l += sizeof(uint16_t) * NM_BDG_BATCH_MAX;
 
-	nrings = nma_is_vp(na) ? na->num_tx_rings : na->num_rx_rings;
-	kring = nma_is_vp(na) ? na->tx_rings : na->rx_rings;
+	nrings = na->num_tx_rings;
+	kring = na->tx_rings;
 	for (i = 0; i < nrings; i++) {
 		struct nm_bdg_fwd *ft;
 		struct nm_bdg_q *dstq;
@@ -790,8 +792,10 @@ nm_alloc_bdgfwd(struct netmap_adapter *na)
 		}
 		kring[i].nkr_ft = ft;
 	}
+#if 0
 	if (nma_is_hw(na))
 		nm_alloc_bdgfwd(SWNA(na->ifp));
+#endif
 	return 0;
 }
 
@@ -932,7 +936,7 @@ cleanup:
 
 	if (na->refcount == 0) {
 		netmap_mem_rings_delete(na);
-		netmap_krings_delete(na);
+		na->nm_krings_delete(na);
 	}
 
 	return NULL;
@@ -1042,7 +1046,6 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 		 * XXX The wake up now must happen during *_down(), when
 		 * we order all activities to stop. -gl
 		 */
-		nm_free_bdgfwd(na);
 		for (i = 0; i < na->num_tx_rings + 1; i++) {
 			mtx_destroy(&na->tx_rings[i].q_lock);
 		}
@@ -1052,12 +1055,14 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 		/* XXX kqueue(9) needed; these will mirror knlist_init. */
 		/* knlist_destroy(&na->tx_si.si_note); */
 		/* knlist_destroy(&na->rx_si.si_note); */
+#if 0
 		if (nma_is_hw(na))
 			SWNA(ifp)->tx_rings = SWNA(ifp)->rx_rings = NULL;
+#endif
 	
 		/* delete rings and buffers */
 		netmap_mem_rings_delete(na);
-		netmap_krings_delete(na);
+		na->nm_krings_delete(na);
 	}
 	/* delete the nifp */
 	netmap_mem_if_delete(na, nifp);
@@ -2119,9 +2124,6 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 		 * there cannot be any traffic to netmap_transmit()
 		 */
 		error = na->nm_register(ifp, 1); /* mode on */
-		// XXX do we need to nm_alloc_bdgfwd() in all cases ?
-		if (!error)
-			error = nm_alloc_bdgfwd(na);
 		if (error) {
 			netmap_do_unregif(priv, nifp);
 			nifp = NULL;
@@ -2951,8 +2953,10 @@ netmap_attach_common(struct netmap_adapter *na, u_int num_queues)
 
 	WNA(ifp) = na;
 	NETMAP_SET_CAPABLE(ifp);
-	if (na->nm_krings_create == NULL)
+	if (na->nm_krings_create == NULL) {
 		na->nm_krings_create = netmap_hw_krings_create;
+		na->nm_krings_delete = netmap_krings_delete;
+	}
 	if (na->num_tx_rings == 0)
 		na->num_tx_rings = num_queues;
 	if (na->nm_notify == NULL)
@@ -2976,7 +2980,7 @@ netmap_detach_common(struct netmap_adapter *na)
 
 	if (na->tx_rings) { /* XXX should not happen */
 		D("freeing leftover tx_rings");
-		netmap_krings_delete(na);
+		na->nm_krings_delete(na);
 	}
 	if (na->na_flags & NAF_MEM_OWNER)
 		netmap_mem_private_delete(na->nm_mem);
@@ -3065,12 +3069,12 @@ netmap_adapter_put(struct netmap_adapter *na)
 	return 1;
 }
 
-static int
+int
 netmap_hw_krings_create(struct netmap_adapter *na)
 {
 	u_int ntx, nrx, tailroom;
-	int error, i;
-	uint32_t *leases;
+	int error;
+//	uint32_t *leases;
 
 	ntx = na->num_tx_rings + 1; /* shorthand, include stack ring */
 	nrx = na->num_rx_rings + 1; /* shorthand, include stack ring */
@@ -3086,13 +3090,14 @@ netmap_hw_krings_create(struct netmap_adapter *na)
 	if (error)
 		return error;
 
+#if 0
 	leases = na->tailroom;
 	
 	for (i = 0; i < ntx; i++) { /* Transmit rings */
 		na->tx_rings[i].nkr_leases = leases;
 		leases += na->num_tx_desc;
 	}
-
+#endif
 	return 0;
 }
 
@@ -3125,7 +3130,20 @@ netmap_vp_krings_create(struct netmap_adapter *na)
 		leases += na->num_rx_desc;
 	}
 
+	error = nm_alloc_bdgfwd(na);
+	if (error) {
+		netmap_krings_delete(na);
+		return error;
+	}
+
 	return 0;
+}
+
+static void
+netmap_vp_krings_delete(struct netmap_adapter *na)
+{
+	nm_free_bdgfwd(na);
+	netmap_krings_delete(na);
 }
 
 
@@ -4048,6 +4066,7 @@ bdg_netmap_attach(struct netmap_adapter *arg)
 	na->nm_register = bdg_netmap_reg;
 	na->nm_dtor = netmap_adapter_vp_dtor;
 	na->nm_krings_create = netmap_vp_krings_create;
+	na->nm_krings_delete = netmap_vp_krings_delete;
 	na->nm_mem = netmap_mem_private_new(arg->ifp->if_xname,
 			na->num_tx_rings, na->num_tx_desc,
 			na->num_rx_rings, na->num_rx_desc);

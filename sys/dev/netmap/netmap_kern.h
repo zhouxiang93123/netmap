@@ -337,6 +337,7 @@ struct netmap_adapter {
 	int (*nm_config)(struct ifnet *, u_int *txr, u_int *txd,
 					u_int *rxr, u_int *rxd);
 	int (*nm_krings_create)(struct netmap_adapter *);
+	void (*nm_krings_delete)(struct netmap_adapter *);
 	int (*nm_notify)(struct ifnet *, u_int ring, enum txrx, int flags);
 #define NAF_GLOBAL_NOTIFY 4
 
