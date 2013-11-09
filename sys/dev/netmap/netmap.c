@@ -882,6 +882,7 @@ netmap_krings_create(struct netmap_adapter *na, u_int ntx, u_int nrx, u_int tail
 		 * the same only if there are no new transmissions).
 		 */
 		kring->nr_hwavail = ndesc - 1;
+		mtx_init(&kring->q_lock, "nm_txq_lock", NULL, MTX_DEF);
 #ifdef linux
 		init_waitqueue_head(&kring->si);
 #endif
@@ -893,6 +894,7 @@ netmap_krings_create(struct netmap_adapter *na, u_int ntx, u_int nrx, u_int tail
 		bzero(kring, sizeof(*kring));
 		kring->na = na;
 		kring->nkr_num_slots = ndesc;
+		mtx_init(&kring->q_lock, "nm_rxq_lock", NULL, MTX_DEF);
 #ifdef linux
 		init_waitqueue_head(&kring->si);
 #endif
@@ -911,6 +913,14 @@ netmap_krings_create(struct netmap_adapter *na, u_int ntx, u_int nrx, u_int tail
 static void
 netmap_krings_delete(struct netmap_adapter *na)
 {
+	int i;
+
+	for (i = 0; i < na->num_tx_rings + 1; i++) {
+		mtx_destroy(&na->tx_rings[i].q_lock);
+	}
+	for (i = 0; i < na->num_rx_rings + 1; i++) {
+		mtx_destroy(&na->rx_rings[i].q_lock);
+	}
 	free(na->tx_rings, M_DEVBUF);
 	na->tx_rings = na->rx_rings = NULL;
 }
@@ -1032,7 +1042,6 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 	NMG_LOCK_ASSERT();
 	na->refcount--;
 	if (na->refcount <= 0) {	/* last instance */
-		u_int i;
 
 		if (netmap_verbose)
 			D("deleting last instance for %s", ifp->if_xname);
@@ -1056,12 +1065,6 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 		 * XXX The wake up now must happen during *_down(), when
 		 * we order all activities to stop. -gl
 		 */
-		for (i = 0; i < na->num_tx_rings + 1; i++) {
-			mtx_destroy(&na->tx_rings[i].q_lock);
-		}
-		for (i = 0; i < na->num_rx_rings + 1; i++) {
-			mtx_destroy(&na->rx_rings[i].q_lock);
-		}
 		/* XXX kqueue(9) needed; these will mirror knlist_init. */
 		/* knlist_destroy(&na->tx_si.si_note); */
 		/* knlist_destroy(&na->rx_si.si_note); */
@@ -2118,7 +2121,6 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 	if (ifp->if_capenable & IFCAP_NETMAP) {
 		/* was already set */
 	} else {
-		u_int i;
 		/* Otherwise set the card in netmap mode
 		 * and make it use the shared buffers.
 		 *
@@ -2128,13 +2130,6 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 		if (NETMAP_OWNED_BY_KERN(ifp))
 			BDG_WLOCK(NA(ifp)->na_bdg);
 #endif
-		for (i = 0 ; i < na->num_tx_rings + 1; i++)
-			mtx_init(&na->tx_rings[i].q_lock, "nm_txq_lock",
-			    NULL, MTX_DEF);
-		for (i = 0 ; i < na->num_rx_rings + 1; i++) {
-			mtx_init(&na->rx_rings[i].q_lock, "nm_rxq_lock",
-			    NULL, MTX_DEF);
-		}
 #if 0
 		if (nma_is_hw(na)) {
 			SWNA(ifp)->tx_rings = &na->tx_rings[na->num_tx_rings];
@@ -4107,8 +4102,11 @@ static int
 netmap_bwrap_dtor(struct netmap_adapter *na)
 {
 	struct netmap_bwrap_adapter *bna = (struct netmap_bwrap_adapter*)na;
+	struct netmap_adapter *hwna = bna->hwna;
 	D("na %p", na);
-	netmap_adapter_put(bna->hwna);
+
+	netmap_adapter_vp_dtor(na);
+	netmap_adapter_put(hwna);
 	return 1;	
 }
 
