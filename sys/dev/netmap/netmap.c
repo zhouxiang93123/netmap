@@ -4110,15 +4110,46 @@ netmap_bwrap_dtor(struct netmap_adapter *na)
 static int
 netmap_bwrap_register(struct ifnet *ifp, int onoff)
 {
+	struct netmap_adapter *na = NA(ifp);
+	struct netmap_bwrap_adapter *bna =
+		(struct netmap_bwrap_adapter *)na;
+	struct netmap_adapter *hwna = bna->hwna;
+	int error;
+
 	D("%s %d", ifp->if_xname, onoff);
+
+	error = hwna->nm_register(hwna->ifp, onoff);
+	if (error)
+		return error;
+
+	if (onoff) {
+		int i;
+
+		/* cross-link the netmap rings */
+		for (i = 0; i <= na->num_tx_rings; i++) {
+			hwna->tx_rings[i].nkr_num_slots = na->rx_rings[i].nkr_num_slots;
+			hwna->tx_rings[i].ring = na->rx_rings[i].ring;
+		}
+		for (i = 0; i <= na->num_rx_rings; i++) {
+			hwna->rx_rings[i].nkr_num_slots = na->tx_rings[i].nkr_num_slots;
+			hwna->rx_rings[i].ring = na->tx_rings[i].ring;
+		}
+
+		na->ifp->if_capenable |= IFCAP_NETMAP;
+	} else {
+		na->ifp->if_capenable &= ~IFCAP_NETMAP;
+	}
+
 	return 0;
 }
 
 static int
 netmap_bwrap_txsync(struct ifnet *ifp, u_int ring, int flags)
 {
+
 	D("%s[%d] %x", ifp->if_xname, ring, flags);
-	return EINVAL;
+	
+	return 0;
 }
 
 static int
@@ -4135,24 +4166,15 @@ netmap_bwrap_config(struct ifnet *ifp, u_int *txr, u_int *txd,
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_bwrap_adapter *bna =
 		(struct netmap_bwrap_adapter *)na;
-	int rv;
-	u_int mytxr, mytxd, myrxr, myrxd;
-	D("%s", ifp->if_xname);
-	if (bna->hwna->nm_config == NULL)
-		return 0;
-	rv = bna->hwna->nm_config(bna->hwna->ifp,
-		&mytxr, &mytxd, &myrxr, &myrxd);
-	if (rv && na->refcount <= 0) {
-		bna->hwna->num_tx_rings = mytxr;
-		bna->hwna->num_tx_desc = mytxd;
-		bna->hwna->num_rx_rings = myrxr;
-		bna->hwna->num_rx_desc = myrxd;
-	}
-	*txr = myrxr;
-	*txd = myrxd;
-	*rxr = mytxr;
-	*rxd = mytxd;
-	return rv;
+	struct netmap_adapter *hwna = bna->hwna;
+
+	netmap_update_config(hwna);
+	*txr = hwna->num_rx_rings;
+	*txd = hwna->num_rx_desc;
+	*rxr = hwna->num_tx_rings;
+	*rxd = hwna->num_rx_desc;
+
+	return 0;
 }
 
 static int
@@ -4206,7 +4228,6 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 	struct netmap_adapter *hwna = NA(real);
 	int error;
 	
-	D("%s %s", fake->if_xname, real->if_xname);
 
 	bna = malloc(sizeof(*bna), M_DEVBUF, M_NOWAIT | M_ZERO);
 	if (bna == NULL)
@@ -4228,6 +4249,10 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 	na->nm_notify = netmap_bwrap_notify;
 	na->nm_mem = hwna->nm_mem;
 	bna->hwna = hwna;
+
+	D("%s<->%s txr %d txd %d rxr %d rxd %d", fake->if_xname, real->if_xname,
+		na->num_tx_rings, na->num_tx_desc,
+		na->num_rx_rings, na->num_rx_desc);
 	
 	error = netmap_attach_common(na, na->num_tx_rings);
 	if (error) {
