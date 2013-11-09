@@ -922,7 +922,7 @@ netmap_krings_delete(struct netmap_adapter *na)
 		mtx_destroy(&na->rx_rings[i].q_lock);
 	}
 	free(na->tx_rings, M_DEVBUF);
-	na->tx_rings = na->rx_rings = NULL;
+	na->tx_rings = na->rx_rings = na->tailroom = NULL;
 }
 
 static struct netmap_if*
@@ -1135,7 +1135,7 @@ netmap_bdg_detach_common(struct nm_bridge *b, int hw, int sw)
 	acquire BDG_WLOCK() and copy back the array.
 	 */
 	
-	ND("detach %d and %d (lim %d)", hw, sw, lim);
+	D("detach %d and %d (lim %d)", hw, sw, lim);
 	/* make a copy of the list of active ports, update it,
 	 * and then copy back within BDG_WLOCK().
 	 */
@@ -4121,10 +4121,6 @@ netmap_bwrap_register(struct ifnet *ifp, int onoff)
 
 	D("%s %d", ifp->if_xname, onoff);
 
-	error = hwna->nm_register(hwna->ifp, onoff);
-	if (error)
-		return error;
-
 	if (onoff) {
 		int i;
 
@@ -4137,7 +4133,14 @@ netmap_bwrap_register(struct ifnet *ifp, int onoff)
 			hwna->rx_rings[i].nkr_num_slots = na->tx_rings[i].nkr_num_slots;
 			hwna->rx_rings[i].ring = na->tx_rings[i].ring;
 		}
+	}
 
+	error = hwna->nm_register(hwna->ifp, onoff);
+	if (error)
+		return error;
+
+
+	if (onoff) {
 		na->ifp->if_capenable |= IFCAP_NETMAP;
 	} else {
 		na->ifp->if_capenable &= ~IFCAP_NETMAP;
