@@ -4149,7 +4149,7 @@ netmap_bwrap_txsync(struct ifnet *ifp, u_int ring, int flags)
 
 	D("%s[%d] %x", ifp->if_xname, ring, flags);
 	
-	return 0;
+	return EINVAL;
 }
 
 static int
@@ -4214,9 +4214,54 @@ netmap_bwrap_krings_delete(struct netmap_adapter *na)
 }
 
 static int
-netmap_bwrap_notify(struct ifnet *ifp, u_int ring, enum txrx tx, int flags)
+netmap_bwrap_notify(struct ifnet *ifp, u_int ring_n, enum txrx tx, int flags)
 {
-	D("%s[%d] %s %x", ifp->if_xname, ring, (tx == NR_TX ? "tx" : "rx"), flags);
+	struct netmap_adapter *na = NA(ifp);
+	struct netmap_bwrap_adapter *bna =
+		(struct netmap_bwrap_adapter *)na;
+	struct netmap_adapter *hwna = bna->hwna;
+	struct netmap_kring *kring, *hw_kring;
+	struct netmap_ring *ring;
+	u_int lim;
+	int n;
+	
+	if (!(hwna->ifp->if_capenable & IFCAP_NETMAP)) 
+	        return 0;
+	
+	if (tx != NR_RX)
+	        return ENXIO;
+	
+	kring = &na->rx_rings[ring_n];
+	hw_kring = &hwna->tx_rings[ring_n];
+	ring = kring->ring;
+	
+	lim = kring->nkr_num_slots - 1;
+	ring->cur = kring->nr_hwcur + kring->nr_hwavail;
+	if (ring->cur > lim)
+	        ring->cur -= lim + 1;
+	
+	if (nm_kr_tryget(hw_kring)) {
+	        /* drop everything */
+	        kring->nr_hwcur = ring->cur;
+	        ring->avail = kring->nr_hwavail = 0;
+	        return 0;
+	}
+	
+	n = hw_kring->nr_hwcur;
+	D("%s[%d] PRE hwvail %d hwcur %d cur %d rhwcur %d",
+	        ifp->if_xname, ring_n, kring->nr_hwavail, kring->nr_hwcur, ring->cur, hw_kring->nr_hwcur);
+	hwna->nm_txsync(hwna->ifp, ring_n, flags);
+	n = hw_kring->nr_hwcur - n;
+	if (n < 0)
+	        n += lim + 1;
+	kring->nr_hwcur += n;
+	if (kring->nr_hwcur > lim)
+	        kring->nr_hwcur -= lim + 1;
+	kring->nr_hwavail -= n;
+	D("%s[%d] PST hwvail %d hwcur %d cur %d rhwcur %d",
+	        ifp->if_xname, ring_n, kring->nr_hwavail, kring->nr_hwcur, ring->cur, hw_kring->nr_hwcur);
+	
+	nm_kr_put(hw_kring);
 	return 0;
 }
 
