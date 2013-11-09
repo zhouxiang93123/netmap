@@ -3431,58 +3431,6 @@ nm_bdg_preflush(struct netmap_vp_adapter *na, u_int ring_nr,
 }
 
 
-#if 0
-/*
- * Pass packets from nic to the bridge.
- * XXX TODO check locking: this is called from the interrupt
- * handler so we should make sure that the interface is not
- * disconnected while passing down an interrupt.
- *
- * Note, no user process can access this NIC so we can ignore
- * the info in the 'ring'.
- */
-static void
-netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
-{
-	struct netmap_adapter *na = NA(ifp);
-	struct netmap_kring *kring = &na->rx_rings[ring_nr];
-	struct netmap_ring *ring = kring->ring;
-	u_int j, k;
-
-	/* make sure that only one thread is ever in here,
-	 * after which we can unlock. Probably unnecessary XXX.
-	 */
-	if (nm_kr_tryget(kring)) 
-		return;
-	/* fetch packets that have arrived.
-	 * XXX maybe do this in a loop ?
-	 */
-	if (na->nm_rxsync(ifp, ring_nr, 0))
-		goto put_out;
-	if (kring->nr_hwavail == 0 && netmap_verbose) {
-		D("how strange, interrupt with no packets on %s",
-			ifp->if_xname);
-		goto put_out;
-	}
-	k = nm_kr_rxpos(kring);
-
-	j = nm_bdg_preflush(na, ring_nr, kring, k);
-
-	/* we consume everything, but we cannot update kring directly
-	 * because the nic may have destroyed the info in the NIC ring.
-	 * So we need to call rxsync again to restore it.
-	 */
-	ring->cur = j;
-	ring->avail = 0;
-	na->nm_rxsync(ifp, ring_nr, 0);
-
-put_out:
-	nm_kr_put(kring);
-	return;
-}
-#endif
-
-
 /*
  * Default functions to handle rx/tx interrupts from a physical device.
  * "work_done" is non-null on the RX path, NULL for the TX path.
@@ -4106,8 +4054,56 @@ netmap_bwrap_dtor(struct netmap_adapter *na)
 	D("na %p", na);
 
 	netmap_adapter_vp_dtor(na);
+	hwna->na_private = NULL;
 	netmap_adapter_put(hwna);
 	return 1;	
+}
+
+/*
+ * Pass packets from nic to the bridge.
+ * XXX TODO check locking: this is called from the interrupt
+ * handler so we should make sure that the interface is not
+ * disconnected while passing down an interrupt.
+ *
+ * Note, no user process can access this NIC so we can ignore
+ * the info in the 'ring'.
+ */
+static int
+netmap_bwrap_intr_notify(struct ifnet *ifp, u_int ring_nr, enum txrx tx, int flags)
+{
+	struct netmap_adapter *na = NA(ifp);
+	struct netmap_bwrap_adapter *bna = na->na_private;
+	struct netmap_kring *kring = &na->rx_rings[ring_nr];
+	struct netmap_ring *ring = kring->ring;
+
+	if (!(ifp->if_capenable & IFCAP_NETMAP))
+		return 0;
+
+	/* make sure that only one thread is ever in here,
+	 * after which we can unlock. Probably unnecessary XXX.
+	 */
+	if (nm_kr_tryget(kring)) 
+		return 0;
+	/* fetch packets that have arrived.
+	 * XXX maybe do this in a loop ?
+	 */
+	if (na->nm_rxsync(ifp, ring_nr, 0))
+		goto put_out;
+	if (kring->nr_hwavail == 0 && netmap_verbose) {
+		D("how strange, interrupt with no packets on %s",
+			ifp->if_xname);
+		goto put_out;
+	}
+	/* XXX avail ? */
+	ring->cur = nm_kr_rxpos(kring);
+
+	bdg_netmap_txsync(bna->up.up.ifp, ring_nr, flags);
+
+	na->nm_rxsync(ifp, ring_nr, 0);
+
+put_out:
+	nm_kr_put(kring);
+	return 0;
 }
 
 static int
@@ -4139,11 +4135,13 @@ netmap_bwrap_register(struct ifnet *ifp, int onoff)
 	if (error)
 		return error;
 
-
 	if (onoff) {
 		na->ifp->if_capenable |= IFCAP_NETMAP;
+		bna->save_notify = hwna->nm_notify;
+		hwna->nm_notify = netmap_bwrap_intr_notify;
 	} else {
 		na->ifp->if_capenable &= ~IFCAP_NETMAP;
+		hwna->nm_notify = bna->save_notify;
 	}
 
 	return 0;
@@ -4299,8 +4297,10 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 	na->nm_krings_delete = netmap_bwrap_krings_delete;
 	na->nm_notify = netmap_bwrap_notify;
 	na->nm_mem = hwna->nm_mem;
-	bna->hwna = hwna;
 	bna->up.retry = 1; /* XXX maybe this should depend on the hwna */
+
+	bna->hwna = hwna;
+	hwna->na_private = bna;
 
 	D("%s<->%s txr %d txd %d rxr %d rxd %d", fake->if_xname, real->if_xname,
 		na->num_tx_rings, na->num_tx_desc,

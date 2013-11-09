@@ -348,6 +348,11 @@ struct netmap_adapter {
 
 	/* memory allocator */
  	struct netmap_mem_d *nm_mem;
+
+	/* used internally. If non-null, the interface cannot be binded
+         * from userspace
+         */
+	void *na_private;
 };
 
 struct netmap_vp_adapter {
@@ -395,7 +400,8 @@ struct netmap_bwrap_adapter {
 	//struct netmap_vp_adapter host;
 	struct netmap_adapter *hwna;
 
-	struct netmap_adapter save;
+	/* backup of the hwna notify callback */
+	int (*save_notify)(struct ifnet *, u_int ring, enum txrx, int flags);
 	/* When we attach a physical interface to the bridge, we
 	 * allow the controlling process to terminate, so we need
 	 * a place to store the netmap_priv_d data structure.
