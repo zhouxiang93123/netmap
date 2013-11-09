@@ -366,13 +366,6 @@ struct netmap_vp_adapter {
 struct netmap_hw_adapter {
 	struct netmap_adapter up;
 
-	/* When we attach a physical interface to the bridge, we
-	 * allow the controlling process to terminate, so we need
-	 * a place to store the netmap_priv_d data structure.
-	 * This is only done when physical interfaces are attached to a bridge.
-	 */
-	struct netmap_priv_d *na_kpriv;
-
 #ifdef linux
 	struct net_device_ops nm_ndo;
 #endif /* linux */
@@ -395,6 +388,21 @@ struct netmap_generic_adapter {
         int mit_pending;
 #endif
 };
+
+struct netmap_bwrap_adapter {
+	struct netmap_vp_adapter up;
+	//struct netmap_vp_adapter host;
+	struct netmap_adapter *hwna;
+
+	struct netmap_adapter save;
+	/* When we attach a physical interface to the bridge, we
+	 * allow the controlling process to terminate, so we need
+	 * a place to store the netmap_priv_d data structure.
+	 * This is only done when physical interfaces are attached to a bridge.
+	 */
+	struct netmap_priv_d *na_kpriv;
+};
+
 
 /*
  * Available space in the ring.
