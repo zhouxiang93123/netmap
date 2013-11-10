@@ -367,11 +367,11 @@ void netmap_enable_all_rings(struct ifnet *ifp)
 
 	na = NA(ifp);
 	for (i = 0; i < na->num_tx_rings + 1; i++) {
-		D("enabling %p", na->tx_rings + i);
+		ND("enabling %p", na->tx_rings + i);
 		na->tx_rings[i].nkr_stopped = 0;
 	}
 	for (i = 0; i < na->num_rx_rings + 1; i++) {
-		D("enabling %p", na->rx_rings + i);
+		ND("enabling %p", na->rx_rings + i);
 		na->rx_rings[i].nkr_stopped = 0;
 	}
 }
@@ -1170,7 +1170,7 @@ netmap_adapter_hw_dtor(struct netmap_adapter *na)
 {
 	struct ifnet *ifp = na->ifp;
 
-	D("%s has %d references", ifp->if_xname, na->na_refcount);
+	ND("%s has %d references", ifp->if_xname, na->na_refcount);
 
 #if  0
 	if (na->na_bdg) {
@@ -1193,7 +1193,7 @@ netmap_adapter_vp_dtor(struct netmap_adapter *na)
 	struct nm_bridge *b = vpna->na_bdg;
 	struct ifnet *ifp = na->ifp;
 
-	D("%s has %d references", ifp->if_xname, na->na_refcount);
+	ND("%s has %d references", ifp->if_xname, na->na_refcount);
 
 	if (b) {
 		netmap_bdg_detach_common(b, vpna->bdg_port, -1);
@@ -1215,7 +1215,7 @@ netmap_dtor_locked(struct netmap_priv_d *priv)
 {
 	struct ifnet *ifp = priv->np_ifp;
 
-	D("dtor %s", (ifp ? ifp->if_xname : "NULL"));
+	ND("dtor %s", (ifp ? ifp->if_xname : "NULL"));
 
 #ifdef __FreeBSD__
 	/*
@@ -1860,7 +1860,7 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp, int create)
 
 	BDG_WLOCK(b);
 	vpna->bdg_port = cand;
-	D("NIC  %p to bridge port %d", vpna, cand);
+	ND("NIC  %p to bridge port %d", vpna, cand);
 	/* bind the port to the bridge (virtual ports are not active) */
 	b->bdg_ports[cand] = vpna;
 	vpna->na_bdg = b;
@@ -1872,10 +1872,10 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp, int create)
 		hostna->bdg_port = cand2;
 		hostna->na_bdg = b;
 		b->bdg_active_ports++;
-		D("host %p to bridge port %d", hostna, cand2);
+		ND("host %p to bridge port %d", hostna, cand2);
 	}
 	netmap_adapter_get(&vpna->up);
-	D("if %s refs %d", name, vpna->up.na_refcount);
+	ND("if %s refs %d", name, vpna->up.na_refcount);
 	BDG_WUNLOCK(b);
 	*ifp = iter;
 	return 0;
@@ -2965,7 +2965,7 @@ fail:
 void
 netmap_adapter_get(struct netmap_adapter *na)
 {
-	D("getting %s (%d)", na->ifp->if_xname, na->na_refcount);
+	ND("getting %s (%d)", na->ifp->if_xname, na->na_refcount);
 	refcount_acquire(&na->na_refcount);
 }
 
@@ -2976,7 +2976,7 @@ netmap_adapter_put(struct netmap_adapter *na)
 	if (!na)
 		return 1;
 
-	D("putting %s (%d)", na->ifp->if_xname, na->na_refcount);
+	ND("putting %s (%d)", na->ifp->if_xname, na->na_refcount);
 
 	if (!refcount_release(&na->na_refcount))
 		return 0;
@@ -3903,7 +3903,7 @@ netmap_bwrap_dtor(struct netmap_adapter *na)
 {
 	struct netmap_bwrap_adapter *bna = (struct netmap_bwrap_adapter*)na;
 	struct netmap_adapter *hwna = bna->hwna;
-	D("na %p", na);
+	ND("na %p", na);
 
 	netmap_adapter_vp_dtor(na);
 	hwna->na_private = NULL;
@@ -3932,7 +3932,7 @@ netmap_bwrap_intr_notify(struct ifnet *ifp, u_int ring_nr, enum txrx tx, int fla
 	struct netmap_vp_adapter *vpna = &bna->up;
 	int error = 0;
 
-	D("%s[%d] %s %x", ifp->if_xname, ring_nr, (tx == NR_TX ? "TX" : "RX"), flags);
+	ND("%s[%d] %s %x", ifp->if_xname, ring_nr, (tx == NR_TX ? "TX" : "RX"), flags);
 
 	if (!(ifp->if_capenable & IFCAP_NETMAP))
 		return 0;
@@ -3949,14 +3949,13 @@ netmap_bwrap_intr_notify(struct ifnet *ifp, u_int ring_nr, enum txrx tx, int fla
 		goto put_out;
 	}
 
-	/* fetch packets that have arrived.
-	 * XXX maybe do this in a loop ?
-	 */
-
 	if (is_host_ring) {
 		vpna = hostna;
 		ring_nr = 0;
 	} else {
+		/* fetch packets that have arrived.
+		 * XXX maybe do this in a loop ?
+		 */
 		error = na->nm_rxsync(ifp, ring_nr, 0);
 		if (error)
 			goto put_out;
@@ -3987,7 +3986,7 @@ netmap_bwrap_register(struct ifnet *ifp, int onoff)
 	struct netmap_adapter *hwna = bna->hwna;
 	int error;
 
-	D("%s %d", ifp->if_xname, onoff);
+	ND("%s %d", ifp->if_xname, onoff);
 
 	if (onoff) {
 		int i;
@@ -4046,7 +4045,7 @@ netmap_bwrap_krings_create(struct netmap_adapter *na)
 	struct netmap_adapter *hostna = &bna->host.up;
 	int error;
 
-	D("%s", na->ifp->if_xname);
+	ND("%s", na->ifp->if_xname);
 
 	error = netmap_vp_krings_create(na);
 	if (error)
@@ -4071,7 +4070,7 @@ netmap_bwrap_krings_delete(struct netmap_adapter *na)
 		(struct netmap_bwrap_adapter *)na;
 	struct netmap_adapter *hwna = bna->hwna;
 
-	D("%s", na->ifp->if_xname);
+	ND("%s", na->ifp->if_xname);
 
 	hwna->nm_krings_delete(hwna);
 	netmap_vp_krings_delete(na);
@@ -4186,7 +4185,7 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 	hostna->nm_mem = na->nm_mem;
 	hostna->na_private = bna;
 
-	D("%s<->%s txr %d txd %d rxr %d rxd %d", fake->if_xname, real->if_xname,
+	ND("%s<->%s txr %d txd %d rxr %d rxd %d", fake->if_xname, real->if_xname,
 		na->num_tx_rings, na->num_tx_desc,
 		na->num_rx_rings, na->num_rx_desc);
 	
