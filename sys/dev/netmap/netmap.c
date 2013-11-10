@@ -3913,16 +3913,9 @@ cleanup:
 	return 0;
 }
 
-
-/*
- * main dispatch routine for the bridge.
- * We already know that only one thread is running this.
- * we must run nm_bdg_preflush without lock.
- */
 static int
-bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
+netmap_vp_txsync(struct netmap_vp_adapter *na, u_int ring_nr, int flags)
 {
-	struct netmap_vp_adapter *na = (struct netmap_vp_adapter*)NA(ifp);
 	struct netmap_kring *kring = &na->up.tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k, lim = kring->nkr_num_slots - 1;
@@ -4139,15 +4132,6 @@ put_out:
 }
 
 static int
-netmap_bwrap_host_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
-{
-	D("%s[%d] %x", ifp->if_xname, ring_nr, flags);
-
-	return 0;
-}
-
-
-static int
 netmap_bwrap_register(struct ifnet *ifp, int onoff)
 {
 	struct netmap_adapter *na = NA(ifp);
@@ -4186,22 +4170,6 @@ netmap_bwrap_register(struct ifnet *ifp, int onoff)
 	}
 
 	return 0;
-}
-
-static int
-netmap_bwrap_txsync(struct ifnet *ifp, u_int ring, int flags)
-{
-
-	D("%s[%d] %x", ifp->if_xname, ring, flags);
-	
-	return EINVAL;
-}
-
-static int
-netmap_bwrap_rxsync(struct ifnet *ifp, u_int ring, int flags)
-{
-	D("%s[%d] %x", ifp->if_xname, ring, flags);
-	return EINVAL;
 }
 
 static int
@@ -4272,7 +4240,7 @@ netmap_bwrap_notify(struct ifnet *ifp, u_int ring_n, enum txrx tx, int flags)
 	struct netmap_kring *kring, *hw_kring;
 	struct netmap_ring *ring;
 	u_int lim;
-	int n;
+	int n, error = 0;
 	
 	if (!(hwna->ifp->if_capenable & IFCAP_NETMAP)) 
 	        return 0;
@@ -4299,7 +4267,18 @@ netmap_bwrap_notify(struct ifnet *ifp, u_int ring_n, enum txrx tx, int flags)
 	n = hw_kring->nr_hwcur;
 	ND("%s[%d] PRE hwvail %d hwcur %d cur %d rhwcur %d",
 	        ifp->if_xname, ring_n, kring->nr_hwavail, kring->nr_hwcur, ring->cur, hw_kring->nr_hwcur);
-	hwna->nm_txsync(hwna->ifp, ring_n, flags);
+	if (ring_n == na->num_rx_rings) {
+		nm_kr_put(hw_kring);
+		netmap_txsync_to_host(hwna);
+		if (nm_kr_tryget(hw_kring)) {
+			/* drop everything */
+			kring->nr_hwcur = ring->cur;
+			ring->avail = kring->nr_hwavail = 0;
+			return 0;
+		}
+	} else {
+		error = hwna->nm_txsync(hwna->ifp, ring_n, flags);
+	}
 	n = hw_kring->nr_hwcur - n;
 	if (n < 0)
 	        n += lim + 1;
@@ -4311,7 +4290,18 @@ netmap_bwrap_notify(struct ifnet *ifp, u_int ring_n, enum txrx tx, int flags)
 	        ifp->if_xname, ring_n, kring->nr_hwavail, kring->nr_hwcur, ring->cur, hw_kring->nr_hwcur);
 	
 	nm_kr_put(hw_kring);
-	return 0;
+	return error;
+}
+
+static int
+netmap_bwrap_host_notify(struct ifnet *ifp, u_int ring_n, enum txrx tx, int flags)
+{
+	struct netmap_adapter *na = NA(ifp);
+	struct netmap_bwrap_adapter *bna = na->na_private;
+	struct netmap_adapter *port_na = &bna->up.up;
+	if (tx == NR_TX || ring_n != 0)
+		return ENXIO;
+	return netmap_bwrap_notify(port_na->ifp, port_na->num_rx_rings, NR_RX, flags);
 }
 
 static int
@@ -4337,7 +4327,7 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 	na->nm_dtor = netmap_bwrap_dtor;
 	na->nm_register = netmap_bwrap_register;
 	// na->nm_txsync = netmap_bwrap_txsync;
-	na->nm_rxsync = netmap_bwrap_rxsync;
+	// na->nm_rxsync = netmap_bwrap_rxsync;
 	na->nm_config = netmap_bwrap_config;
 	na->nm_krings_create = netmap_bwrap_krings_create;
 	na->nm_krings_delete = netmap_bwrap_krings_delete;
@@ -4349,12 +4339,14 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 	hwna->na_private = bna;
 
 	hostna = &bna->host.up;
+	hostna->ifp = hwna->ifp;
 	hostna->num_tx_rings = 1;
 	hostna->num_tx_desc = hwna->num_rx_desc;
 	hostna->num_rx_rings = 1;
 	hostna->num_rx_desc = hwna->num_tx_desc;
 	// hostna->nm_txsync = netmap_bwrap_host_txsync;
-	hostna->nm_rxsync = netmap_bwrap_host_rxsync;
+	// hostna->nm_rxsync = netmap_bwrap_host_rxsync;
+	hostna->nm_notify = netmap_bwrap_host_notify;
 	hostna->nm_mem = na->nm_mem;
 	hostna->na_private = bna;
 
