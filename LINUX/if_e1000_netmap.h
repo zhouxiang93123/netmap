@@ -94,6 +94,7 @@ e1000_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
+	int d;
 
 	/* generate an interrupt approximately every half ring */
 	int report_frequency = kring->nkr_num_slots >> 1;
@@ -112,6 +113,13 @@ e1000_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 	 * netmap ring, l is the corresponding index in the NIC ring.
 	 */
 	j = kring->nr_hwcur;
+	d = k - j;
+	if (d < 0)
+		d += kring->nkr_num_slots;
+	if (d > kring->nr_hwavail) {
+		ND("=== j %d k %d d %d hwavail %d", j, k, d, kring->nr_hwavail);
+		return netmap_ring_reinit(kring);
+	}
 	if (j != k) {	/* we have new packets to send */
 		l = netmap_idx_k2n(kring, j);
 		for (n = 0; j != k; n++) {

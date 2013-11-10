@@ -4114,9 +4114,9 @@ netmap_bwrap_notify(struct ifnet *ifp, u_int ring_n, enum txrx tx, int flags)
 			ring->cur, ring->avail, ring->reserved,
 			hw_kring->nr_hwcur, hw_kring->nr_hwavail);
 		error = hwna->nm_txsync(hwna->ifp, ring_n, flags);
-		kring->nr_hwcur = hw_kring->nr_hwcur;
+		kring->nr_hwcur = ring->cur;
 		kring->nr_hwavail = 0;
-		ring->reserved = lim - hw_kring->nr_hwavail;
+		ring->reserved = lim - ring->avail;
 		ND("%s[%d] PST rx(%d, %d) ring(%d, %d, %d) tx(%d, %d)",
 			ifp->if_xname, ring_n,
 			kring->nr_hwcur, kring->nr_hwavail, 
