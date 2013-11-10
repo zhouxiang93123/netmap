@@ -4086,8 +4086,8 @@ netmap_bwrap_notify(struct ifnet *ifp, u_int ring_n, enum txrx tx, int flags)
 	struct netmap_adapter *hwna = bna->hwna;
 	struct netmap_kring *kring, *hw_kring;
 	struct netmap_ring *ring;
-	u_int lim;
-	int n, error = 0;
+	u_int lim, k;
+	int error = 0;
 	
 	if (!(hwna->ifp->if_capenable & IFCAP_NETMAP)) 
 	        return 0;
@@ -4100,43 +4100,32 @@ netmap_bwrap_notify(struct ifnet *ifp, u_int ring_n, enum txrx tx, int flags)
 	ring = kring->ring;
 	
 	lim = kring->nkr_num_slots - 1;
-	ring->cur = kring->nr_hwcur + kring->nr_hwavail;
-	if (ring->cur > lim)
-	        ring->cur -= lim + 1;
+	k = nm_kr_rxpos(kring);
 	
-	if (nm_kr_tryget(hw_kring)) {
-	        /* drop everything */
-	        kring->nr_hwcur = ring->cur;
-	        ring->avail = kring->nr_hwavail = 0;
-	        return 0;
-	}
-	
-	n = hw_kring->nr_hwcur;
-	ND("%s[%d] PRE hwvail %d hwcur %d cur %d rhwcur %d",
-	        ifp->if_xname, ring_n, kring->nr_hwavail, kring->nr_hwcur, ring->cur, hw_kring->nr_hwcur);
 	if (ring_n == na->num_rx_rings) {
-		nm_kr_put(hw_kring);
 		netmap_txsync_to_host(hwna);
+	} else {
 		if (nm_kr_tryget(hw_kring)) {
-			/* drop everything */
-			kring->nr_hwcur = ring->cur;
-			ring->avail = kring->nr_hwavail = 0;
 			return 0;
 		}
-	} else {
+		ring->cur = k;
+		ND("%s[%d] PRE rx(%d, %d) ring(%d, %d, %d) tx(%d, %d)",
+			ifp->if_xname, ring_n,
+			kring->nr_hwcur, kring->nr_hwavail, 
+			ring->cur, ring->avail, ring->reserved,
+			hw_kring->nr_hwcur, hw_kring->nr_hwavail);
 		error = hwna->nm_txsync(hwna->ifp, ring_n, flags);
+		kring->nr_hwcur = hw_kring->nr_hwcur;
+		kring->nr_hwavail = 0;
+		ring->reserved = lim - hw_kring->nr_hwavail;
+		ND("%s[%d] PST rx(%d, %d) ring(%d, %d, %d) tx(%d, %d)",
+			ifp->if_xname, ring_n,
+			kring->nr_hwcur, kring->nr_hwavail, 
+			ring->cur, ring->avail, ring->reserved,
+			hw_kring->nr_hwcur, hw_kring->nr_hwavail);
+		nm_kr_put(hw_kring);
 	}
-	n = hw_kring->nr_hwcur - n;
-	if (n < 0)
-	        n += lim + 1;
-	kring->nr_hwcur += n;
-	if (kring->nr_hwcur > lim)
-	        kring->nr_hwcur -= lim + 1;
-	kring->nr_hwavail -= n;
-	ND("%s[%d] PST hwvail %d hwcur %d cur %d rhwcur %d",
-	        ifp->if_xname, ring_n, kring->nr_hwavail, kring->nr_hwcur, ring->cur, hw_kring->nr_hwcur);
 	
-	nm_kr_put(hw_kring);
 	return error;
 }
 
