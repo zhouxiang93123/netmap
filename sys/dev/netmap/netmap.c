@@ -783,7 +783,7 @@ nm_alloc_bdgfwd(struct netmap_adapter *na)
 	l += sizeof(struct nm_bdg_q) * num_dstq;
 	l += sizeof(uint16_t) * NM_BDG_BATCH_MAX;
 
-	nrings = na->num_tx_rings;
+	nrings = na->num_tx_rings + 1;
 	kring = na->tx_rings;
 	for (i = 0; i < nrings; i++) {
 		struct nm_bdg_fwd *ft;
@@ -1911,16 +1911,15 @@ get_ifp(struct nmreq *nmr, struct ifnet **ifp, int create)
 	b->bdg_ports[cand] = vpna;
 	vpna->na_bdg = b;
 	b->bdg_active_ports++;
-#if 0
 	if (cand2 >= 0) {
+		struct netmap_vp_adapter *hostna = vpna + 1;
 		/* also bind the host stack to the bridge */
-		b->bdg_ports[cand2] = SWNA(iter);
-		SWNA(iter)->bdg_port = cand2;
-		SWNA(iter)->na_bdg = b;
+		b->bdg_ports[cand2] = hostna;
+		hostna->bdg_port = cand2;
+		hostna->na_bdg = b;
 		b->bdg_active_ports++;
-		ND("host %p to bridge port %d", SWNA(iter), cand2);
+		D("host %p to bridge port %d", hostna, cand2);
 	}
-#endif
 	netmap_adapter_get(&vpna->up);
 	D("if %s refs %d", name, vpna->up.na_refcount);
 	BDG_WUNLOCK(b);
@@ -3951,8 +3950,21 @@ done:
 	kring->nr_hwcur = j;
 	ring->avail = kring->nr_hwavail;
 	if (netmap_verbose)
-		D("%s ring %d flags %d", ifp->if_xname, ring_nr, flags);
+		D("%s ring %d flags %d", na->up.ifp->if_xname, ring_nr, flags);
 	return 0;
+}
+
+
+/*
+ * main dispatch routine for the bridge.
+ * We already know that only one thread is running this.
+ * we must run nm_bdg_preflush without lock.
+ */
+static int
+bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
+{
+	struct netmap_vp_adapter *na = (struct netmap_vp_adapter*)NA(ifp);
+	return netmap_vp_txsync(na, ring_nr, flags);
 }
 
 
@@ -4073,22 +4085,42 @@ netmap_bwrap_intr_notify(struct ifnet *ifp, u_int ring_nr, enum txrx tx, int fla
 {
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_bwrap_adapter *bna = na->na_private;
-	struct netmap_kring *kring = &na->rx_rings[ring_nr];
-	struct netmap_ring *ring = kring->ring;
+	struct netmap_vp_adapter *hostna = &bna->host;
+	struct netmap_kring *kring;
+	struct netmap_ring *ring;
+	int is_host_ring = ring_nr == na->num_rx_rings;
+	struct netmap_vp_adapter *vpna = &bna->up;
+	int error = 0;
+
+	D("%s[%d] %s %x", ifp->if_xname, ring_nr, (tx == NR_TX ? "TX" : "RX"), flags);
 
 	if (!(ifp->if_capenable & IFCAP_NETMAP))
 		return 0;
 
-	/* make sure that only one thread is ever in here,
-	 * after which we can unlock. Probably unnecessary XXX.
-	 */
+	kring = &na->rx_rings[ring_nr];
+	ring = kring->ring;
+
+	/* make sure the ring is not disabled */
 	if (nm_kr_tryget(kring)) 
 		return 0;
+
+	if (tx == NR_TX || (is_host_ring && hostna->na_bdg == NULL)) {
+		error = bna->save_notify(ifp, ring_nr, tx, flags);
+		goto put_out;
+	}
+
 	/* fetch packets that have arrived.
 	 * XXX maybe do this in a loop ?
 	 */
-	if (na->nm_rxsync(ifp, ring_nr, 0))
-		goto put_out;
+
+	if (is_host_ring) {
+		vpna = hostna;
+		ring_nr = 0;
+	} else {
+		error = na->nm_rxsync(ifp, ring_nr, 0);
+		if (error)
+			goto put_out;
+	}
 	if (kring->nr_hwavail == 0 && netmap_verbose) {
 		D("how strange, interrupt with no packets on %s",
 			ifp->if_xname);
@@ -4096,15 +4128,24 @@ netmap_bwrap_intr_notify(struct ifnet *ifp, u_int ring_nr, enum txrx tx, int fla
 	}
 	/* XXX avail ? */
 	ring->cur = nm_kr_rxpos(kring);
+	netmap_vp_txsync(vpna, ring_nr, flags);
 
-	bdg_netmap_txsync(bna->up.up.ifp, ring_nr, flags);
-
-	na->nm_rxsync(ifp, ring_nr, 0);
+	if (!is_host_ring)
+		error = na->nm_rxsync(ifp, ring_nr, 0);
 
 put_out:
 	nm_kr_put(kring);
+	return error;
+}
+
+static int
+netmap_bwrap_host_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
+{
+	D("%s[%d] %x", ifp->if_xname, ring_nr, flags);
+
 	return 0;
 }
+
 
 static int
 netmap_bwrap_register(struct ifnet *ifp, int onoff)
@@ -4187,6 +4228,7 @@ netmap_bwrap_krings_create(struct netmap_adapter *na)
 	struct netmap_bwrap_adapter *bna =
 		(struct netmap_bwrap_adapter *)na;
 	struct netmap_adapter *hwna = bna->hwna;
+	struct netmap_adapter *hostna = &bna->host.up;
 	int error;
 
 	D("%s", na->ifp->if_xname);
@@ -4200,6 +4242,9 @@ netmap_bwrap_krings_create(struct netmap_adapter *na)
 		netmap_vp_krings_delete(na);
 		return error;
 	}
+
+	hostna->tx_rings = na->tx_rings + na->num_tx_rings;
+	hostna->rx_rings = na->rx_rings + na->num_rx_rings;
 	
 	return 0;
 }
@@ -4275,6 +4320,7 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 	struct netmap_bwrap_adapter *bna;
 	struct netmap_adapter *na;
 	struct netmap_adapter *hwna = NA(real);
+	struct netmap_adapter *hostna;
 	int error;
 	
 
@@ -4290,7 +4336,7 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 	na->num_rx_desc = hwna->num_tx_desc;
 	na->nm_dtor = netmap_bwrap_dtor;
 	na->nm_register = netmap_bwrap_register;
-	na->nm_txsync = netmap_bwrap_txsync;
+	// na->nm_txsync = netmap_bwrap_txsync;
 	na->nm_rxsync = netmap_bwrap_rxsync;
 	na->nm_config = netmap_bwrap_config;
 	na->nm_krings_create = netmap_bwrap_krings_create;
@@ -4301,6 +4347,16 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 
 	bna->hwna = hwna;
 	hwna->na_private = bna;
+
+	hostna = &bna->host.up;
+	hostna->num_tx_rings = 1;
+	hostna->num_tx_desc = hwna->num_rx_desc;
+	hostna->num_rx_rings = 1;
+	hostna->num_rx_desc = hwna->num_tx_desc;
+	// hostna->nm_txsync = netmap_bwrap_host_txsync;
+	hostna->nm_rxsync = netmap_bwrap_host_rxsync;
+	hostna->nm_mem = na->nm_mem;
+	hostna->na_private = bna;
 
 	D("%s<->%s txr %d txd %d rxr %d rxd %d", fake->if_xname, real->if_xname,
 		na->num_tx_rings, na->num_tx_desc,

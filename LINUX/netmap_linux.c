@@ -157,7 +157,7 @@ linux_netmap_mmap(struct file *f, struct vm_area_struct *vma)
 netdev_tx_t
 linux_netmap_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
-	//netmap_transmit(dev, skb);
+	netmap_transmit(dev, skb);
 	return (NETDEV_TX_OK);
 }
 

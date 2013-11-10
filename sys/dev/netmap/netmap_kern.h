@@ -397,7 +397,7 @@ struct netmap_generic_adapter {
 
 struct netmap_bwrap_adapter {
 	struct netmap_vp_adapter up;
-	//struct netmap_vp_adapter host;
+	struct netmap_vp_adapter host;
 	struct netmap_adapter *hwna;
 
 	/* backup of the hwna notify callback */
