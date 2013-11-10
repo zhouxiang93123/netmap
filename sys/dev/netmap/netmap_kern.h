@@ -583,15 +583,11 @@ enum {                                  /* verbose flags */
 /*
  * NA returns a pointer to the struct netmap adapter from the ifp,
  * WNA is used to write it.
- * SWNA() is used for the "host stack" endpoint associated
- *	to an interface. It is allocated together with the main NA(),
- *	as an array of two objects.
  */
 #ifndef WNA
 #define	WNA(_ifp)	(_ifp)->if_pspare[0]
 #endif
 #define	NA(_ifp)	((struct netmap_adapter *)WNA(_ifp))
-#define	SWNA(_ifp)	(NA(_ifp) + 1)
 
 /*
  * Macros to determine if an interface is netmap capable or netmap enabled.
