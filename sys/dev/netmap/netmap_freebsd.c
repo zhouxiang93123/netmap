@@ -35,26 +35,6 @@
 int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m,
 	void *addr, u_int len, u_int ring_nr)
 {
-    netdev_tx_t ret;
-
-    /* TODO Support the slot flags (NS_FRAG, NS_INDIRECT). */
-    skb_copy_to_linear_data(m, addr, len); // skb_store_bits(m, 0, addr, len);
-    skb_put(m, len);
-    NM_ATOMIC_INC(&m->users);
-    m->dev = ifp;
-    m->priority = 100;
-    skb_set_queue_mapping(m, ring_nr);
-
-    ret = dev_queue_xmit(m);
-
-    if (likely(ret == NET_XMIT_SUCCESS)) {
-        return 0;
-    }
-    if (unlikely(ret != NET_XMIT_DROP)) {
-        /* If something goes wrong in the TX path, there is nothing intelligent
-           we can do (for now) apart from error reporting. */
-        RD(5, "dev_queue_xmit failed: HARD ERROR %d", ret);
-    }
     return -1;
 }
 
@@ -75,44 +55,3 @@ generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq)
     *rxq = 1;
 }
 
-static struct device_driver *
-linux_netmap_find_driver(struct device *dev)
-{
-	struct device_driver *dd;
-
-	while ( (dd = dev->driver) == NULL ) {
-		if ( (dev = dev->parent) == NULL )
-			return NULL;
-	}
-	return dd;
-}
-
-struct net_device *
-ifunit_ref(const char *name)
-{
-	struct net_device *ifp = dev_get_by_name(&init_net, name);
-	struct device_driver *dd;
-
-	if (ifp == NULL)
-		return NULL;
-
-	if ( (dd = linux_netmap_find_driver(&ifp->dev)) == NULL )
-		goto error;
-
-	if (!try_module_get(dd->owner))
-		goto error;
-
-	return ifp;
-error:
-	dev_put(ifp);
-	return NULL;
-}
-
-void if_rele(struct net_device *ifp)
-{
-	struct device_driver *dd;
-	dd = linux_netmap_find_driver(&ifp->dev);
-	dev_put(ifp);
-	if (dd)
-		module_put(dd->owner);
-}

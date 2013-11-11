@@ -32,6 +32,35 @@
 
 /* ========================== LINUX-SPECIFIC ROUTINES ================== */
 
+void netmap_mitigation_init(struct netmap_adapter *na)
+{
+    hrtimer_init(&na->mit_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+    na->mit_timer.function = &generic_timer_handler;
+    na->mit_pending = 0;
+}
+
+extern unsigned int netmap_generic_mit;
+
+void netmap_mitigation_start(struct netmap_adapter *na)
+{
+    hrtimer_start(&na->mit_timer, ktime_set(0, netmap_generic_mit), HRTIMER_MODE_REL);
+}
+
+void netmap_mitigation_restart(struct netmap_adapter *na)
+{
+    hrtimer_forward_now(&na->mit_timer, ktime_set(0, netmap_generic_mit));
+}
+
+int netmap_mitigation_active(struct netmap_adapter *na)
+{
+    return hrtimer_active(&na->mit_timer);
+}
+
+void netmap_mitigation_cleanup(struct netmap_adapter *na)
+{
+    hrtimer_cancel(&na->mit_timer);
+}
+
 /* Transmit routine used by generic_netmap_txsync(). Returns 0 on success
    and -1 on error (which may be packet drops or other errors). */
 int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m,

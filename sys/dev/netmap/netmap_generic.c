@@ -190,9 +190,9 @@ static struct rate_context rate_ctx;
 #ifdef linux
 
 /*
- * XXX We cannot use netmap_rx_irq because the adapter has
+ * We cannot use netmap_rx_irq because the generic adapter has
  * NAF_SKIP_INTR set. We might call directly netmap_common_irq()
- * (but need to check this)
+ * (but need to check this XXX)
  * Wrapper used by the generic adapter layer to notify
  * the poller threads.
  */
@@ -250,11 +250,11 @@ netmap_catch_rx(struct netmap_adapter *na, int intercept)
  * - the first packet on an idle receiver triggers a notification
  *   and starts a timer;
  * - subsequent incoming packets do not cause a notification
- *   the timer expires XXX or we have a sufficiently large batch;
+ *   until the timer expires;
  * - when the timer expires and there are pending packets,
  *   a notification is sent up and the timer is restarted.
  */
-static enum hrtimer_restart
+enum hrtimer_restart
 generic_timer_handler(struct hrtimer *t)
 {
     struct netmap_adapter *na = container_of(t, struct netmap_adapter, mit_timer);
@@ -271,7 +271,7 @@ generic_timer_handler(struct hrtimer *t)
     na->mit_pending = 0;
     netmap_generic_irq(na->ifp, 0, &work_done);
     IFRATE(rate_ctx.new.rxirq++);
-    hrtimer_forward_now(&na->mit_timer, ktime_set(0, netmap_generic_mit));
+    netmap_mitigation_restart(na);
 
     return HRTIMER_RESTART;
 }
@@ -316,10 +316,9 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
             mbq_safe_init(&na->rx_rings[r].rx_queue);
             na->rx_rings[r].nr_ntc = 0;
         }
-	/* XXX init rx mitigation timer */
-        hrtimer_init(&na->mit_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-        na->mit_timer.function = &generic_timer_handler;
-        na->mit_pending = 0;
+
+        /* Init the mitigation timer. */
+        netmap_mitigation_init(na);
 
 	/*
 	 * Preallocate packet buffers for the tx rings.
@@ -397,7 +396,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
             mbq_safe_destroy(&na->rx_rings[r].rx_queue);
         }
 
-        hrtimer_cancel(&na->mit_timer);
+        netmap_mitigation_cleanup(na);
 
         for (r=0; r<na->num_tx_rings; r++) {
             for (i=0; i<na->num_tx_desc; i++) {
@@ -691,13 +690,13 @@ rx_handler_result_t generic_netmap_rx_handler(struct mbuf **pm)
 	/* same as send combining, filter notification if there is a
 	 * pending timer, otherwise pass it up and start a timer.
          */
-        if (likely(hrtimer_active(&na->mit_timer))) {
+        if (likely(netmap_mitigation_active(na))) {
             /* Record that there is some pending work. */
             na->mit_pending = 1;
         } else {
             netmap_generic_irq(na->ifp, rr, &work_done);
             IFRATE(rate_ctx.new.rxirq++);
-            hrtimer_start(&na->mit_timer, ktime_set(0, netmap_generic_mit), HRTIMER_MODE_REL);
+            netmap_mitigation_start(na);
         }
     }
 

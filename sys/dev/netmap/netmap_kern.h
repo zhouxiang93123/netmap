@@ -541,6 +541,14 @@ int netmap_get_memory(struct netmap_priv_d* p);
 void netmap_dtor(void *data);
 int netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td);
 
+/* netmap_mitigation API */
+void netmap_mitigation_init(struct netmap_adapter *na);
+void netmap_mitigation_start(struct netmap_adapter *na);
+void netmap_mitigation_restart(struct netmap_adapter *na);
+int netmap_mitigation_active(struct netmap_adapter *na);
+void netmap_mitigation_cleanup(struct netmap_adapter *na);
+enum hrtimer_restart generic_timer_handler(struct hrtimer *t);
+
 extern u_int netmap_buf_size;
 #define NETMAP_BUF_SIZE	netmap_buf_size	// XXX remove
 extern int netmap_mitigate;
