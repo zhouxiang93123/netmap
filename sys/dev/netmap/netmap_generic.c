@@ -622,18 +622,20 @@ generic_netmap_attach(struct ifnet *ifp)
 {
     /* if *na is too large we do not want it on stack */
     struct netmap_adapter *na;
+    struct netmap_generic_adapter *gna;
     int retval;
     unsigned int num_tx_desc = 256, num_rx_desc = 256;
 
     generic_find_num_desc(ifp, &num_tx_desc, &num_rx_desc);
     D("Netmap ring descriptors: TX = %d, RX = %d\n", num_tx_desc, num_rx_desc);
 
-    na = malloc(sizeof(*na), M_DEVBUF, M_NOWAIT | M_ZERO);
-    if (na == NULL) {
+    gna = malloc(sizeof(*gna), M_DEVBUF, M_NOWAIT | M_ZERO);
+    if (gna == NULL) {
 	D("no memory on attach, give up");
 	return ENOMEM;
     }
-    bzero(na, sizeof(*na));
+    bzero(gna, sizeof(*gna));
+    na = (struct netmap_adapter *)gna;
     na->ifp = ifp;
     na->num_tx_desc = num_tx_desc;
     na->num_rx_desc = num_rx_desc;
@@ -650,6 +652,8 @@ generic_netmap_attach(struct ifnet *ifp)
 #else /* linux */
     na->num_tx_rings = ifp->real_num_tx_queues;
 #endif /* linux */
+
+    gna->prev = NULL;
 
     retval = netmap_attach_common(na, 1); // TODO ifp->real_num_rx_queues);
     if (retval) {
