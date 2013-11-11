@@ -55,3 +55,27 @@ generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq)
     *rxq = 1;
 }
 
+void netmap_mitigation_init(struct netmap_adapter *na)
+{
+    na->mit_pending = 0;
+}
+
+extern unsigned int netmap_generic_mit;
+
+void netmap_mitigation_start(struct netmap_adapter *na)
+{
+}
+
+void netmap_mitigation_restart(struct netmap_adapter *na)
+{
+}
+
+int netmap_mitigation_active(struct netmap_adapter *na)
+{
+    return 0;
+}
+
+void netmap_mitigation_cleanup(struct netmap_adapter *na)
+{
+}
+

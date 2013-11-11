@@ -533,7 +533,7 @@ generic_tx_event_middle(struct netmap_kring *kring, u_int j)
  * There is a race but this is only called within txsync which does
  * a double check.
  */
-static int
+static void
 generic_set_tx_event(struct netmap_kring *kring, u_int j)
 {
     struct mbuf *m;
@@ -552,10 +552,6 @@ generic_set_tx_event(struct netmap_kring *kring, u_int j)
     /* Decrement the refcount an free it if we have the last one. */
     m_freem(m);
     smp_mb();
-
-    /* Double check here is redundant, because the txsync callback is called twice.
-    return generic_netmap_tx_clean(kring); */
-    return 0;
 }
 #endif /* linux */
 
@@ -566,7 +562,7 @@ generic_set_tx_event(struct netmap_kring *kring, u_int j)
  * On linux this is not done directly, but using dev_queue_xmit(),
  * since it implements the TX flow control (and takes some locks).
  */
-    static int
+static int
 generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
     struct netmap_adapter *na = NA(ifp);
@@ -831,5 +827,6 @@ generic_netmap_attach(struct ifnet *ifp)
     generic_find_num_queues(ifp, &na.num_tx_rings, &na.num_rx_rings);
 
     retval = netmap_attach(&na, na.num_rx_rings);
+
     return retval;
 }
