@@ -447,6 +447,10 @@ generic_mbuf_destructor(struct mbuf *m)
 /* Record completed transmissions and update hwavail/avail.
  *
  * XXX document what nr_ntc is about
+ * nr_ntc is the oldest tx buffer not yet completed
+ * (same as nr_hwavail + nr_hwcur + 1,
+ * nr_hwcur is the first unsent buffer.
+ * When cleaning, we try to recover buffers between nr_ntc and nr_hwcur.
  */
 static int
 generic_netmap_tx_clean(struct netmap_kring *kring)
