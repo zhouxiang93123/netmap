@@ -458,7 +458,7 @@ generic_mbuf_destructor(struct mbuf *m)
  *
  * XXX document what nr_ntc is about
  * nr_ntc is the oldest tx buffer not yet completed
- * (same as nr_hwavail + nr_hwcur + 1,
+ * (same as nr_hwavail + nr_hwcur + 1),
  * nr_hwcur is the first unsent buffer.
  * When cleaning, we try to recover buffers between nr_ntc and nr_hwcur.
  */
@@ -474,7 +474,7 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
     /*
      * XXX check the termination logic.
      */
-    while (ntc != hwcur) {
+    while (ntc != hwcur) { /* buffers not completed */
 	struct mbuf *m = tx_pool[ntc];
 
         if (unlikely(m == NULL)) {
@@ -487,7 +487,7 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
             }
 	} else if (GET_MBUF_REFCNT(m) == 1) {
 	    /* XXX maybe unnecessary ? we can deal with that
-	     * in the sending routine
+	     * in generic_xmit_frame()
 	     */
             skb_trim(m, 0);
         } else {
@@ -508,14 +508,24 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
 
 
 /*
- * return a position which is XXX between the current and the
- * last slot to be sent ?
+ * We have pending packets in the driver between nr_ntc and j.
+ * Compute a position in the middle, to be used to generate
+ * a notification.
  */
 static inline u_int
 generic_tx_event_middle(struct netmap_kring *kring, u_int j)
 {
     u_int n = kring->nkr_num_slots;
     u_int e = (kring->nr_ntc + ((((n + j) - kring->nr_ntc) % (n)) / 2)) % (n);
+#if 0
+    if (j >= ntc)
+	return (j+ntc)/2
+    else {
+	x = (j + ntc +n)/2;
+	if (x >= n) x -= n;
+	return x;
+    }
+#endif
 
     if (unlikely(e >= n)) {
         D("This cannot happen");
@@ -525,10 +535,17 @@ generic_tx_event_middle(struct netmap_kring *kring, u_int j)
     return e;
 }
 
+/*
+ * We have pending packets in the driver between nr_ntc and j.
+ * Schedule a notification approximately in the middle of the two.
+ * There is a race but this is only called within txsync which does
+ * a double check.
+ */
 static int
-generic_set_tx_event(struct netmap_kring *kring, u_int e)
+generic_set_tx_event(struct netmap_kring *kring, u_int j)
 {
     struct mbuf *m;
+    u_int e = generic_tx_event_middle(kring, j);
 
     ND("Event at %d", e);
     m = kring->tx_pool[e];
@@ -560,9 +577,6 @@ generic_set_tx_event(struct netmap_kring *kring, u_int e)
 static int
 generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
-#ifdef __FreeBSD__
-    return EINVAL;
-#else /* linux */
     struct netmap_adapter *na = NA(ifp);
     struct netmap_kring *kring = &na->tx_rings[ring_nr];
     struct netmap_ring *ring = kring->ring;
@@ -570,6 +584,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 
     IFRATE(rate_ctx.new.txsync++);
 
+    // XXX todo: handle the case of mbuf allocation failure
     generic_netmap_tx_clean(kring);
 
     /* Take a copy of ring->cur now, and never read it again. */
@@ -609,20 +624,23 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
             if (unlikely(tx_ret)) {
                 ND("start_xmit failed: err %d [%d,%d,%d]", tx_ret, j, k, kring->nr_hwavail);
 		/*
-		 * XXX this may need some simplifications.
-		 * I do not understand the logic.
-		 *
-                 * If the frame has been dropped, just set a
-		 * notification event on a netmap slot that will
-		 * be cleaned in the future (and possibly continue
-		 * the TX processing if the doublecheck reports
-		 * new available slots).
+		 * No room in the device driver. Request a notification,
+		 * then call generic_netmap_tx_clean(kring) to do the
+		 * double check and see if we can free more buffers.
+		 * If there is space continue, else break;
+		 * XXX the double check is necessary if the problem
+		 * occurs in the txsync call after selrecord().
+		 * Also, we need some way to tell the caller that not
+		 * all buffers were queued onto the device (this was
+		 * not a problem with native netmap driver where space
+		 * is preallocated). The bridge has a similar problem
+		 * and we solve it there by dropping the excess packets.
                  */
-                if (unlikely(generic_set_tx_event(kring,
-                                    generic_tx_event_middle(kring, j)) > 0)) {
+                generic_set_tx_event(kring, j);
+		if (generic_netmap_tx_clean(kring)) /* space now available */
                     continue;
-                }
-                break;
+                else
+		    break;
             }
             slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
             if (unlikely(j++ == lim))
@@ -639,13 +657,12 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 	     * No doublecheck is performed, since txsync() will be
 	     * called twice by netmap_poll().
 	     */
-            generic_set_tx_event(kring, generic_tx_event_middle(kring, j));
+            generic_set_tx_event(kring, j);
         }
         ND("tx #%d, hwavail = %d", n, kring->nr_hwavail);
     }
 
     return 0;
-#endif /* linux */
 }
 
 #ifdef linux
