@@ -190,7 +190,9 @@ static struct rate_context rate_ctx;
 #ifdef linux
 
 /*
- * XXX Can't we just use netmap_rx_irq ?
+ * XXX we cannot use netmap_rx_irq because the adapter has
+ * NAF_SKIP_INTR set. We might call directly netmap_common_irq()
+ * (but need to check this)
  * Wrapper used by the generic adapter layer to notify
  * the poller threads.
  */
@@ -241,27 +243,34 @@ netmap_catch_rx(struct netmap_adapter *na, int intercept)
 #endif /* linux */
 }
 
+/*
+ * The generic driver calls netmap once per packet.
+ * This is inefficient so we implement a mitigation mechanism,
+ * as follows:
+ * - the first packet on an idle receiver triggers a notification
+ *   and starts a timer;
+ * - subsequent incoming packets do not cause a notification
+ *   the timer expires XXX or we have a sufficiently large batch;
+ * - when the timer expires and there are pending packets,
+ *   a notification is sent up and the timer is restarted.
+ */
 static enum hrtimer_restart
 generic_timer_handler(struct hrtimer *t)
 {
     struct netmap_adapter *na = container_of(t, struct netmap_adapter, mit_timer);
     uint work_done;
 
-    if (na->mit_pending) {
-        /* Some work arrived while the timer was counting down:
-	 * Reset the pending work flag, restart the timer and issue
-	 * a notification.
-	 */
-        na->mit_pending = 0;
-        netmap_generic_irq(na->ifp, 0, &work_done);
-        IFRATE(rate_ctx.new.rxirq++);
-        hrtimer_forward_now(&na->mit_timer, ktime_set(0, netmap_generic_mit));
-
-        return HRTIMER_RESTART;
-    }
-
-    /* No pending work? Don't restart the timer. */
-    return HRTIMER_NORESTART;
+    if (!na->mit_pending)
+	return HRTIMER_NORESTART;
+    /* Some work arrived while the timer was counting down:
+     * Reset the pending work flag, restart the timer and issue
+     * a notification.
+     */
+    na->mit_pending = 0;
+    netmap_generic_irq(na->ifp, 0, &work_done);
+    IFRATE(rate_ctx.new.rxirq++);
+    hrtimer_forward_now(&na->mit_timer, ktime_set(0, netmap_generic_mit));
+    return HRTIMER_RESTART;
 }
 
 static u16 generic_ndo_select_queue(struct ifnet *ifp, struct mbuf *m)
@@ -304,6 +313,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
             mbq_safe_init(&na->rx_rings[r].rx_queue);
             na->rx_rings[r].nr_ntc = 0;
         }
+	/* XXX init rx mitigation timer */
         hrtimer_init(&na->mit_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
         na->mit_timer.function = &generic_timer_handler;
         na->mit_pending = 0;
@@ -314,18 +324,18 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         for (r=0; r<na->num_tx_rings; r++) {
             na->tx_rings[r].nr_ntc = 0;
             na->tx_rings[r].tx_pool = malloc(na->num_tx_desc * sizeof(struct mbuf *),
-                                                M_DEVBUF, GFP_ATOMIC);
+				    M_DEVBUF, M_NOWAIT | M_ZERO);
             if (!na->tx_rings[r].tx_pool) {
                 D("tx_pool allocation failed");
                 error = ENOMEM;
-                goto alloc_tx_pool;
+                goto alloc_tx_pool; // XXX rename to free_tx_pool
             }
             for (i=0; i<na->num_tx_desc; i++) {
                 m = netmap_get_mbuf(GENERIC_BUF_SIZE);
                 if (!m) {
                     D("tx_pool[%d] allocation failed", i);
                     error = ENOMEM;
-                    goto alloc_mbufs;
+                    goto alloc_mbufs; // XXX
                 }
                 na->tx_rings[r].tx_pool[i] = m;
             }
@@ -793,6 +803,9 @@ generic_netmap_attach(struct ifnet *ifp)
     na.nm_register = &generic_netmap_register;
     na.nm_txsync = &generic_netmap_txsync;
     na.nm_rxsync = &generic_netmap_rxsync;
+    /* when using generic, IFCAP_NETMAP is set so we force
+     * NAF_SKIP_INTR to use the regular interrupt handler
+     */
     na.na_flags = NAF_SKIP_INTR;
 
     ND("[GNA] num_tx_queues(%d), real_num_tx_queues(%d), len(%lu)",
