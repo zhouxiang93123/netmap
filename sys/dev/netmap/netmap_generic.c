@@ -190,7 +190,7 @@ static struct rate_context rate_ctx;
 #ifdef linux
 
 /*
- * XXX we cannot use netmap_rx_irq because the adapter has
+ * XXX We cannot use netmap_rx_irq because the adapter has
  * NAF_SKIP_INTR set. We might call directly netmap_common_irq()
  * (but need to check this)
  * Wrapper used by the generic adapter layer to notify
@@ -260,16 +260,19 @@ generic_timer_handler(struct hrtimer *t)
     struct netmap_adapter *na = container_of(t, struct netmap_adapter, mit_timer);
     uint work_done;
 
-    if (!na->mit_pending)
-	return HRTIMER_NORESTART;
+    if (!na->mit_pending) {
+        return HRTIMER_NORESTART;
+    }
+
     /* Some work arrived while the timer was counting down:
-     * Reset the pending work flag, restart the timer and issue
+     * Reset the pending work flag, restart the timer and send
      * a notification.
      */
     na->mit_pending = 0;
     netmap_generic_irq(na->ifp, 0, &work_done);
     IFRATE(rate_ctx.new.rxirq++);
     hrtimer_forward_now(&na->mit_timer, ktime_set(0, netmap_generic_mit));
+
     return HRTIMER_RESTART;
 }
 
@@ -319,7 +322,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         na->mit_pending = 0;
 
 	/*
-	 * preallocate buffers for the tx rings
+	 * Preallocate packet buffers for the tx rings.
 	 */
         for (r=0; r<na->num_tx_rings; r++) {
             na->tx_rings[r].nr_ntc = 0;
@@ -328,20 +331,20 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
             if (!na->tx_rings[r].tx_pool) {
                 D("tx_pool allocation failed");
                 error = ENOMEM;
-                goto alloc_tx_pool; // XXX rename to free_tx_pool
+                goto free_tx_pool;
             }
             for (i=0; i<na->num_tx_desc; i++) {
                 m = netmap_get_mbuf(GENERIC_BUF_SIZE);
                 if (!m) {
                     D("tx_pool[%d] allocation failed", i);
                     error = ENOMEM;
-                    goto alloc_mbufs; // XXX
+                    goto free_mbufs;
                 }
                 na->tx_rings[r].tx_pool[i] = m;
             }
         }
         rtnl_lock();
-	/* prepare to intercept incoming traffic */
+	/* Prepare to intercept incoming traffic. */
         error = netmap_catch_rx(na, 1);
         if (error) {
             D("netdev_rx_handler_register() failed");
@@ -350,7 +353,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         ifp->if_capenable |= IFCAP_NETMAP;
 #ifdef linux
 	/*
-	 * save the old pointer to the netdev_op
+	 * Save the old pointer to the netdev_op
 	 * create an updated netdev ops replacing the
 	 * ndo_select_queue function with our custom one,
 	 * and make the driver use it.
@@ -362,6 +365,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
 #else
 	XXX do the same for FreeBSD
 #endif /* __FreeBSD__ */
+        rtnl_unlock();
 
 #ifdef RATE
         if (rate_ctx.refcount == 0) {
@@ -369,7 +373,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
             memset(&rate_ctx, 0, sizeof(rate_ctx));
             setup_timer(&rate_ctx.timer, &rate_callback, (unsigned long)&rate_ctx);
             if (mod_timer(&rate_ctx.timer, jiffies + msecs_to_jiffies(1500))) {
-                D("[v1000] Error: mod_timer()");
+                D("Error: mod_timer()");
             }
         }
         rate_ctx.refcount++;
@@ -377,16 +381,16 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
 
     } else { /* Disable netmap mode. */
         rtnl_lock();
+
         ifp->if_capenable &= ~IFCAP_NETMAP;
-	/* restore the netdev_ops */
+	/* Restore the netdev_ops. */
         ifp->netdev_ops = (void *)na->if_transmit;
 
-	/* do not intercept packets on the rx path */
+	/* Do not intercept packets on the rx path. */
         netmap_catch_rx(na, 0);
 
-	/* XXX maybe we should try and put this outside
-	 * the lock
-	 */
+        rtnl_unlock();
+
 	/* Free the mbufs going to the netmap rings */
         for (r=0; r<na->num_rx_rings; r++) {
             mbq_safe_purge(&na->rx_rings[r].rx_queue);
@@ -410,8 +414,6 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
 #endif
     }
 
-    rtnl_unlock();
-
 #ifdef REG_RESET
     error = ifp->netdev_ops->ndo_open(ifp);
     if (error) {
@@ -423,10 +425,10 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
 
 register_handler:
     rtnl_unlock();
-alloc_tx_pool:
+free_tx_pool:
     r--;
     i = na->num_tx_desc;  /* Useless, but just to stay safe. */
-alloc_mbufs:
+free_mbufs:
     i--;
     for (; r>=0; r--) {
         for (; i>=0; i--) {
@@ -456,7 +458,6 @@ generic_mbuf_destructor(struct mbuf *m)
 
 /* Record completed transmissions and update hwavail/avail.
  *
- * XXX document what nr_ntc is about
  * nr_ntc is the oldest tx buffer not yet completed
  * (same as nr_hwavail + nr_hwcur + 1),
  * nr_hwcur is the first unsent buffer.
@@ -471,9 +472,6 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
     u_int n = 0;
     struct mbuf **tx_pool = kring->tx_pool;
 
-    /*
-     * XXX check the termination logic.
-     */
     while (ntc != hwcur) { /* buffers not completed */
 	struct mbuf *m = tx_pool[ntc];
 
@@ -485,13 +483,8 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
 		// XXX how do we proceed ? break ?
                 return -ENOMEM;
             }
-	} else if (GET_MBUF_REFCNT(m) == 1) {
-	    /* XXX maybe unnecessary ? we can deal with that
-	     * in generic_xmit_frame()
-	     */
-            skb_trim(m, 0);
-        } else {
-	    break; /* still busy */
+	} else if (GET_MBUF_REFCNT(m) != 1) {
+	    break; /* This mbuf is still busy: its refcnt is 2. */
 	}
         if (unlikely(++ntc == num_slots)) {
             ntc = 0;
@@ -574,7 +567,7 @@ generic_set_tx_event(struct netmap_kring *kring, u_int j)
  * On linux this is not done directly, but using dev_queue_xmit(),
  * since it implements the TX flow control (and takes some locks).
  */
-static int
+    static int
 generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
     struct netmap_adapter *na = NA(ifp);
@@ -584,13 +577,13 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 
     IFRATE(rate_ctx.new.txsync++);
 
-    // XXX todo: handle the case of mbuf allocation failure
+    // TODO: handle the case of mbuf allocation failure
     generic_netmap_tx_clean(kring);
 
     /* Take a copy of ring->cur now, and never read it again. */
     k = ring->cur;
     if (unlikely(k > lim)) {
-            return netmap_ring_reinit(kring);
+        return netmap_ring_reinit(kring);
     }
 
     rmb();
@@ -605,7 +598,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
             int tx_ret;
 
             if (unlikely(addr == netmap_buffer_base || len > NETMAP_BUF_SIZE)) {
-                    return netmap_ring_reinit(kring);
+                return netmap_ring_reinit(kring);
             }
             /* Tale a mbuf from the tx pool and copy in the user packet. */
             m = kring->tx_pool[j];
@@ -613,34 +606,35 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
                 D("This should never happen");
                 return netmap_ring_reinit(kring);
             }
-	    /* XXX we should ask notifications when NS_REPORT is set,
-	     * or roughly every half frame. We can optimize this
-	     * by lazily requesting notifications only when a
-	     * transmission fails. Probably the best way is to
-	     * break on failures and set notifications when
-	     * ring->avail == 0 || j != k
-	     */
+            /* XXX we should ask notifications when NS_REPORT is set,
+             * or roughly every half frame. We can optimize this
+             * by lazily requesting notifications only when a
+             * transmission fails. Probably the best way is to
+             * break on failures and set notifications when
+             * ring->avail == 0 || j != k
+             */
             tx_ret = generic_xmit_frame(ifp, m, addr, len, ring_nr);
             if (unlikely(tx_ret)) {
                 ND("start_xmit failed: err %d [%d,%d,%d]", tx_ret, j, k, kring->nr_hwavail);
-		/*
-		 * No room in the device driver. Request a notification,
-		 * then call generic_netmap_tx_clean(kring) to do the
-		 * double check and see if we can free more buffers.
-		 * If there is space continue, else break;
-		 * XXX the double check is necessary if the problem
-		 * occurs in the txsync call after selrecord().
-		 * Also, we need some way to tell the caller that not
-		 * all buffers were queued onto the device (this was
-		 * not a problem with native netmap driver where space
-		 * is preallocated). The bridge has a similar problem
-		 * and we solve it there by dropping the excess packets.
+                /*
+                 * No room in the device driver. Request a notification,
+                 * then call generic_netmap_tx_clean(kring) to do the
+                 * double check and see if we can free more buffers.
+                 * If there is space continue, else break;
+                 * XXX the double check is necessary if the problem
+                 * occurs in the txsync call after selrecord().
+                 * Also, we need some way to tell the caller that not
+                 * all buffers were queued onto the device (this was
+                 * not a problem with native netmap driver where space
+                 * is preallocated). The bridge has a similar problem
+                 * and we solve it there by dropping the excess packets.
                  */
                 generic_set_tx_event(kring, j);
-		if (generic_netmap_tx_clean(kring)) /* space now available */
+                if (generic_netmap_tx_clean(kring)) { /* space now available */
                     continue;
-                else
-		    break;
+                } else {
+                    break;
+                }
             }
             slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
             if (unlikely(j++ == lim))
@@ -653,10 +647,10 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
         IFRATE(rate_ctx.new.txpkt += n);
         if (!ring->avail) {
             /* No more available slots? Set a notification event
-	     * on a netmap slot that will be cleaned in the future.
-	     * No doublecheck is performed, since txsync() will be
-	     * called twice by netmap_poll().
-	     */
+             * on a netmap slot that will be cleaned in the future.
+             * No doublecheck is performed, since txsync() will be
+             * called twice by netmap_poll().
+             */
             generic_set_tx_event(kring, j);
         }
         ND("tx #%d, hwavail = %d", n, kring->nr_hwavail);

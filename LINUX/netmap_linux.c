@@ -39,6 +39,9 @@ int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m,
 {
     netdev_tx_t ret;
 
+    /* Empty the sk_buff. */
+    skb_trim(m, 0);
+
     /* TODO Support the slot flags (NS_FRAG, NS_INDIRECT). */
     skb_copy_to_linear_data(m, addr, len); // skb_store_bits(m, 0, addr, len);
     skb_put(m, len);
