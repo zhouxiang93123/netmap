@@ -540,6 +540,8 @@ void netmap_fini(void);
 int netmap_get_memory(struct netmap_priv_d* p);
 void netmap_dtor(void *data);
 int netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td);
+int netmap_catch_rx(struct netmap_adapter *na, int intercept);
+void generic_rx_handler(struct ifnet *ifp, struct mbuf *m);;
 
 /* netmap_mitigation API */
 void netmap_mitigation_init(struct netmap_adapter *na);

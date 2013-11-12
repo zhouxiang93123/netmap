@@ -30,6 +30,33 @@
 
 /* ======================== FREEBSD-SPECIFIC ROUTINES ================== */
 
+/*
+ * second argument is non-zero to intercept, 0 to restore
+ */
+int
+netmap_catch_rx(struct netmap_adapter *na, int intercept)
+{
+    struct ifnet *ifp = na->ifp;
+
+    if (intercept) {
+        if (na->save_if_input) {
+            D("cannot intercept again");
+            return EINVAL; /* already set */
+        }
+        na->save_if_input = ifp->if_input;
+        ifp->if_input = generic_netmap_rx_handler;
+    } else {
+        if (!na->save_if_input){
+            D("cannot restore");
+            return EINVAL;  /* not saved */
+        }
+        ifp->if_input = na->save_if_input;
+        na->save_if_input = NULL;
+    }
+
+    return 0;
+}
+
 /* Transmit routine used by generic_netmap_txsync(). Returns 0 on success
    and -1 on error (which may be packet drops or other errors). */
 int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m,

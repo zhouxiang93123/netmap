@@ -61,6 +61,37 @@ void netmap_mitigation_cleanup(struct netmap_adapter *na)
     hrtimer_cancel(&na->mit_timer);
 }
 
+/*
+ * This handler is registered within the attached net_device
+ * in the Linux RX subsystem, so that every mbuf passed up by
+ * the driver can be stolen to the network stack.
+ * Stolen packets are put in a queue where the
+ * generic_netmap_rxsync() callback can extract them.
+ */
+rx_handler_result_t linux_generic_rx_handler(struct mbuf **pm)
+{
+    generic_rx_handler((*pm)->dev, *pm);
+
+    return RX_HANDLER_CONSUMED;
+}
+
+/* Ask the Linux RX subsystem to intercept (or stop intercepting)
+ * the packets incoming from the interface attached to 'na'.
+ */
+int
+netmap_catch_rx(struct netmap_adapter *na, int intercept)
+{
+    struct ifnet *ifp = na->ifp;
+
+    if (intercept) {
+        return netdev_rx_handler_register(na->ifp,
+                &linux_generic_rx_handler, na);
+    } else {
+        netdev_rx_handler_unregister(ifp);
+        return 0;
+    }
+}
+
 /* Transmit routine used by generic_netmap_txsync(). Returns 0 on success
    and -1 on error (which may be packet drops or other errors). */
 int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m,

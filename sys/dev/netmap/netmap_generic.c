@@ -74,7 +74,6 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257666 2013-11-05 01:06:22Z lui
 #include <net/if_var.h>
 #include <machine/bus.h>        /* bus_dmamap_* in netmap_kern.h */
 
-typedef int rx_handler_result_t;	// XXX
 #define rtnl_lock() D("rtnl_lock called");
 #define rtnl_unlock() D("rtnl_lock called");
 
@@ -205,43 +204,6 @@ netmap_generic_irq(struct ifnet *ifp, u_int q, u_int *work_done)
         return netmap_common_irq(ifp, q, work_done);
 }
 
-
-rx_handler_result_t generic_netmap_rx_handler(struct mbuf **pm);
-
-/*
- * second argument is non-zero to intercept, 0 to restore
- */
-static int
-netmap_catch_rx(struct netmap_adapter *na, int intercept)
-{
-	struct ifnet *ifp = na->ifp;
-
-#ifdef __FreeBSD__
-	if (intercept) {
-		if (na->save_if_input) {
-			D("cannot intercept again");
-			return EINVAL; /* already set */
-		}
-		na->save_if_input = ifp->if_input;
-		ifp->if_input = generic_netmap_rx_handler;
-	} else {
-		if (!na->save_if_input){
-			D("cannot restore");
-			return EINVAL;  /* not saved */
-		}
-		ifp->if_input = na->save_if_input;
-		na->save_if_input = NULL;
-	}
-#else /* linux */
-	if (intercept) {
-		return netdev_rx_handler_register(na->ifp,
-			&generic_netmap_rx_handler, na);
-	} else {
-		netdev_rx_handler_unregister(ifp);
-		return 0;
-	}
-#endif /* linux */
-}
 
 /*
  * The generic driver calls netmap once per packet.
@@ -543,7 +505,7 @@ generic_set_tx_event(struct netmap_kring *kring, u_int j)
     m = kring->tx_pool[e];
     if (unlikely(!m)) {
         D("ERROR: This should never happen");
-        return -EINVAL;
+        return;
     }
     kring->tx_pool[e] = NULL;
     //skb_shinfo(m)->destructor_arg = NULL + e;
@@ -654,8 +616,6 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
     return 0;
 }
 
-#ifdef linux
-
 /*
  * This handler is registered within the attached net_device
  * in the Linux RX subsystem, so that every mbuf passed up by
@@ -665,17 +625,17 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
  *
  * The FreeBSD equivalent is ether_input(m->m_pkthdr.rcvif, m)
  */
-rx_handler_result_t generic_netmap_rx_handler(struct mbuf **pm)
+void generic_rx_handler(struct ifnet *ifp, struct mbuf *m)
 {
-    struct netmap_adapter *na = NA((*pm)->dev);
+    struct netmap_adapter *na = NA(ifp);
     uint work_done;
     uint rr = 0;
 
     /* limit the size of the queue */
     if (unlikely(mbq_len(&na->rx_rings[rr].rx_queue) > 1024)) {
-        m_freem(*pm);
+        m_freem(m);
     } else {
-        mbq_safe_enqueue(&na->rx_rings[rr].rx_queue, *pm);
+        mbq_safe_enqueue(&na->rx_rings[rr].rx_queue, m);
     }
 
     if (netmap_generic_mit < 32768) {
@@ -695,10 +655,7 @@ rx_handler_result_t generic_netmap_rx_handler(struct mbuf **pm)
             netmap_mitigation_start(na);
         }
     }
-
-    return RX_HANDLER_CONSUMED;
 }
-#endif /* linux */
 
 /*
  * generic_netmap_rxsync() extracts mbufs from the queue filled by
