@@ -24,7 +24,13 @@
  */
 
 #include <sys/types.h>
+#include <sys/module.h>
 #include <sys/errno.h>
+#include <sys/param.h>  /* defines used in kernel.h */
+#include <sys/kernel.h> /* types used in module initialization */
+#include <sys/conf.h>	/* DEV_MODULE */
+
+
 #include <sys/malloc.h>
 #include <sys/socket.h> /* sockaddrs */
 #include <sys/selinfo.h>
@@ -115,3 +121,38 @@ void netmap_mitigation_cleanup(struct netmap_adapter *na)
 {
 }
 
+
+
+#ifdef __FreeBSD__
+/*
+ * Kernel entry point.
+ *
+ * Initialize/finalize the module and return.
+ *
+ * Return 0 on success, errno on failure.
+ */
+static int
+netmap_loader(__unused struct module *module, int event, __unused void *arg)
+{
+	int error = 0;
+
+	switch (event) {
+	case MOD_LOAD:
+		error = netmap_init();
+		break;
+
+	case MOD_UNLOAD:
+		netmap_fini();
+		break;
+
+	default:
+		error = EOPNOTSUPP;
+		break;
+	}
+
+	return (error);
+}
+
+
+DEV_MODULE(netmap, netmap_loader, NULL);
+#endif /* __FreeBSD__ */

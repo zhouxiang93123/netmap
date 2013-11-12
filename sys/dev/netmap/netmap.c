@@ -3838,38 +3838,3 @@ netmap_fini(void)
 	NMG_LOCK_DESTROY();
 	printf("netmap: unloaded module.\n");
 }
-
-
-#ifdef __FreeBSD__
-/*
- * Kernel entry point.
- *
- * Initialize/finalize the module and return.
- *
- * Return 0 on success, errno on failure.
- */
-static int
-netmap_loader(__unused struct module *module, int event, __unused void *arg)
-{
-	int error = 0;
-
-	switch (event) {
-	case MOD_LOAD:
-		error = netmap_init();
-		break;
-
-	case MOD_UNLOAD:
-		netmap_fini();
-		break;
-
-	default:
-		error = EOPNOTSUPP;
-		break;
-	}
-
-	return (error);
-}
-
-
-DEV_MODULE(netmap, netmap_loader, NULL);
-#endif /* __FreeBSD__ */
