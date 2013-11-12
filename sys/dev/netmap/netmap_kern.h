@@ -41,6 +41,7 @@
 #define	NM_LOCK_T	struct mtx
 #define	NM_SELINFO_T	struct selinfo
 #define	MBUF_LEN(m)	((m)->m_pkthdr.len)
+#define	MBUF_IFP(m)	((m)->m_pkthdr.rcvif)
 #define	NM_SEND_UP(ifp, m)	((ifp)->if_input)(ifp, m)
 
 #define NM_ATOMIC_T	volatile int
@@ -56,6 +57,7 @@ struct hrtimer {
 #define	NM_LOCK_T	safe_spinlock_t	// see bsd_glue.h
 #define	NM_SELINFO_T	wait_queue_head_t
 #define	MBUF_LEN(m)	((m)->len)
+#define	MBUF_IFP(m)	((m)->dev)
 #define	NM_SEND_UP(ifp, m)	netif_rx(m)
 
 #define NM_ATOMIC_T	volatile long unsigned int
