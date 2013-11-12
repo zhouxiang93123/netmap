@@ -414,7 +414,7 @@ static void
 generic_mbuf_destructor(struct mbuf *m)
 {
     ND("Tx irq (%p)", arg);
-    netmap_generic_irq(m->m_pkthdr.rcvif, skb_get_queue_mapping(m), NULL);
+    netmap_generic_irq(MBUF_IFP(m), skb_get_queue_mapping(m), NULL);
     IFRATE(rate_ctx.new.txirq++);
 }
 
@@ -687,6 +687,7 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
         /* The k index in the netmap ring prevents ntc from bumping into hwcur. */
         k = (kring->nr_hwcur) ? kring->nr_hwcur-1 : lim;
         while (j != k) {
+	    int len;
             void *addr = NMB(&ring->slot[j]);
 
             if (addr == netmap_buffer_base) { /* Bad buffer */
@@ -695,8 +696,9 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
             m = mbq_safe_dequeue(&kring->rx_queue);
             if (!m)
                 break;
-            m_copydata(m, 0, m->m_len, addr);
-            ring->slot[j].len = m->m_len;
+	    len = MBUF_LEN(m);
+            m_copydata(m, 0, len, addr);
+            ring->slot[j].len = len;
             ring->slot[j].flags = slot_flags;
             m_freem(m);
             if (unlikely(j++ == lim))
