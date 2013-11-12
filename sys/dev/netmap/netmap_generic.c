@@ -79,7 +79,6 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257666 2013-11-05 01:06:22Z lui
 #include <dev/netmap/netmap_kern.h>
 #include <dev/netmap/netmap_mem2.h>
 
-typedef unsigned int uint;
 #define rtnl_lock() D("rtnl_lock called");
 #define rtnl_unlock() D("rtnl_lock called");
 #define skb_get_queue_mapping(m)	0
@@ -227,7 +226,7 @@ enum hrtimer_restart
 generic_timer_handler(struct hrtimer *t)
 {
     struct netmap_adapter *na = container_of(t, struct netmap_adapter, mit_timer);
-    uint work_done;
+    u_int work_done;
 
     if (!na->mit_pending) {
         return HRTIMER_NORESTART;
@@ -629,8 +628,8 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 void generic_rx_handler(struct ifnet *ifp, struct mbuf *m)
 {
     struct netmap_adapter *na = NA(ifp);
-    uint work_done;
-    uint rr = 0;
+    u_int work_done;
+    u_int rr = 0;
 
     /* limit the size of the queue */
     if (unlikely(mbq_len(&na->rx_rings[rr].rx_queue) > 1024)) {
@@ -759,7 +758,7 @@ generic_netmap_attach(struct ifnet *ifp)
 {
     struct netmap_adapter na;
     int retval;
-    uint num_tx_desc, num_rx_desc;
+    u_int num_tx_desc, num_rx_desc;
 
     num_tx_desc = num_rx_desc = 256; /* starting point */
 
