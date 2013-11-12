@@ -39,6 +39,12 @@
 #define unlikely(x)	__builtin_expect((long)!!(x), 0L)
 
 #define	NM_LOCK_T	struct mtx
+#define	NMG_LOCK_T	struct mtx
+
+extern NMG_LOCK_T	netmap_global_lock;
+#define NMG_LOCK()	mtx_lock(&netmap_global_lock)
+#define NMG_UNLOCK()	mtx_unlock(&netmap_global_lock)
+
 #define	NM_SELINFO_T	struct selinfo
 #define	MBUF_LEN(m)	((m)->m_pkthdr.len)
 #define	MBUF_IFP(m)	((m)->m_pkthdr.rcvif)

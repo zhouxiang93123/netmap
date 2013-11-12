@@ -185,11 +185,14 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z gle
  * (last close or last munmap)
  */
 
+#if 0 // temporarily defined in netmap_kern.h
 #define NMG_LOCK_T		struct mtx
-#define NMG_LOCK_INIT()		mtx_init(&netmap_global_lock, "netmap global lock", NULL, MTX_DEF)
-#define NMG_LOCK_DESTROY()	mtx_destroy(&netmap_global_lock)
 #define NMG_LOCK()		mtx_lock(&netmap_global_lock)
 #define NMG_UNLOCK()		mtx_unlock(&netmap_global_lock)
+#endif
+
+#define NMG_LOCK_INIT()		mtx_init(&netmap_global_lock, "netmap global lock", NULL, MTX_DEF)
+#define NMG_LOCK_DESTROY()	mtx_destroy(&netmap_global_lock)
 #define NMG_LOCK_ASSERT()	mtx_assert(&netmap_global_lock, MA_OWNED)
 
 
@@ -198,6 +201,7 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z gle
 #define NM_ATOMIC_TEST_AND_SET(p)	(!atomic_cmpset_acq_int((p), 0, 1))
 #define NM_ATOMIC_CLEAR(p)		atomic_store_rel_int((p), 0)
 
+extern struct cdevsw netmap_cdevsw;
 
 #elif defined(linux)
 
@@ -208,7 +212,7 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z gle
 #define NMG_LOCK_INIT()		sema_init(&netmap_global_lock, 1)
 #define NMG_LOCK_DESTROY()	
 #define NMG_LOCK()		down(&netmap_global_lock)
-#define NMG_UNLOCK()		up(&netmap_global_lock)
+define NMG_UNLOCK()		up(&netmap_global_lock)
 #define NMG_LOCK_ASSERT()	//	XXX to be completed
 
 
@@ -1131,190 +1135,6 @@ netmap_dtor(void *data)
 }
 
 
-#ifdef __FreeBSD__
-
-/*
- * In order to track whether pages are still mapped, we hook into
- * the standard cdev_pager and intercept the constructor and
- * destructor.
- */
-
-struct netmap_vm_handle_t {
-	struct cdev 		*dev;
-	struct netmap_priv_d	*priv;
-};
-
-static int
-netmap_dev_pager_ctor(void *handle, vm_ooffset_t size, vm_prot_t prot,
-    vm_ooffset_t foff, struct ucred *cred, u_short *color)
-{
-	struct netmap_vm_handle_t *vmh = handle;
-	D("handle %p size %jd prot %d foff %jd",
-		handle, (intmax_t)size, prot, (intmax_t)foff);
-	dev_ref(vmh->dev);	
-	return 0;	
-}
-
-
-static void
-netmap_dev_pager_dtor(void *handle)
-{
-	struct netmap_vm_handle_t *vmh = handle;
-	struct cdev *dev = vmh->dev;
-	struct netmap_priv_d *priv = vmh->priv;
-	D("handle %p", handle);
-	netmap_dtor(priv);
-	free(vmh, M_DEVBUF);
-	dev_rel(dev);
-}
-
-static int
-netmap_dev_pager_fault(vm_object_t object, vm_ooffset_t offset,
-	int prot, vm_page_t *mres)
-{
-	struct netmap_vm_handle_t *vmh = object->handle;
-	struct netmap_priv_d *priv = vmh->priv;
-	vm_paddr_t paddr;
-	vm_page_t page;
-	vm_memattr_t memattr;
-	vm_pindex_t pidx;
-
-	ND("object %p offset %jd prot %d mres %p",
-			object, (intmax_t)offset, prot, mres);
-	memattr = object->memattr;
-	pidx = OFF_TO_IDX(offset);
-	paddr = netmap_mem_ofstophys(priv->np_mref, offset);
-	if (paddr == 0)
-		return VM_PAGER_FAIL;
-
-	if (((*mres)->flags & PG_FICTITIOUS) != 0) {
-		/*
-		 * If the passed in result page is a fake page, update it with
-		 * the new physical address.
-		 */
-		page = *mres;
-		vm_page_updatefake(page, paddr, memattr);
-	} else {
-		/*
-		 * Replace the passed in reqpage page with our own fake page and
-		 * free up the all of the original pages.
-		 */
-#ifndef VM_OBJECT_WUNLOCK	/* FreeBSD < 10.x */
-#define VM_OBJECT_WUNLOCK VM_OBJECT_UNLOCK
-#define VM_OBJECT_WLOCK	VM_OBJECT_LOCK
-#endif /* VM_OBJECT_WUNLOCK */
-
-		VM_OBJECT_WUNLOCK(object);
-		page = vm_page_getfake(paddr, memattr);
-		VM_OBJECT_WLOCK(object);
-		vm_page_lock(*mres);
-		vm_page_free(*mres);
-		vm_page_unlock(*mres);
-		*mres = page;
-		vm_page_insert(page, object, pidx);
-	}
-	page->valid = VM_PAGE_BITS_ALL;
-	return (VM_PAGER_OK);
-}
-
-
-static struct cdev_pager_ops netmap_cdev_pager_ops = {
-        .cdev_pg_ctor = netmap_dev_pager_ctor,
-        .cdev_pg_dtor = netmap_dev_pager_dtor,
-        .cdev_pg_fault = netmap_dev_pager_fault,
-};
-
-
-static int
-netmap_mmap_single(struct cdev *cdev, vm_ooffset_t *foff,
-	vm_size_t objsize,  vm_object_t *objp, int prot)
-{
-	int error;
-	struct netmap_vm_handle_t *vmh;
-	struct netmap_priv_d *priv;
-	vm_object_t obj;
-
-	D("cdev %p foff %jd size %jd objp %p prot %d", cdev,
-	    (intmax_t )*foff, (intmax_t )objsize, objp, prot);
-	
-	vmh = malloc(sizeof(struct netmap_vm_handle_t), M_DEVBUF,
-			      M_NOWAIT | M_ZERO);
-	if (vmh == NULL)
-		return ENOMEM;
-	vmh->dev = cdev;
-
-	NMG_LOCK();
-	error = devfs_get_cdevpriv((void**)&priv);
-	if (error)
-		goto err_unlock;
-	vmh->priv = priv;
-	priv->np_refcount++;
-	NMG_UNLOCK();
-
-	error = netmap_get_memory(priv);
-	if (error)
-		goto err_deref;
-
-	obj = cdev_pager_allocate(vmh, OBJT_DEVICE, 
-		&netmap_cdev_pager_ops, objsize, prot,
-		*foff, NULL);
-	if (obj == NULL) {
-		D("cdev_pager_allocate failed");
-		error = EINVAL;
-		goto err_deref;
-	}
-		
-	*objp = obj;
-	return 0;
-
-err_deref:
-	NMG_LOCK();
-	priv->np_refcount--;
-err_unlock:
-	NMG_UNLOCK();
-// err:
-	free(vmh, M_DEVBUF);
-	return error;
-}
-
-
-// XXX can we remove this ?
-static int
-netmap_close(struct cdev *dev, int fflag, int devtype, struct thread *td)
-{
-	if (netmap_verbose)
-		D("dev %p fflag 0x%x devtype %d td %p",
-			dev, fflag, devtype, td);
-	return 0;
-}
-
-
-static int
-netmap_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
-{
-	struct netmap_priv_d *priv;
-	int error;
-
-	(void)dev;
-	(void)oflags;
-	(void)devtype;
-	(void)td;
-
-	// XXX wait or nowait ?
-	priv = malloc(sizeof(struct netmap_priv_d), M_DEVBUF,
-			      M_NOWAIT | M_ZERO);
-	if (priv == NULL)
-		return ENOMEM;
-
-	error = devfs_set_cdevpriv(priv, netmap_dtor);
-	if (error)
-	        return error;
-
-	priv->np_refcount = 1;
-
-	return 0;
-}
-#endif /* __FreeBSD__ */
 
 
 /*
@@ -3229,17 +3049,6 @@ netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
         return netmap_common_irq(ifp, q, work_done);
 }
 
-#ifdef __FreeBSD__
-static struct cdevsw netmap_cdevsw = {
-	.d_version = D_VERSION,
-	.d_name = "netmap",
-	.d_open = netmap_open,
-	.d_mmap_single = netmap_mmap_single,
-	.d_ioctl = netmap_ioctl,
-	.d_poll = netmap_poll,
-	.d_close = netmap_close,
-};
-#endif /* __FreeBSD__ */
 
 /*
  *---- support for virtual bridge -----
