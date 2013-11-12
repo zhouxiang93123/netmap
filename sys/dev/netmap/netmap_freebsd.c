@@ -97,18 +97,21 @@ int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m,
 int
 generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx)
 {
+    D("called");
     return 0;
 }
 
 void
 generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq)
 {
+    D("called");
     *txq = 1;
     *rxq = 1;
 }
 
 void netmap_mitigation_init(struct netmap_adapter *na)
 {
+    D("called");
     na->mit_pending = 0;
 }
 
@@ -116,19 +119,23 @@ extern unsigned int netmap_generic_mit;
 
 void netmap_mitigation_start(struct netmap_adapter *na)
 {
+    D("called");
 }
 
 void netmap_mitigation_restart(struct netmap_adapter *na)
 {
+    D("called");
 }
 
 int netmap_mitigation_active(struct netmap_adapter *na)
 {
+    D("called");
     return 0;
 }
 
 void netmap_mitigation_cleanup(struct netmap_adapter *na)
 {
+    D("called");
 }
 
 

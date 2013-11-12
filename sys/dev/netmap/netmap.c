@@ -133,34 +133,21 @@ ports attached to the switch)
 __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z glebius $");
 
 #include <sys/types.h>
-#include <sys/module.h>
 #include <sys/errno.h>
 #include <sys/param.h>	/* defines used in kernel.h */
-#include <sys/jail.h>
 #include <sys/kernel.h>	/* types used in module initialization */
-#include <sys/conf.h>	/* cdevsw struct */
-#include <sys/uio.h>	/* uio struct */
+#include <sys/conf.h>	/* cdevsw struct, UID, GID */
 #include <sys/sockio.h>
 #include <sys/socketvar.h>	/* struct socket */
 #include <sys/malloc.h>
-#include <sys/mman.h>	/* PROT_EXEC */
 #include <sys/poll.h>
-#include <sys/proc.h>
 #include <sys/rwlock.h>
-#include <vm/vm.h>	/* vtophys */
-#include <vm/pmap.h>	/* vtophys */
-#include <vm/vm_param.h>
-#include <vm/vm_object.h>
-#include <vm/vm_page.h>
-#include <vm/vm_pager.h>
-#include <vm/uma.h>
 #include <sys/socket.h> /* sockaddrs */
 #include <sys/selinfo.h>
 #include <sys/sysctl.h>
 #include <net/if.h>
 #include <net/if_var.h>
 #include <net/bpf.h>		/* BIOCIMMEDIATE */
-#include <net/vnet.h>
 #include <machine/bus.h>	/* bus_dmamap_* */
 #include <sys/endian.h>
 #include <sys/refcount.h>

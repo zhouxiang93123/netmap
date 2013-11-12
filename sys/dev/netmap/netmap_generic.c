@@ -322,7 +322,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         *na->generic_ndo_p = *ifp->netdev_ops;  /* Copy */
         na->generic_ndo_p->ndo_select_queue = &generic_ndo_select_queue;
         ifp->netdev_ops = na->generic_ndo_p;
-#else
+#else /* __FreeBSD__ */
 	// XXX do the same for FreeBSD
 #endif /* __FreeBSD__ */
         rtnl_unlock();
@@ -346,9 +346,9 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
 	/* Restore the netdev_ops. */
 #ifdef linux
         ifp->netdev_ops = (void *)na->if_transmit;
-#else
+#else /* __FreeBSD__ */
 	// XXX do the same for freebsd
-#endif
+#endif /* __FreeBSD__ */
 
 	/* Do not intercept packets on the rx path. */
         netmap_catch_rx(na, 0);
