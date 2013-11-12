@@ -44,7 +44,7 @@ netmap_catch_rx(struct netmap_adapter *na, int intercept)
             return EINVAL; /* already set */
         }
         na->save_if_input = ifp->if_input;
-        ifp->if_input = generic_netmap_rx_handler;
+        ifp->if_input = generic_rx_handler;
     } else {
         if (!na->save_if_input){
             D("cannot restore");
