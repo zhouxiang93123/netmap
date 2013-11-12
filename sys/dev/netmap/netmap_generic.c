@@ -74,8 +74,16 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257666 2013-11-05 01:06:22Z lui
 #include <net/if_var.h>
 #include <machine/bus.h>        /* bus_dmamap_* in netmap_kern.h */
 
+// XXX temporary - D() defined here
+#include <net/netmap.h>
+#include <dev/netmap/netmap_kern.h>
+#include <dev/netmap/netmap_mem2.h>
+
+typedef unsigned int uint;
 #define rtnl_lock() D("rtnl_lock called");
 #define rtnl_unlock() D("rtnl_lock called");
+#define skb_get_queue_mapping(m)	0
+#define smp_mb()
 
 /*
  * mbuf wrappers
@@ -186,7 +194,6 @@ static struct rate_context rate_ctx;
 /* =============== GENERIC NETMAP ADAPTER SUPPORT ================= */
 #define GENERIC_BUF_SIZE        netmap_buf_size    /* Size of the mbufs in the Tx pool. */
 
-#ifdef linux
 
 /*
  * We cannot use netmap_rx_irq because the generic adapter has
@@ -205,6 +212,7 @@ netmap_generic_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 }
 
 
+#ifdef linux
 /*
  * The generic driver calls netmap once per packet.
  * This is inefficient so we implement a mitigation mechanism,
@@ -403,7 +411,6 @@ free_mbufs:
 #endif /* linux */
 }
 
-#ifdef linux
 /*
  * Callback invoked when the device driver frees an mbuf used
  * by netmap to transmit a packet. This usually happens when
@@ -413,7 +420,7 @@ static void
 generic_mbuf_destructor(struct mbuf *m)
 {
     ND("Tx irq (%p)", arg);
-    netmap_generic_irq(m->dev, skb_get_queue_mapping(m), NULL);
+    netmap_generic_irq(m->m_pkthdr.rcvif, skb_get_queue_mapping(m), NULL);
     IFRATE(rate_ctx.new.txirq++);
 }
 
@@ -509,13 +516,13 @@ generic_set_tx_event(struct netmap_kring *kring, u_int j)
     }
     kring->tx_pool[e] = NULL;
     //skb_shinfo(m)->destructor_arg = NULL + e;
-    m->destructor = &generic_mbuf_destructor;
+    m->destructor = (void *)&generic_mbuf_destructor; // XXX
     // XXX wmb() ?
     /* Decrement the refcount an free it if we have the last one. */
     m_freem(m);
     smp_mb();
 }
-#endif /* linux */
+
 
 /*
  * generic_netmap_txsync() transforms netmap buffers into mbufs
@@ -694,8 +701,8 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
             m = mbq_safe_dequeue(&kring->rx_queue);
             if (!m)
                 break;
-            m_copydata(m, 0, m->len, addr);
-            ring->slot[j].len = m->len;
+            m_copydata(m, 0, m->m_len, addr);
+            ring->slot[j].len = m->m_len;
             ring->slot[j].flags = slot_flags;
             m_freem(m);
             if (unlikely(j++ == lim))
