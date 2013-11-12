@@ -194,7 +194,6 @@ static struct rate_context rate_ctx;
 /* =============== GENERIC NETMAP ADAPTER SUPPORT ================= */
 #define GENERIC_BUF_SIZE        netmap_buf_size    /* Size of the mbufs in the Tx pool. */
 
-
 /*
  * We cannot use netmap_rx_irq because the generic adapter has
  * NAF_SKIP_INTR set. We might call directly netmap_common_irq()
@@ -255,14 +254,6 @@ static u16 generic_ndo_select_queue(struct ifnet *ifp, struct mbuf *m)
 /* Enable/disable netmap mode for a generic network interface. */
 int generic_netmap_register(struct ifnet *ifp, int enable)
 {
-#ifdef __FreeBSD__
-    if (enable) {
-	return EINVAL;
-    } else {
-        return 0;
-    }
-#else /* linux */
-
     struct netmap_adapter *na = NA(ifp);
     struct mbuf *m;
     int error;
@@ -279,8 +270,8 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
 #endif /* REG_RESET */
 
     if (enable) { /* Enable netmap mode. */
-        /* Initialize the rx queue, as generic_netmap_rx_handler() can
-	 * be called as soon as netdev_rx_handler_register() returns.
+        /* Initialize the rx queue, as generic_rx_handler() can
+	 * be called as soon as netmap_catch_rx() returns.
 	 */
         for (r=0; r<na->num_rx_rings; r++) {
             mbq_safe_init(&na->rx_rings[r].rx_queue);
@@ -332,7 +323,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         na->generic_ndo_p->ndo_select_queue = &generic_ndo_select_queue;
         ifp->netdev_ops = na->generic_ndo_p;
 #else
-	XXX do the same for FreeBSD
+	// XXX do the same for FreeBSD
 #endif /* __FreeBSD__ */
         rtnl_unlock();
 
@@ -353,7 +344,11 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
 
         ifp->if_capenable &= ~IFCAP_NETMAP;
 	/* Restore the netdev_ops. */
+#ifdef linux
         ifp->netdev_ops = (void *)na->if_transmit;
+#else
+	// XXX do the same for freebsd
+#endif
 
 	/* Do not intercept packets on the rx path. */
         netmap_catch_rx(na, 0);
@@ -408,7 +403,6 @@ free_mbufs:
     }
 
     return error;
-#endif /* linux */
 }
 
 /*
@@ -477,16 +471,17 @@ static inline u_int
 generic_tx_event_middle(struct netmap_kring *kring, u_int j)
 {
     u_int n = kring->nkr_num_slots;
-    u_int e = (kring->nr_ntc + ((((n + j) - kring->nr_ntc) % (n)) / 2)) % (n);
-#if 0
-    if (j >= ntc)
-	return (j+ntc)/2
-    else {
-	x = (j + ntc +n)/2;
-	if (x >= n) x -= n;
-	return x;
+    u_int ntc = kring->nr_ntc;
+    u_int e;
+
+    if (j >= ntc) {
+	e = (j + ntc) / 2;
+    } else {
+	e = (j + n + ntc) / 2;
+	if (e >= n) {
+            e -= n;
+        }
     }
-#endif
 
     if (unlikely(e >= n)) {
         D("This cannot happen");
@@ -624,13 +619,12 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 }
 
 /*
- * This handler is registered within the attached net_device
- * in the Linux RX subsystem, so that every mbuf passed up by
+ * This handler is registered (through netmap_catch_rx())
+ * within the attached network interface
+ * in the RX subsystem, so that every mbuf passed up by
  * the driver can be stolen to the network stack.
  * Stolen packets are put in a queue where the
  * generic_netmap_rxsync() callback can extract them.
- *
- * The FreeBSD equivalent is ether_input(m->m_pkthdr.rcvif, m)
  */
 void generic_rx_handler(struct ifnet *ifp, struct mbuf *m)
 {

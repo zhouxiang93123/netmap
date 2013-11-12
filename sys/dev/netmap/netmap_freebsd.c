@@ -23,6 +23,15 @@
  * SUCH DAMAGE.
  */
 
+#include <sys/types.h>
+#include <sys/errno.h>
+#include <sys/malloc.h>
+#include <sys/socket.h> /* sockaddrs */
+#include <sys/selinfo.h>
+#include <net/if.h>
+#include <net/if_var.h>
+#include <machine/bus.h>        /* bus_dmamap_* */
+
 #include <net/netmap.h>
 #include <dev/netmap/netmap_kern.h>
 #include <dev/netmap/netmap_mem2.h>
@@ -44,7 +53,7 @@ netmap_catch_rx(struct netmap_adapter *na, int intercept)
             return EINVAL; /* already set */
         }
         na->save_if_input = ifp->if_input;
-        ifp->if_input = generic_netmap_rx_handler;
+        ifp->if_input = generic_rx_handler;
     } else {
         if (!na->save_if_input){
             D("cannot restore");
