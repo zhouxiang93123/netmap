@@ -107,6 +107,7 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257666 2013-11-05 01:06:22Z lui
 #else /* linux */
 
 #include "bsd_glue.h"
+#define SET_MBUF_DESTRUCTOR(m, f) m->destructor = (void *)&f
 
 #include <linux/rtnetlink.h>    /* rtnl_[un]lock() */
 #include <linux/ethtool.h>      /* struct ethtool_ops, get_ringparam */
