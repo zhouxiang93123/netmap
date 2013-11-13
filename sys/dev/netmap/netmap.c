@@ -199,7 +199,7 @@ extern struct cdevsw netmap_cdevsw;
 #define NMG_LOCK_INIT()		sema_init(&netmap_global_lock, 1)
 #define NMG_LOCK_DESTROY()	
 #define NMG_LOCK()		down(&netmap_global_lock)
-define NMG_UNLOCK()		up(&netmap_global_lock)
+#define NMG_UNLOCK()		up(&netmap_global_lock)
 #define NMG_LOCK_ASSERT()	//	XXX to be completed
 
 
