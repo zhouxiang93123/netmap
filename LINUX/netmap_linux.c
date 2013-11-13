@@ -92,6 +92,34 @@ netmap_catch_rx(struct netmap_adapter *na, int intercept)
     }
 }
 
+
+static u16 generic_ndo_select_queue(struct ifnet *ifp, struct mbuf *m)
+{
+    return skb_get_queue_mapping(m);
+}
+
+/* Must be called under rtnl. */
+void netmap_catch_packet_steering(struct netmap_adapter *na, int enable)
+{
+    struct ifnet *ifp = na->ifp;
+
+    if (enable) {
+        /*
+         * Save the old pointer to the netdev_op
+         * create an updated netdev ops replacing the
+         * ndo_select_queue function with our custom one,
+         * and make the driver use it.
+         */
+        na->if_transmit = (void *)ifp->netdev_ops;
+        *na->generic_ndo_p = *ifp->netdev_ops;  /* Copy */
+        na->generic_ndo_p->ndo_select_queue = &generic_ndo_select_queue;
+        ifp->netdev_ops = na->generic_ndo_p;
+    } else {
+	/* Restore the original netdev_ops. */
+        ifp->netdev_ops = (void *)na->if_transmit;
+    }
+}
+
 /* Transmit routine used by generic_netmap_txsync(). Returns 0 on success
    and -1 on error (which may be packet drops or other errors). */
 int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m,

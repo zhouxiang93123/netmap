@@ -550,6 +550,7 @@ void netmap_dtor(void *data);
 int netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td);
 int netmap_catch_rx(struct netmap_adapter *na, int intercept);
 void generic_rx_handler(struct ifnet *ifp, struct mbuf *m);;
+void netmap_catch_packet_steering(struct netmap_adapter *na, int enable);
 
 /* netmap_mitigation API */
 void netmap_mitigation_init(struct netmap_adapter *na);

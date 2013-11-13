@@ -243,11 +243,6 @@ generic_timer_handler(struct hrtimer *t)
 
     return HRTIMER_RESTART;
 }
-
-static u16 generic_ndo_select_queue(struct ifnet *ifp, struct mbuf *m)
-{
-    return skb_get_queue_mapping(m);
-}
 #endif /* linux */
 
 /* Enable/disable netmap mode for a generic network interface. */
@@ -310,20 +305,10 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
             goto register_handler;
         }
         ifp->if_capenable |= IFCAP_NETMAP;
-#ifdef linux
-	/*
-	 * Save the old pointer to the netdev_op
-	 * create an updated netdev ops replacing the
-	 * ndo_select_queue function with our custom one,
-	 * and make the driver use it.
-	 */
-        na->if_transmit = (void *)ifp->netdev_ops;
-        *na->generic_ndo_p = *ifp->netdev_ops;  /* Copy */
-        na->generic_ndo_p->ndo_select_queue = &generic_ndo_select_queue;
-        ifp->netdev_ops = na->generic_ndo_p;
-#else /* __FreeBSD__ */
-	// XXX do the same for FreeBSD
-#endif /* __FreeBSD__ */
+
+        /* Make netmap control the packet steering. */
+        netmap_catch_packet_steering(na, 1);
+
         rtnl_unlock();
 
 #ifdef RATE
@@ -342,12 +327,9 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         rtnl_lock();
 
         ifp->if_capenable &= ~IFCAP_NETMAP;
-	/* Restore the netdev_ops. */
-#ifdef linux
-        ifp->netdev_ops = (void *)na->if_transmit;
-#else /* __FreeBSD__ */
-	// XXX do the same for freebsd
-#endif /* __FreeBSD__ */
+
+        /* Release packet steering control. */
+        netmap_catch_packet_steering(na, 0);
 
 	/* Do not intercept packets on the rx path. */
         netmap_catch_rx(na, 0);

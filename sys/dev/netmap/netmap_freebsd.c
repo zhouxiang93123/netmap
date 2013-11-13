@@ -82,6 +82,13 @@ netmap_catch_rx(struct netmap_adapter *na, int intercept)
     return 0;
 }
 
+void netmap_catch_packet_steering(struct netmap_adapter *na, int enable)
+{
+    if (enable) {
+    } else {
+    }
+}
+
 /* Transmit routine used by generic_netmap_txsync(). Returns 0 on success
    and -1 on error (which may be packet drops or other errors). */
 int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m,
