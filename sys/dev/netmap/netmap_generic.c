@@ -81,38 +81,28 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257666 2013-11-05 01:06:22Z lui
 
 #define rtnl_lock() D("rtnl_lock called");
 #define rtnl_unlock() D("rtnl_lock called");
-#define skb_get_queue_mapping(m)	0
+#define MBUF_TXQ(m)	((m)->m_pkthdr.flowid)
 #define smp_mb()
 
 /*
  * mbuf wrappers
  */
-static struct mbuf *
-netmap_get_mbuf(int len)
-{
-	struct mbuf *m;
 
-	if (len < 0 || len > MCLBYTES) {
-		D("invalid size %d", len);
-		return NULL;
-	}
-	m = m_getcl(M_NOWAIT, MT_DATA, M_PKTHDR);
-
-	if (m == NULL)
-		return m;
-	/* XXX not sure we should set the len now */
-	m->m_len = m->m_pkthdr.len = len;
-	return m;
-}
-
-#define GET_MBUF_REFCNT(m)	(*(m)->m_ext.ref_cnt)
+#define netmap_get_mbuf(len) m_getcl(M_NOWAIT, MT_DATA, M_PKTHDR)
 
 /* mbuf destructor, also need to change the type to EXT_EXTREF
  * and then chain into uma_zfree(zone_clust, m->m_ext.ext_buf)
  * (or reinstall the buffer ?)
  */
+#define SET_MBUF_DESTRUCTOR(m, fn)	do {		\
+		(m)->m_ext.ext_free = (void *)fn;	\
+		(m)->m_ext.ext_type = EXT_EXTREF;	\
+	} while (0)
 
-#define	destructor		m_ext.ext_free
+
+#define GET_MBUF_REFCNT(m)	(*(m)->m_ext.ref_cnt)
+
+
 
 #else /* linux */
 
@@ -395,7 +385,11 @@ static void
 generic_mbuf_destructor(struct mbuf *m)
 {
     ND("Tx irq (%p)", arg);
-    netmap_generic_irq(MBUF_IFP(m), skb_get_queue_mapping(m), NULL);
+    netmap_generic_irq(MBUF_IFP(m), MBUF_TXQ(m), NULL);
+#ifdef __FreeBSD__
+    m->m_ext.ext_type = EXT_CLUSTER;
+    uma_zfree(zone_clust, m->m_ext.ext_buf);
+#endif /* __FreeBSD__ */
     IFRATE(rate_ctx.new.txirq++);
 }
 
@@ -491,8 +485,8 @@ generic_set_tx_event(struct netmap_kring *kring, u_int j)
         return;
     }
     kring->tx_pool[e] = NULL;
-    //skb_shinfo(m)->destructor_arg = NULL + e;
-    m->destructor = (void *)&generic_mbuf_destructor; // XXX
+    SET_MBUF_DESTRUCTOR(m, generic_mbuf_destructor);
+
     // XXX wmb() ?
     /* Decrement the refcount an free it if we have the last one. */
     m_freem(m);
