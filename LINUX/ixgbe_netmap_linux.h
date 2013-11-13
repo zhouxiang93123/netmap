@@ -60,10 +60,10 @@
  * Only called on the first register or the last unregister.
  */
 static int
-ixgbe_netmap_reg(struct ifnet *ifp, int onoff)
+ixgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
-	struct netmap_adapter *na = NA(ifp);
 	int error = 0;
 
 	if (na == NULL)
@@ -118,11 +118,11 @@ ixgbe_netmap_reg(struct ifnet *ifp, int onoff)
  *
  */
 static int
-ixgbe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
+ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct ixgbe_ring *txr = adapter->tx_ring[ring_nr];
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k = ring->cur, l, n, lim = kring->nkr_num_slots - 1;
@@ -313,11 +313,11 @@ ring_reset:
  *
  */
 static int
-ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
+ixgbe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct ixgbe_ring *rxr = adapter->rx_ring[ring_nr];
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;

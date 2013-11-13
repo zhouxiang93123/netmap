@@ -246,9 +246,9 @@ generic_timer_handler(struct hrtimer *t)
 #endif /* linux */
 
 /* Enable/disable netmap mode for a generic network interface. */
-int generic_netmap_register(struct ifnet *ifp, int enable)
+int generic_netmap_register(struct netmap_adapter *na, int enable)
 {
-    struct netmap_adapter *na = NA(ifp);
+    struct ifnet *ifp = na->ifp;
     struct mbuf *m;
     int error;
     int i, r;
@@ -508,9 +508,9 @@ generic_set_tx_event(struct netmap_kring *kring, u_int j)
  * since it implements the TX flow control (and takes some locks).
  */
 static int
-generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
+generic_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
-    struct netmap_adapter *na = NA(ifp);
+    struct ifnet *ifp = na->ifp;
     struct netmap_kring *kring = &na->tx_rings[ring_nr];
     struct netmap_ring *ring = kring->ring;
     u_int j, k, n = 0, lim = kring->nkr_num_slots - 1;
@@ -647,9 +647,8 @@ void generic_rx_handler(struct ifnet *ifp, struct mbuf *m)
  * Access must be protected because the rx handler is asynchronous,
  */
 static int
-generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
+generic_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
-    struct netmap_adapter *na = NA(ifp);
     struct netmap_kring *kring = &na->rx_rings[ring_nr];
     struct netmap_ring *ring = kring->ring;
     u_int j, n, lim = kring->nkr_num_slots - 1;

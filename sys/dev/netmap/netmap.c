@@ -485,7 +485,7 @@ BDG_NMB(struct netmap_mem_d *nmd, struct netmap_slot *slot)
 }
 
 static int bdg_netmap_attach(struct netmap_adapter *);
-static int bdg_netmap_reg(struct ifnet *ifp, int onoff);
+static int bdg_netmap_reg(struct netmap_adapter *na, int onoff);
 int kern_netmap_regif(struct nmreq *nmr);
 
 /*
@@ -796,7 +796,7 @@ netmap_update_config(struct netmap_adapter *na)
 
 	txr = txd = rxr = rxd = 0;
 	if (na->nm_config) {
-		na->nm_config(ifp, &txr, &txd, &rxr, &rxd);
+		na->nm_config(na, &txr, &txd, &rxr, &rxd);
 	} else {
 		/* take whatever we had at init time */
 		txr = na->num_tx_rings;
@@ -849,7 +849,7 @@ netmap_get_memory_locked(struct netmap_priv_d* p)
 	struct netmap_mem_d *nmd;
 	int error = 0;
 
-	if (p->np_ifp == NULL) {
+	if (p->np_na->ifp == NULL) {  // XXX check this check
 		if (!netmap_mmap_unreg)
 			return ENODEV;
 		/* for compatibility with older versions of the API
@@ -858,7 +858,7 @@ netmap_get_memory_locked(struct netmap_priv_d* p)
  		 */
 		nmd = &nm_mem;
 	} else {
-		nmd = NA(p->np_ifp)->nm_mem;
+		nmd = p->np_na->nm_mem;
 	}
 	if (p->np_mref == NULL) {
 		error = netmap_mem_finalize(nmd);
@@ -903,7 +903,7 @@ netmap_drop_memory_locked(struct netmap_priv_d* p)
  * File descriptor's private data destructor.
  *
  * Call nm_register(ifp,0) to stop netmap mode on the interface and
- * revert to normal operation. We expect that np_ifp has not gone.
+ * revert to normal operation. We expect that np_na->ifp has not gone.
  * The second argument is the nifp to work on. In some cases it is
  * not attached yet to the netmap_priv_d so we need to pass it as
  * a separate argument.
@@ -912,8 +912,8 @@ netmap_drop_memory_locked(struct netmap_priv_d* p)
 static void
 netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 {
-	struct ifnet *ifp = priv->np_ifp;
-	struct netmap_adapter *na = NA(ifp);
+	struct netmap_adapter *na = priv->np_na;
+	struct ifnet *ifp = na->ifp;
 
 	NMG_LOCK_ASSERT();
 	na->refcount--;
@@ -936,7 +936,7 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 		 * happens if the close() occurs while a concurrent
 		 * syscall is running.
 		 */
-		na->nm_register(ifp, 0); /* off, clear IFCAP_NETMAP */
+		na->nm_register(na, 0); /* off, clear IFCAP_NETMAP */
 		/* Wake up any sleeping threads. netmap_poll will
 		 * then return POLLERR
 		 * XXX The wake up now must happen during *_down(), when
@@ -1085,7 +1085,8 @@ nm_if_rele(struct ifnet *ifp)
 static int
 netmap_dtor_locked(struct netmap_priv_d *priv)
 {
-	struct ifnet *ifp = priv->np_ifp;
+        struct netmap_adapter *na = priv->np_na;
+	struct ifnet *ifp = na->ifp;
 
 #ifdef __FreeBSD__
 	/*
@@ -1318,13 +1319,15 @@ netmap_txsync_to_host(struct netmap_adapter *na)
  */
 /* SWNA(ifp)->txrings[0] is always NA(ifp)->txrings[NA(ifp)->num_txrings] */
 static int
-netmap_bdg_to_host(struct ifnet *ifp, u_int ring_nr, int flags)
+netmap_bdg_to_host(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
+
 	(void)ring_nr;
 	(void)flags;
 	if (netmap_verbose > 255)
 		RD(5, "sync to host %s ring %d", ifp->if_xname, ring_nr);
-	netmap_txsync_to_host(NA(ifp));
+	netmap_txsync_to_host(na);
 	return 0;
 }
 
@@ -1667,8 +1670,8 @@ netmap_ring_reinit(struct netmap_kring *kring)
 static int
 netmap_set_ringid(struct netmap_priv_d *priv, u_int ringid)
 {
-	struct ifnet *ifp = priv->np_ifp;
-	struct netmap_adapter *na = NA(ifp);
+	struct netmap_adapter *na = priv->np_na;
+	struct ifnet *ifp = na->ifp;
 	u_int i = ringid & NETMAP_RING_MASK;
 	/* initially (np_qfirst == np_qlast) we don't want to lock */
 	u_int lim = na->num_rx_rings;
@@ -1720,7 +1723,7 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 	NMG_LOCK_ASSERT();
 	/* ring configuration may have changed, fetch from the card */
 	netmap_update_config(na);
-	priv->np_ifp = ifp;     /* store the reference */
+	priv->np_na = na;     /* store the reference */
 	error = netmap_set_ringid(priv, ringid);
 	if (error)
 		goto out;
@@ -1769,7 +1772,7 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 		 * do not core lock because the race is harmless here,
 		 * there cannot be any traffic to netmap_transmit()
 		 */
-		error = na->nm_register(ifp, 1); /* mode on */
+		error = na->nm_register(na, 1); /* mode on */
 		// XXX do we need to nm_alloc_bdgfwd() in all cases ?
 		if (!error)
 			error = nm_alloc_bdgfwd(na);
@@ -2167,7 +2170,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		do {
 			u_int memflags;
 
-			if (priv->np_ifp != NULL) {	/* thread already registered */
+			if (priv->np_na != NULL) {	/* thread already registered */
 				error = netmap_set_ringid(priv, nmr->nr_ringid);
 				break;
 			}
@@ -2183,7 +2186,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			nifp = netmap_do_regif(priv, ifp, nmr->nr_ringid, &error);
 			if (!nifp) {    /* reg. failed, release priv and ref */
 				nm_if_rele(ifp);        /* return the refcount */
-				priv->np_ifp = NULL;
+				priv->np_na = NULL;
 				priv->np_nifp = NULL;
 				break;
 			}
@@ -2224,15 +2227,15 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		}
 		rmb(); /* make sure following reads are not from cache */
 
-		ifp = priv->np_ifp;	/* we have a reference */
+                na = priv->np_na;      /* we have a reference */
+                ifp = na->ifp;
 
-		if (ifp == NULL) {
-			D("Internal error: nifp != NULL && ifp == NULL");
+		if (na == NULL) {
+			D("Internal error: nifp != NULL && na == NULL");
 			error = ENXIO;
 			break;
 		}
 
-		na = NA(ifp); /* retrieve netmap adapter */
 		if (priv->np_qfirst == NETMAP_SW_RING) { /* host rings */
 			if (cmd == NIOCTXSYNC)
 				netmap_txsync_to_host(na);
@@ -2258,13 +2261,13 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 					D("pre txsync ring %d cur %d hwcur %d",
 					    i, kring->ring->cur,
 					    kring->nr_hwcur);
-				na->nm_txsync(ifp, i, NAF_FORCE_RECLAIM);
+				na->nm_txsync(na, i, NAF_FORCE_RECLAIM);
 				if (netmap_verbose & NM_VERB_TXSYNC)
 					D("post txsync ring %d cur %d hwcur %d",
 					    i, kring->ring->cur,
 					    kring->nr_hwcur);
 			} else {
-				na->nm_rxsync(ifp, i, NAF_FORCE_READ);
+				na->nm_rxsync(na, i, NAF_FORCE_READ);
 				microtime(&na->rx_rings[i].ring->ts);
 			}
 			nm_kr_put(kring);
@@ -2351,7 +2354,8 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	}
 	rmb(); /* make sure following reads are not from cache */
 
-	ifp = priv->np_ifp;
+        na = priv->np_na;
+        ifp = na->ifp;
 	// XXX check for deleting() ?
 	if ( (ifp->if_capenable & IFCAP_NETMAP) == 0)
 		return POLLERR;
@@ -2360,8 +2364,6 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 		D("device %s events 0x%x", ifp->if_xname, events);
 	want_tx = events & (POLLOUT | POLLWRNORM);
 	want_rx = events & (POLLIN | POLLRDNORM);
-
-	na = NA(ifp); /* retrieve netmap adapter */
 
 	lim_tx = na->num_tx_rings;
 	lim_rx = na->num_rx_rings;
@@ -2467,7 +2469,7 @@ flush_tx:
 			if (netmap_verbose & NM_VERB_TXSYNC)
 				D("send %d on %s %d",
 					kring->ring->cur, ifp->if_xname, i);
-			if (na->nm_txsync(ifp, i, 0))
+			if (na->nm_txsync(na, i, 0))
 				revents |= POLLERR;
 
 			/* Check avail/call selrecord only if called with POLLOUT */
@@ -2514,7 +2516,7 @@ do_retry_rx:
 				netmap_grab_packets(kring, &q, netmap_fwd);
 			}
 
-			if (na->nm_rxsync(ifp, i, 0))
+			if (na->nm_rxsync(na, i, 0))
 				revents |= POLLERR;
 			if (netmap_no_timestamp == 0 ||
 					kring->ring->flags & NR_TIMESTAMP) {
@@ -2940,7 +2942,7 @@ netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
 	/* fetch packets that have arrived.
 	 * XXX maybe do this in a loop ?
 	 */
-	if (na->nm_rxsync(ifp, ring_nr, 0))
+	if (na->nm_rxsync(na, ring_nr, 0))
 		goto put_out;
 	if (kring->nr_hwavail == 0 && netmap_verbose) {
 		D("how strange, interrupt with no packets on %s",
@@ -2957,7 +2959,7 @@ netmap_nic_to_bdg(struct ifnet *ifp, u_int ring_nr)
 	 */
 	ring->cur = j;
 	ring->avail = 0;
-	na->nm_rxsync(ifp, ring_nr, 0);
+	na->nm_rxsync(na, ring_nr, 0);
 
 put_out:
 	nm_kr_put(kring);
@@ -3080,8 +3082,10 @@ nm_bridge_rthash(const uint8_t *addr)
 
 
 static int
-bdg_netmap_reg(struct ifnet *ifp, int onoff)
+bdg_netmap_reg(struct netmap_adapter *na, int onoff)
 {
+        struct ifnet *ifp = na->ifp;
+
 	/* the interface is already attached to the bridge,
 	 * so we only need to toggle IFCAP_NETMAP.
 	 */
@@ -3306,7 +3310,7 @@ retry:
 		 * in case of failure.
 		 */
 		if (nma_is_hw(dst_na)) {
-			dst_na->nm_txsync(dst_ifp, dst_nr, 0);
+			dst_na->nm_txsync(dst_na, dst_nr, 0);
 		}
 		my_start = j = kring->nkr_hwlease;
 		howmany = nm_kr_space(kring, is_vp);
@@ -3436,7 +3440,7 @@ retry:
 				ring->cur = j;
 				/* XXX update avail ? */
 				still_locked = 0;
-				dst_na->nm_txsync(dst_ifp, dst_nr, 0);
+				dst_na->nm_txsync(dst_na, dst_nr, 0);
 				mtx_unlock(&kring->q_lock);
 
 				/* retry to send more packets */
@@ -3464,9 +3468,9 @@ cleanup:
  * we must run nm_bdg_preflush without lock.
  */
 static int
-bdg_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
+bdg_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
-	struct netmap_adapter *na = NA(ifp);
+        struct ifnet *ifp = na->ifp;
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k, lim = kring->nkr_num_slots - 1;
@@ -3506,9 +3510,8 @@ done:
  * writers on the same queue.
  */
 static int
-bdg_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
+bdg_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, lim = kring->nkr_num_slots - 1;

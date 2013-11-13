@@ -338,14 +338,14 @@ struct netmap_adapter {
 
 	NM_LOCK_T core_lock;	/* used if no device lock available */
 
-	int (*nm_register)(struct ifnet *, int onoff);
+	int (*nm_register)(struct netmap_adapter *, int onoff);
 
-	int (*nm_txsync)(struct ifnet *, u_int ring, int flags);
-	int (*nm_rxsync)(struct ifnet *, u_int ring, int flags);
+	int (*nm_txsync)(struct netmap_adapter *, u_int ring, int flags);
+	int (*nm_rxsync)(struct netmap_adapter *, u_int ring, int flags);
 #define NAF_FORCE_READ    1
 #define NAF_FORCE_RECLAIM 2
 	/* return configuration information */
-	int (*nm_config)(struct ifnet *, u_int *txr, u_int *txd,
+	int (*nm_config)(struct netmap_adapter *, u_int *txr, u_int *txd,
 					u_int *rxr, u_int *rxd);
 
 	/*
@@ -796,14 +796,14 @@ void netmap_enable_all_rings(struct ifnet *);
 struct netmap_priv_d {
 	struct netmap_if * volatile np_nifp;	/* netmap if descriptor. */
 
-	struct ifnet	*np_ifp;	/* device for which we hold a ref. */
-	int		np_ringid;	/* from the ioctl */
-	u_int		np_qfirst, np_qlast;	/* range of rings to scan */
-	uint16_t	np_txpoll;
+	struct netmap_adapter	*np_na;
+	int		        np_ringid;	/* from the ioctl */
+	u_int		        np_qfirst, np_qlast;	/* range of rings to scan */
+	uint16_t	        np_txpoll;
 
-	struct netmap_mem_d *np_mref;	/* use with NMG_LOCK held */
+	struct netmap_mem_d     *np_mref;	/* use with NMG_LOCK held */
 #ifdef __FreeBSD__
-	int		np_refcount;	/* use with NMG_LOCK held */
+	int		        np_refcount;	/* use with NMG_LOCK held */
 #endif /* __FreeBSD__ */
 };
 
@@ -812,7 +812,7 @@ struct netmap_priv_d {
  * generic netmap emulation for devices that do not have
  * native netmap support
  */
-int generic_netmap_register(struct ifnet *ifp, int enable);
+int generic_netmap_register(struct netmap_adapter *na, int enable);
 int generic_netmap_attach(struct ifnet *ifp);
 
 
