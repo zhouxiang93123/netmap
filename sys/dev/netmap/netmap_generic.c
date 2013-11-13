@@ -557,11 +557,12 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
             if (unlikely(tx_ret)) {
                 ND("start_xmit failed: err %d [%d,%d,%d]", tx_ret, j, k, kring->nr_hwavail);
                 /*
-                 * No room in the device driver. Request a notification,
+                 * No room for this mbuf in the device driver.
+		 * Request a notification FOR A PREVIOUS MBUF,
                  * then call generic_netmap_tx_clean(kring) to do the
                  * double check and see if we can free more buffers.
                  * If there is space continue, else break;
-                 * XXX the double check is necessary if the problem
+                 * NOTE: the double check is necessary if the problem
                  * occurs in the txsync call after selrecord().
                  * Also, we need some way to tell the caller that not
                  * all buffers were queued onto the device (this was
