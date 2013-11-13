@@ -260,7 +260,7 @@ int netmap_mmap_unreg = 0; /* allow mmap of unregistered fds */
 #define NETMAP_ADMODE_GENERIC       2  /* Force generic netmap adapter. */
 #define NETMAP_ADMODE_BEST          0  /* Priority to native netmap adapter. */
 int netmap_admode = NETMAP_ADMODE_BEST;  /* Choose the netmap adapter to use. */
-int netmap_generic_mit = 100*1000;   /* Generic mitigation interval in nanoseconds. */
+int netmap_generic_mit = 0; // XXX 100*1000;   /* Generic mitigation interval in nanoseconds. */
 
 SYSCTL_INT(_dev_netmap, OID_AUTO, drop, CTLFLAG_RW, &netmap_drop, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, flags, CTLFLAG_RW, &netmap_flags, 0 , "");

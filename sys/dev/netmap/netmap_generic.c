@@ -384,7 +384,8 @@ free_mbufs:
 static void
 generic_mbuf_destructor(struct mbuf *m)
 {
-    ND("Tx irq (%p)", arg);
+    static int count;
+    D("Tx irq (%p) %d", m, count);
     netmap_generic_irq(MBUF_IFP(m), MBUF_TXQ(m), NULL);
 #ifdef __FreeBSD__
     m->m_ext.ext_type = EXT_CLUSTER;
@@ -472,23 +473,26 @@ generic_tx_event_middle(struct netmap_kring *kring, u_int j)
  * There is a race but this is only called within txsync which does
  * a double check.
  */
-static void
+void
 generic_set_tx_event(struct netmap_kring *kring, u_int j)
 {
     struct mbuf *m;
     u_int e = generic_tx_event_middle(kring, j);
 
-    ND("Event at %d", e);
+    D("Event at %d", e);
     m = kring->tx_pool[e];
     if (unlikely(!m)) {
         D("ERROR: This should never happen");
         return;
     }
     kring->tx_pool[e] = NULL;
+    D("refcnt was %p", m->m_ext.ref_cnt);
     SET_MBUF_DESTRUCTOR(m, generic_mbuf_destructor);
 
     // XXX wmb() ?
     /* Decrement the refcount an free it if we have the last one. */
+    D("about to call freem on %p refcnt %p fn %p", m,
+	m->m_ext.ref_cnt, m->m_ext.ext_free);
     m_freem(m);
     smp_mb();
 }
@@ -549,7 +553,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
              */
             tx_ret = generic_xmit_frame(ifp, m, addr, len, ring_nr);
             if (unlikely(tx_ret)) {
-                ND("start_xmit failed: err %d [%d,%d,%d]", tx_ret, j, k, kring->nr_hwavail);
+                D("start_xmit failed: err %d [%d,%d,%d]", tx_ret, j, k, kring->nr_hwavail);
                 /*
                  * No room for this mbuf in the device driver.
 		 * Request a notification FOR A PREVIOUS MBUF,
