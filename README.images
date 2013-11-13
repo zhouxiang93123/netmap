@@ -26,13 +26,12 @@ with VirtualBox, Qemu or other emulators, as an example
 (remove 'accel=kvm' if your host does not support kvm).
 The images do not install anything on the hard disk.
 
-Both systems have preloaded drivers for a number of network
-cards (including the intel 10 Gbit ones) with netmap extensions.
+Both systems have preloaded drivers for a number of network cards
+(including the intel 10 Gbit ones) with netmap extensions.
 The VALE switch is also available (it is part of the netmap module).
-ssh and scp clients are also included, together with a few
-other utilities.
+ssh, scp and a few other utilities are also included.
 
-For the FreeBSD image:
+FreeBSD image:
 
   + the OS boots directly in console mode, you can switch
     between terminals with ALT-Fn.
@@ -42,13 +41,13 @@ For the FreeBSD image:
     	dhclient em0 # or other interface name
     to obtain an IP address and external connectivity.
 
-For the Linux image:
+Linux image:
 
   + in addition to the netmap/VALE modules, the KVM kernel module
     is also preloaded.
 
   + the boot-loader gives you two main options (each with
-    a variant to delay boot in case you have slow devices).
+    a variant to delay boot in case you have slow devices):
 
     + "Boot TinyCore"
       boots in an X11 environment as user 'tc'.
@@ -191,10 +190,9 @@ the total rate achieved.
 NETMAP AND VALE EXPERIMENTS
 ---------------------------
 
-For most experiments with netmap you can use the "pkt-gen"
-command (don't get confused with the Linux in-kernel pktgen),
-which has a large number of options to send and receive
-traffic (also on TAP devices).
+For most experiments with netmap you can use the "pkt-gen" command
+(do not confuse it with the Linux in-kernel pktgen), which has a large
+number of options to send and receive traffic (also on TAP devices).
 
 pkt-gen normally generates UDP traffic for a specific IP address
 and using the brodadcast MAC address
@@ -362,26 +360,24 @@ Examples:
         # On the guest 10.0.0.1 run
             netperf -H10.0.0.2 -tTCP_RR
 
-Note that you can use pkt-gen into a VM only if the emulated
-ethernet device is supported by netmap. The default emulated
-device is "e1000", which has netmap support.
-If you try to run pkt-gen on an unsupported device, pkt-gen
-will not work, reporting that it is unable to register the
-interface.
+Note that you can use pkt-gen into a VM only if the emulated ethernet
+device is supported by netmap. The default emulated device is
+"e1000", which has netmap support.  If you try to run pkt-gen on
+an unsupported device, pkt-gen will not work, reporting that it is
+unable to register the interface.
 
 
 Guest-to-host tests (follows from the previous section)
 -------------------------------------------------------
 
-If you run only a VM on your host machine, you can measure
-the network performance between the VM and the host machine.
-In this case the experiment setup depends on the backend you are
-using.
+If you run only a VM on your host machine, you can measure the
+network performance between the VM and the host machine.  In this
+case the experiment setup depends on the backend you are using.
 
-With the tap backend, you can use the bridge interface "br0" as
-a communication endpoint. You can run normal/raw sockets
-experiments, but you cannot use pkt-gen on the "br0" interface,
-since the Linux bridge interface is not supported by netmap.
+With the tap backend, you can use the bridge interface "br0" as a
+communication endpoint. You can run normal/raw sockets experiments,
+but you cannot use pkt-gen on the "br0" interface, since the Linux
+bridge interface is not supported by netmap.
 
 Examples with the tap backend:
 

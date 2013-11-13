@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 Universita` di Pisa. All rights reserved.
+ * Copyright (C) 2013 Universita` di Pisa. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,17 +30,152 @@
 #include <dev/netmap/netmap_mem2.h>
 
 
-/* ====================== STUFF DEFINED in netmap.c ===================== */
-int netmap_get_memory(struct netmap_priv_d* p);
-void netmap_dtor(void *data);
-int netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td);
-int netmap_poll(struct cdev *dev, int events, struct thread *td);
-int netmap_init(void);
-void netmap_fini(void);
-
 /* ========================== LINUX-SPECIFIC ROUTINES ================== */
 
-static struct device_driver*
+void netmap_mitigation_init(struct netmap_adapter *na)
+{
+    hrtimer_init(&na->mit_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+    na->mit_timer.function = &generic_timer_handler;
+    na->mit_pending = 0;
+}
+
+extern unsigned int netmap_generic_mit;
+
+void netmap_mitigation_start(struct netmap_adapter *na)
+{
+    hrtimer_start(&na->mit_timer, ktime_set(0, netmap_generic_mit), HRTIMER_MODE_REL);
+}
+
+void netmap_mitigation_restart(struct netmap_adapter *na)
+{
+    hrtimer_forward_now(&na->mit_timer, ktime_set(0, netmap_generic_mit));
+}
+
+int netmap_mitigation_active(struct netmap_adapter *na)
+{
+    return hrtimer_active(&na->mit_timer);
+}
+
+void netmap_mitigation_cleanup(struct netmap_adapter *na)
+{
+    hrtimer_cancel(&na->mit_timer);
+}
+
+/*
+ * This handler is registered within the attached net_device
+ * in the Linux RX subsystem, so that every mbuf passed up by
+ * the driver can be stolen to the network stack.
+ * Stolen packets are put in a queue where the
+ * generic_netmap_rxsync() callback can extract them.
+ */
+rx_handler_result_t linux_generic_rx_handler(struct mbuf **pm)
+{
+    generic_rx_handler((*pm)->dev, *pm);
+
+    return RX_HANDLER_CONSUMED;
+}
+
+/* Ask the Linux RX subsystem to intercept (or stop intercepting)
+ * the packets incoming from the interface attached to 'na'.
+ */
+int
+netmap_catch_rx(struct netmap_adapter *na, int intercept)
+{
+    struct ifnet *ifp = na->ifp;
+
+    if (intercept) {
+        return netdev_rx_handler_register(na->ifp,
+                &linux_generic_rx_handler, na);
+    } else {
+        netdev_rx_handler_unregister(ifp);
+        return 0;
+    }
+}
+
+
+static u16 generic_ndo_select_queue(struct ifnet *ifp, struct mbuf *m)
+{
+    return skb_get_queue_mapping(m);
+}
+
+/* Must be called under rtnl. */
+void netmap_catch_packet_steering(struct netmap_adapter *na, int enable)
+{
+    struct ifnet *ifp = na->ifp;
+
+    if (enable) {
+        /*
+         * Save the old pointer to the netdev_op
+         * create an updated netdev ops replacing the
+         * ndo_select_queue function with our custom one,
+         * and make the driver use it.
+         */
+        na->if_transmit = (void *)ifp->netdev_ops;
+        *na->generic_ndo_p = *ifp->netdev_ops;  /* Copy */
+        na->generic_ndo_p->ndo_select_queue = &generic_ndo_select_queue;
+        ifp->netdev_ops = na->generic_ndo_p;
+    } else {
+	/* Restore the original netdev_ops. */
+        ifp->netdev_ops = (void *)na->if_transmit;
+    }
+}
+
+/* Transmit routine used by generic_netmap_txsync(). Returns 0 on success
+   and -1 on error (which may be packet drops or other errors). */
+int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m,
+	void *addr, u_int len, u_int ring_nr)
+{
+    netdev_tx_t ret;
+
+    /* Empty the sk_buff. */
+    skb_trim(m, 0);
+
+    /* TODO Support the slot flags (NS_FRAG, NS_INDIRECT). */
+    skb_copy_to_linear_data(m, addr, len); // skb_store_bits(m, 0, addr, len);
+    skb_put(m, len);
+    NM_ATOMIC_INC(&m->users);
+    m->dev = ifp;
+    m->priority = 100;
+    skb_set_queue_mapping(m, ring_nr);
+
+    ret = dev_queue_xmit(m);
+
+    if (likely(ret == NET_XMIT_SUCCESS)) {
+        return 0;
+    }
+    if (unlikely(ret != NET_XMIT_DROP)) {
+        /* If something goes wrong in the TX path, there is nothing intelligent
+           we can do (for now) apart from error reporting. */
+        RD(5, "dev_queue_xmit failed: HARD ERROR %d", ret);
+    }
+    return -1;
+}
+
+/* Use ethtool to find the current NIC rings lengths, so that the netmap rings can
+   have the same lengths. */
+int
+generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx)
+{
+    struct ethtool_ringparam rp;
+
+    if (ifp->ethtool_ops && ifp->ethtool_ops->get_ringparam) {
+        ifp->ethtool_ops->get_ringparam(ifp, &rp);
+        *tx = rp.tx_pending;
+        *rx = rp.rx_pending;
+    }
+
+    return 0;
+}
+
+/* Fills in the output arguments with the number of hardware TX/RX queues. */
+void
+generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq)
+{
+    *txq = ifp->real_num_tx_queues;
+    *rxq = 1; /* TODO ifp->real_num_rx_queues */
+}
+
+static struct device_driver *
 linux_netmap_find_driver(struct device *dev)
 {
 	struct device_driver *dd;
@@ -52,7 +187,7 @@ linux_netmap_find_driver(struct device *dev)
 	return dd;
 }
 
-struct net_device*
+struct net_device *
 ifunit_ref(const char *name)
 {
 	struct net_device *ifp = dev_get_by_name(&init_net, name);
@@ -255,7 +390,7 @@ EXPORT_SYMBOL(netmap_total_buffers);	/* index check */
 EXPORT_SYMBOL(netmap_buffer_base);
 EXPORT_SYMBOL(netmap_reset);		/* ring init routines */
 EXPORT_SYMBOL(netmap_buf_size);
-EXPORT_SYMBOL(netmap_irq_generic);	/* default irq handler */
+EXPORT_SYMBOL(netmap_rx_irq);	        /* default irq handler */
 EXPORT_SYMBOL(netmap_no_pendintr);	/* XXX mitigation - should go away */
 EXPORT_SYMBOL(netmap_bdg_ctl);		/* bridge configuration routine */
 EXPORT_SYMBOL(netmap_bdg_learning);	/* the default lookup function */

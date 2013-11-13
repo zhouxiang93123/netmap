@@ -133,34 +133,21 @@ ports attached to the switch)
 __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z glebius $");
 
 #include <sys/types.h>
-#include <sys/module.h>
 #include <sys/errno.h>
 #include <sys/param.h>	/* defines used in kernel.h */
-#include <sys/jail.h>
 #include <sys/kernel.h>	/* types used in module initialization */
-#include <sys/conf.h>	/* cdevsw struct */
-#include <sys/uio.h>	/* uio struct */
+#include <sys/conf.h>	/* cdevsw struct, UID, GID */
 #include <sys/sockio.h>
 #include <sys/socketvar.h>	/* struct socket */
 #include <sys/malloc.h>
-#include <sys/mman.h>	/* PROT_EXEC */
 #include <sys/poll.h>
-#include <sys/proc.h>
 #include <sys/rwlock.h>
-#include <vm/vm.h>	/* vtophys */
-#include <vm/pmap.h>	/* vtophys */
-#include <vm/vm_param.h>
-#include <vm/vm_object.h>
-#include <vm/vm_page.h>
-#include <vm/vm_pager.h>
-#include <vm/uma.h>
 #include <sys/socket.h> /* sockaddrs */
 #include <sys/selinfo.h>
 #include <sys/sysctl.h>
 #include <net/if.h>
 #include <net/if_var.h>
 #include <net/bpf.h>		/* BIOCIMMEDIATE */
-#include <net/vnet.h>
 #include <machine/bus.h>	/* bus_dmamap_* */
 #include <sys/endian.h>
 #include <sys/refcount.h>
@@ -185,11 +172,14 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z gle
  * (last close or last munmap)
  */
 
+#if 0 // temporarily defined in netmap_kern.h
 #define NMG_LOCK_T		struct mtx
-#define NMG_LOCK_INIT()		mtx_init(&netmap_global_lock, "netmap global lock", NULL, MTX_DEF)
-#define NMG_LOCK_DESTROY()	mtx_destroy(&netmap_global_lock)
 #define NMG_LOCK()		mtx_lock(&netmap_global_lock)
 #define NMG_UNLOCK()		mtx_unlock(&netmap_global_lock)
+#endif
+
+#define NMG_LOCK_INIT()		mtx_init(&netmap_global_lock, "netmap global lock", NULL, MTX_DEF)
+#define NMG_LOCK_DESTROY()	mtx_destroy(&netmap_global_lock)
 #define NMG_LOCK_ASSERT()	mtx_assert(&netmap_global_lock, MA_OWNED)
 
 
@@ -198,6 +188,7 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z gle
 #define NM_ATOMIC_TEST_AND_SET(p)	(!atomic_cmpset_acq_int((p), 0, 1))
 #define NM_ATOMIC_CLEAR(p)		atomic_store_rel_int((p), 0)
 
+extern struct cdevsw netmap_cdevsw;
 
 #elif defined(linux)
 
@@ -1131,190 +1122,6 @@ netmap_dtor(void *data)
 }
 
 
-#ifdef __FreeBSD__
-
-/*
- * In order to track whether pages are still mapped, we hook into
- * the standard cdev_pager and intercept the constructor and
- * destructor.
- */
-
-struct netmap_vm_handle_t {
-	struct cdev 		*dev;
-	struct netmap_priv_d	*priv;
-};
-
-static int
-netmap_dev_pager_ctor(void *handle, vm_ooffset_t size, vm_prot_t prot,
-    vm_ooffset_t foff, struct ucred *cred, u_short *color)
-{
-	struct netmap_vm_handle_t *vmh = handle;
-	D("handle %p size %jd prot %d foff %jd",
-		handle, (intmax_t)size, prot, (intmax_t)foff);
-	dev_ref(vmh->dev);	
-	return 0;	
-}
-
-
-static void
-netmap_dev_pager_dtor(void *handle)
-{
-	struct netmap_vm_handle_t *vmh = handle;
-	struct cdev *dev = vmh->dev;
-	struct netmap_priv_d *priv = vmh->priv;
-	D("handle %p", handle);
-	netmap_dtor(priv);
-	free(vmh, M_DEVBUF);
-	dev_rel(dev);
-}
-
-static int
-netmap_dev_pager_fault(vm_object_t object, vm_ooffset_t offset,
-	int prot, vm_page_t *mres)
-{
-	struct netmap_vm_handle_t *vmh = object->handle;
-	struct netmap_priv_d *priv = vmh->priv;
-	vm_paddr_t paddr;
-	vm_page_t page;
-	vm_memattr_t memattr;
-	vm_pindex_t pidx;
-
-	ND("object %p offset %jd prot %d mres %p",
-			object, (intmax_t)offset, prot, mres);
-	memattr = object->memattr;
-	pidx = OFF_TO_IDX(offset);
-	paddr = netmap_mem_ofstophys(priv->np_mref, offset);
-	if (paddr == 0)
-		return VM_PAGER_FAIL;
-
-	if (((*mres)->flags & PG_FICTITIOUS) != 0) {
-		/*
-		 * If the passed in result page is a fake page, update it with
-		 * the new physical address.
-		 */
-		page = *mres;
-		vm_page_updatefake(page, paddr, memattr);
-	} else {
-		/*
-		 * Replace the passed in reqpage page with our own fake page and
-		 * free up the all of the original pages.
-		 */
-#ifndef VM_OBJECT_WUNLOCK	/* FreeBSD < 10.x */
-#define VM_OBJECT_WUNLOCK VM_OBJECT_UNLOCK
-#define VM_OBJECT_WLOCK	VM_OBJECT_LOCK
-#endif /* VM_OBJECT_WUNLOCK */
-
-		VM_OBJECT_WUNLOCK(object);
-		page = vm_page_getfake(paddr, memattr);
-		VM_OBJECT_WLOCK(object);
-		vm_page_lock(*mres);
-		vm_page_free(*mres);
-		vm_page_unlock(*mres);
-		*mres = page;
-		vm_page_insert(page, object, pidx);
-	}
-	page->valid = VM_PAGE_BITS_ALL;
-	return (VM_PAGER_OK);
-}
-
-
-static struct cdev_pager_ops netmap_cdev_pager_ops = {
-        .cdev_pg_ctor = netmap_dev_pager_ctor,
-        .cdev_pg_dtor = netmap_dev_pager_dtor,
-        .cdev_pg_fault = netmap_dev_pager_fault,
-};
-
-
-static int
-netmap_mmap_single(struct cdev *cdev, vm_ooffset_t *foff,
-	vm_size_t objsize,  vm_object_t *objp, int prot)
-{
-	int error;
-	struct netmap_vm_handle_t *vmh;
-	struct netmap_priv_d *priv;
-	vm_object_t obj;
-
-	D("cdev %p foff %jd size %jd objp %p prot %d", cdev,
-	    (intmax_t )*foff, (intmax_t )objsize, objp, prot);
-	
-	vmh = malloc(sizeof(struct netmap_vm_handle_t), M_DEVBUF,
-			      M_NOWAIT | M_ZERO);
-	if (vmh == NULL)
-		return ENOMEM;
-	vmh->dev = cdev;
-
-	NMG_LOCK();
-	error = devfs_get_cdevpriv((void**)&priv);
-	if (error)
-		goto err_unlock;
-	vmh->priv = priv;
-	priv->np_refcount++;
-	NMG_UNLOCK();
-
-	error = netmap_get_memory(priv);
-	if (error)
-		goto err_deref;
-
-	obj = cdev_pager_allocate(vmh, OBJT_DEVICE, 
-		&netmap_cdev_pager_ops, objsize, prot,
-		*foff, NULL);
-	if (obj == NULL) {
-		D("cdev_pager_allocate failed");
-		error = EINVAL;
-		goto err_deref;
-	}
-		
-	*objp = obj;
-	return 0;
-
-err_deref:
-	NMG_LOCK();
-	priv->np_refcount--;
-err_unlock:
-	NMG_UNLOCK();
-// err:
-	free(vmh, M_DEVBUF);
-	return error;
-}
-
-
-// XXX can we remove this ?
-static int
-netmap_close(struct cdev *dev, int fflag, int devtype, struct thread *td)
-{
-	if (netmap_verbose)
-		D("dev %p fflag 0x%x devtype %d td %p",
-			dev, fflag, devtype, td);
-	return 0;
-}
-
-
-static int
-netmap_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
-{
-	struct netmap_priv_d *priv;
-	int error;
-
-	(void)dev;
-	(void)oflags;
-	(void)devtype;
-	(void)td;
-
-	// XXX wait or nowait ?
-	priv = malloc(sizeof(struct netmap_priv_d), M_DEVBUF,
-			      M_NOWAIT | M_ZERO);
-	if (priv == NULL)
-		return ENOMEM;
-
-	error = devfs_set_cdevpriv(priv, netmap_dtor);
-	if (error)
-	        return error;
-
-	priv->np_refcount = 1;
-
-	return 0;
-}
-#endif /* __FreeBSD__ */
 
 
 /*
@@ -1340,25 +1147,18 @@ netmap_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
  * pass a chain of buffers to the host stack as coming from 'dst'
  */
 static void
-netmap_send_up(struct ifnet *dst, struct mbuf *head)
+netmap_send_up(struct ifnet *dst, struct mbq *q)
 {
 	struct mbuf *m;
 
 	/* send packets up, outside the lock */
-	while ((m = head) != NULL) {
-		head = head->m_nextpkt;
-		m->m_nextpkt = NULL;
+	while ((m = mbq_dequeue(q)) != NULL) {
 		if (netmap_verbose & NM_VERB_HOST)
 			D("sending up pkt %p size %d", m, MBUF_LEN(m));
 		NM_SEND_UP(dst, m);
 	}
+        mbq_destroy(q);
 }
-
-struct mbq {
-	struct mbuf *head;
-	struct mbuf *tail;
-	int count;
-};
 
 
 /*
@@ -1374,7 +1174,7 @@ netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
 	 * XXX handle reserved
 	 */
 	u_int lim = kring->nkr_num_slots - 1;
-	struct mbuf *m, *tail = q->tail;
+	struct mbuf *m;
 	u_int k = kring->ring->cur, n = kring->ring->reserved;
 	struct netmap_mem_d *nmd = kring->na->nm_mem;
 
@@ -1400,15 +1200,8 @@ netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
 
 		if (m == NULL)
 			break;
-		if (tail)
-			tail->m_nextpkt = m;
-		else
-			q->head = m;
-		tail = m;
-		q->count++;
-		m->m_nextpkt = NULL;
+                mbq_enqueue(q, m);
 	}
-	q->tail = tail;
 }
 
 
@@ -1491,7 +1284,7 @@ netmap_txsync_to_host(struct netmap_adapter *na)
 	struct netmap_kring *kring = &na->tx_rings[na->num_tx_rings];
 	struct netmap_ring *ring = kring->ring;
 	u_int k, lim = kring->nkr_num_slots - 1;
-	struct mbq q = { NULL, NULL, 0 };
+	struct mbq q;
 
 	if (nm_kr_tryget(kring)) {
 		D("ring %p busy (user error)", kring);
@@ -1509,12 +1302,13 @@ netmap_txsync_to_host(struct netmap_adapter *na)
 	 * In case of no buffers we give up. At the end of the loop,
 	 * the queue is drained in all cases.
 	 */
+        mbq_init(&q);
 	netmap_grab_packets(kring, &q, 1);
 	kring->nr_hwcur = k;
 	kring->nr_hwavail = ring->avail = lim;
 
 	nm_kr_put(kring);
-	netmap_send_up(na->ifp, q.head);
+	netmap_send_up(na->ifp, &q);
 }
 
 
@@ -2540,12 +2334,13 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	struct netmap_kring *kring;
 	u_int i, check_all_tx, check_all_rx, want_tx, want_rx, revents = 0;
 	u_int lim_tx, lim_rx, host_forwarded = 0;
-	struct mbq q = { NULL, NULL, 0 };
+	struct mbq q;
 	void *pwait = dev;	/* linux compatibility */
 
 		int retry_tx = 1;
 
 	(void)pwait;
+        mbq_init(&q);
 
 	if (devfs_get_cdevpriv((void **)&priv) != 0 || priv == NULL)
 		return POLLERR;
@@ -2754,8 +2549,8 @@ do_retry_rx:
 		goto flush_tx;
 	}
 
-	if (q.head)
-		netmap_send_up(na->ifp, q.head);
+        if (q.head)
+	        netmap_send_up(na->ifp, &q);
 
 out:
 
@@ -2784,13 +2579,21 @@ netmap_attach(struct netmap_adapter *arg, u_int num_queues)
 {
 	struct netmap_adapter *na = NULL;
 	struct ifnet *ifp = arg ? arg->ifp : NULL;
-	size_t len;
+	int na_entries;
 
 	if (arg == NULL || ifp == NULL)
 		goto fail;
-	/* a VALE port uses two endpoints */
-	len = nma_is_vp(arg) ? sizeof(*na) : sizeof(*na) * 2;
-	na = malloc(len, M_DEVBUF, M_NOWAIT | M_ZERO);
+	/*
+	 * Allocate 1 struct netmap_adapter (or 2 for a NIC,
+	 * the second being used for the host-stack port),
+	 * and memory for a couple of blocks to override
+	 * linux callbacks. These are only used on physical
+	 * ports (entry 0).
+	 */
+	na_entries = nma_is_vp(arg) ? 1 : 2;
+	na = malloc(na_entries * sizeof(*na) +
+		2 * sizeof(struct net_device_ops),
+		M_DEVBUF, M_NOWAIT | M_ZERO);
 	if (na == NULL)
 		goto fail;
 	WNA(ifp) = na;
@@ -2803,21 +2606,28 @@ netmap_attach(struct netmap_adapter *arg, u_int num_queues)
 	na->refcount = na->na_single = na->na_multi = 0;
 	/* Core lock initialized here, others after netmap_if_new. */
 	mtx_init(&na->core_lock, "netmap core lock", MTX_NETWORK_LOCK, MTX_DEF);
+
 #ifdef linux
-	// XXX move to linux_specific code
-	// linux_netmap_attach(na); // XXX complete
-	if (ifp->netdev_ops) {
-		ND("netdev_ops %p", ifp->netdev_ops);
-		/* prepare a clone of the netdev ops */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 28)
-		na->nm_ndo.ndo_start_xmit = ifp->netdev_ops;
-#else
-		na->nm_ndo = *ifp->netdev_ops;
-#endif
+	if (!ifp->netdev_ops) {
+		D("missing netdev_ops, cannot proceed");
+		free(na, M_DEVBUF);
+		goto fail;
 	}
-	na->nm_ndo.ndo_start_xmit = linux_netmap_start_xmit;
+
+	/* connect the netdev_ops buffers to na[0] */
+	na->nm_ndo_p = (void *)(na + na_entries);
+	na->generic_ndo_p = na->nm_ndo_p + 1;
+
+	/* prepare a clone of the netdev ops */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 28)
+	na->nm_ndo_p->ndo_start_xmit = ifp->netdev_ops;
+#else
+	*na->nm_ndo_p = *ifp->netdev_ops;
+#endif
+	na->nm_ndo_p->ndo_start_xmit = linux_netmap_start_xmit;
 #endif /* linux */
 
+	/* reference the memory allocator in use */
 	na->nm_mem = arg->nm_mem ? arg->nm_mem : &nm_mem;
 	if (!nma_is_vp(arg))
 		netmap_attach_sw(ifp);
@@ -2851,13 +2661,13 @@ netmap_detach(struct ifnet *ifp)
 	}
 	if (na->na_flags & NAF_MEM_OWNER)
 		netmap_mem_private_delete(na->nm_mem);
-	bzero(na, sizeof(*na));
+	bzero(na, sizeof(*na)); /* safety */
 	WNA(ifp) = NULL;
 	free(na, M_DEVBUF);
 }
 
 
-int
+static int
 nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n,
 	struct netmap_adapter *na, u_int ring_nr);
 
@@ -3158,46 +2968,16 @@ put_out:
 }
 
 
-/*
- * Default functions to handle rx/tx interrupts from a physical device.
- * "work_done" is non-null on the RX path, NULL for the TX path.
- * "generic" is 0 when we are called by a device driver, and 1 when we
- * are called by the generic netmap adapter layer.
- * We rely on the OS to make sure that there is only one active
- * instance per queue, and that there is appropriate locking.
- *
- * If the card is not in netmap mode, simply return 0,
- * so that the caller proceeds with regular processing.
- *
- * We return 0 also when the card is in netmap mode but the current
- * netmap adapter is the generic one, because this function will be
- * called by the generic layer.
- *
- * If the card is connected to a netmap file descriptor,
- * do a selwakeup on the individual queue, plus one on the global one
- * if needed (multiqueue card _and_ there are multiqueue listeners),
- * and return 1.
- *
- * Finally, if called on rx from an interface connected to a switch,
- * calls the proper forwarding routine, and return 1.
- */
-int
-netmap_irq_generic(struct ifnet *ifp, u_int q, u_int *work_done, u_int generic)
+int netmap_common_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 {
-	struct netmap_adapter *na = NA(ifp);
-	struct netmap_kring *kring;
-
-	if (!(ifp->if_capenable & IFCAP_NETMAP) || (nma_is_generic(na) && !generic))
-		return 0;
+        struct netmap_adapter *na = NA(ifp);
+        struct netmap_kring *kring;
 
 	q &= NETMAP_RING_MASK;
 
-	if (netmap_verbose)
-		RD(5, "received %s queue %d", work_done ? "RX" : "TX" , q);
-	if (na->na_flags & NAF_SKIP_INTR) {
-		ND("use regular interrupt");
-		return 0;
-	}
+	if (netmap_verbose) {
+	        RD(5, "received %s queue %d", work_done ? "RX" : "TX" , q);
+        }
 
 	if (work_done) { /* RX path */
 		if (q >= na->num_rx_rings)
@@ -3223,18 +3003,39 @@ netmap_irq_generic(struct ifnet *ifp, u_int q, u_int *work_done, u_int generic)
 	return 1;
 }
 
+/*
+ * Default functions to handle rx/tx interrupts from a physical device.
+ * "work_done" is non-null on the RX path, NULL for the TX path.
+ * "generic" is 0 when we are called by a device driver, and 1 when we
+ * are called by the generic netmap adapter layer.
+ * We rely on the OS to make sure that there is only one active
+ * instance per queue, and that there is appropriate locking.
+ *
+ * If the card is not in netmap mode, simply return 0,
+ * so that the caller proceeds with regular processing.
+ *
+ * If the card is connected to a netmap file descriptor,
+ * do a selwakeup on the individual queue, plus one on the global one
+ * if needed (multiqueue card _and_ there are multiqueue listeners),
+ * and return 1.
+ *
+ * Finally, if called on rx from an interface connected to a switch,
+ * calls the proper forwarding routine, and return 1.
+ */
+int
+netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
+{
+	if (!(ifp->if_capenable & IFCAP_NETMAP))
+		return 0;
 
-#ifdef __FreeBSD__
-static struct cdevsw netmap_cdevsw = {
-	.d_version = D_VERSION,
-	.d_name = "netmap",
-	.d_open = netmap_open,
-	.d_mmap_single = netmap_mmap_single,
-	.d_ioctl = netmap_ioctl,
-	.d_poll = netmap_poll,
-	.d_close = netmap_close,
-};
-#endif /* __FreeBSD__ */
+	if (NA(ifp)->na_flags & NAF_SKIP_INTR) {
+		ND("use regular interrupt");
+		return 0;
+	}
+
+        return netmap_common_irq(ifp, q, work_done);
+}
+
 
 /*
  *---- support for virtual bridge -----
@@ -3350,7 +3151,7 @@ netmap_bdg_learning(char *buf, u_int buf_len, uint8_t *dst_ring,
  * This flush routine supports only unicast and broadcast but a large
  * number of ports, and lets us replace the learn and dispatch functions.
  */
-int
+static int
 nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_adapter *na,
 		u_int ring_nr)
 {
@@ -3833,38 +3634,3 @@ netmap_fini(void)
 	NMG_LOCK_DESTROY();
 	printf("netmap: unloaded module.\n");
 }
-
-
-#ifdef __FreeBSD__
-/*
- * Kernel entry point.
- *
- * Initialize/finalize the module and return.
- *
- * Return 0 on success, errno on failure.
- */
-static int
-netmap_loader(__unused struct module *module, int event, __unused void *arg)
-{
-	int error = 0;
-
-	switch (event) {
-	case MOD_LOAD:
-		error = netmap_init();
-		break;
-
-	case MOD_UNLOAD:
-		netmap_fini();
-		break;
-
-	default:
-		error = EOPNOTSUPP;
-		break;
-	}
-
-	return (error);
-}
-
-
-DEV_MODULE(netmap, netmap_loader, NULL);
-#endif /* __FreeBSD__ */

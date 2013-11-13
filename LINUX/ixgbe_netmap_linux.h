@@ -81,7 +81,7 @@ ixgbe_netmap_reg(struct ifnet *ifp, int onoff)
 
 		/* save if_transmit and replace with our routine */
 		na->if_transmit = (void *)ifp->netdev_ops;
-		ifp->netdev_ops = &na->nm_ndo;
+		ifp->netdev_ops = na->nm_ndo_p;
 
 	} else { /* reset normal mode (explicit request or netmap failed) */
 		/* restore if_transmit */
