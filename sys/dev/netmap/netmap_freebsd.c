@@ -118,9 +118,13 @@ generic_xmit_frame(struct ifnet *ifp, struct mbuf *m,
 	void *addr, u_int len, u_int ring_nr)
 {
     int ret;
+    //static int count;
 
-    D("called");
+    ND("called %d", ++count);
+    m->m_len = m->m_pkthdr.len = 0;
+
     // copy data to the mbuf
+    m_copyback(m, 0, len, addr);
     // inc refcount
     atomic_fetchadd_int(m->m_ext.ref_cnt, 1);
     m->m_flags |= M_FLOWID;
