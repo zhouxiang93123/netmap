@@ -56,7 +56,8 @@
 /* ======================== FREEBSD-SPECIFIC ROUTINES ================== */
 
 /*
- * second argument is non-zero to intercept, 0 to restore
+ * Intercept the rx routine in the standard device driver.
+ * Second argument is non-zero to intercept, 0 to restore
  */
 int
 netmap_catch_rx(struct netmap_adapter *na, int intercept)
@@ -82,7 +83,15 @@ netmap_catch_rx(struct netmap_adapter *na, int intercept)
     return 0;
 }
 
-void netmap_catch_packet_steering(struct netmap_adapter *na, int enable)
+/*
+ * Intercept the packet steering routine in the tx path,
+ * so that we can decide which queue is used for an mbuf.
+ * Second argument is non-zero to intercept, 0 to restore.
+ *
+ * XXX see if FreeBSD has such a mechanism
+ */
+void
+netmap_catch_packet_steering(struct netmap_adapter *na, int enable)
 {
     if (enable) {
     } else {
@@ -90,11 +99,34 @@ void netmap_catch_packet_steering(struct netmap_adapter *na, int enable)
 }
 
 /* Transmit routine used by generic_netmap_txsync(). Returns 0 on success
-   and -1 on error (which may be packet drops or other errors). */
-int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m,
+ * and non-zero on error (which may be packet drops or other errors).
+ * addr and len identify the netmap buffer, m is the (preallocated)
+ * mbuf to use for transmissions.
+ *
+ * We should add a reference to the mbuf so the m_freem() at the end
+ * of the transmission does not consume resources.
+ *
+ * On FreeBSD, and on multiqueue cards, we can force the queue using
+ *      if ((m->m_flags & M_FLOWID) != 0)
+ *              i = m->m_pkthdr.flowid % adapter->num_queues;
+ *      else
+ *              i = curcpu % adapter->num_queues;
+ *
+ */
+int
+generic_xmit_frame(struct ifnet *ifp, struct mbuf *m,
 	void *addr, u_int len, u_int ring_nr)
 {
-    return -1;
+    int ret;
+
+    D("called");
+    // copy data to the mbuf
+    // inc refcount
+    atomic_fetchadd_int(m->m_ext.ref_cnt, 1);
+    m->m_flags |= M_FLOWID;
+    m->m_pkthdr.flowid = ring_nr;
+    ret = ifp->if_transmit(ifp, m);
+    return ret;
 }
 
 /*
