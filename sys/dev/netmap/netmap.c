@@ -2608,23 +2608,20 @@ netmap_attach(struct netmap_adapter *arg, u_int num_queues)
 	mtx_init(&na->core_lock, "netmap core lock", MTX_NETWORK_LOCK, MTX_DEF);
 
 #ifdef linux
-	if (!ifp->netdev_ops) {
-		D("missing netdev_ops, cannot proceed");
-		free(na, M_DEVBUF);
-		goto fail;
-	}
-
 	/* connect the netdev_ops buffers to na[0] */
 	na->nm_ndo_p = (void *)(na + na_entries);
 	na->generic_ndo_p = na->nm_ndo_p + 1;
 
-	/* prepare a clone of the netdev ops */
+        /* ifp->netdev_ops is non null only for physical ports. */
+	if (ifp->netdev_ops) {
+            /* prepare a clone of the netdev ops */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 28)
-	na->nm_ndo_p->ndo_start_xmit = ifp->netdev_ops;
+            na->nm_ndo_p->ndo_start_xmit = ifp->netdev_ops;
 #else
-	*na->nm_ndo_p = *ifp->netdev_ops;
+            *na->nm_ndo_p = *ifp->netdev_ops;
 #endif
-	na->nm_ndo_p->ndo_start_xmit = linux_netmap_start_xmit;
+            na->nm_ndo_p->ndo_start_xmit = linux_netmap_start_xmit;
+        }
 #endif /* linux */
 
 	/* reference the memory allocator in use */
