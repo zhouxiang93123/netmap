@@ -125,6 +125,7 @@ generic_xmit_frame(struct ifnet *ifp, struct mbuf *m,
 
     // copy data to the mbuf
     m_copyback(m, 0, len, addr);
+    ND("m %p pkthdr_len %d", m, m->m_pkthdr.len);
     // inc refcount
     atomic_fetchadd_int(m->m_ext.ref_cnt, 1);
     m->m_flags |= M_FLOWID;
