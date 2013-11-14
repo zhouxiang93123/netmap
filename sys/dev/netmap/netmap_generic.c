@@ -88,14 +88,19 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257666 2013-11-05 01:06:22Z lui
  * mbuf wrappers
  */
 
+/*
+ * we allocate an EXT_PACKET
+ */
 #define netmap_get_mbuf(len) m_getcl(M_NOWAIT, MT_DATA, M_PKTHDR)
 
-/* mbuf destructor, also need to change the type to EXT_EXTREF
- * and then chain into uma_zfree(zone_clust, m->m_ext.ext_buf)
+/* mbuf destructor, also need to change the type to EXT_EXTREF,
+ * add an M_NOFREE flag, and then clear the flag and
+ * chain into uma_zfree(zone_pack, mf)
  * (or reinstall the buffer ?)
  */
 #define SET_MBUF_DESTRUCTOR(m, fn)	do {		\
 		(m)->m_ext.ext_free = (void *)fn;	\
+		(m)->m_flags |= M_NOFREE;		\
 		(m)->m_ext.ext_type = EXT_EXTREF;	\
 	} while (0)
 
@@ -384,12 +389,14 @@ free_mbufs:
 void
 generic_mbuf_destructor(struct mbuf *m)
 {
-    static int count;
-    D("Tx irq (%p) %d", m, count);
+    D("Tx irq (%p) queue %d", m, MBUF_TXQ(m));
     netmap_generic_irq(MBUF_IFP(m), MBUF_TXQ(m), NULL);
 #ifdef __FreeBSD__
-    m->m_ext.ext_type = EXT_CLUSTER;
-    uma_zfree(zone_clust, m->m_ext.ext_buf);
+    m->m_ext.ext_type = EXT_PACKET;
+    m->m_ext.ext_free = NULL;
+    if (*(m->m_ext.ref_cnt) == 0)
+	*(m->m_ext.ref_cnt) = 1;
+    uma_zfree(zone_pack, m);
 #endif /* __FreeBSD__ */
     IFRATE(rate_ctx.new.txirq++);
 }
