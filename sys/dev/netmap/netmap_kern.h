@@ -391,7 +391,6 @@ struct netmap_hw_adapter {
 	struct netmap_adapter up;
 
 #ifdef linux
-	struct net_device_ops *nm_ndo_p;
 	struct net_device_ops nm_ndo;
 #endif /* linux */
 };
@@ -402,14 +401,12 @@ struct netmap_generic_adapter {
         /* Pointer to a previously used netmap adapter. */
         struct netmap_adapter *prev;
 
-	struct net_device_ops *nm_ndo_p;
-
         /* generic netmap adapters support:
 	 * a net_device_ops struct overrides ndo_select_queue(),
 	 * save_if_input saves the if_input hook (FreeBSD),
 	 * mit_timer and mit_pending implement rx interrupt mitigation,
 	 */
-        struct net_device_ops *generic_ndo_p;
+	struct net_device_ops generic_ndo;
 	void (*save_if_input)(struct ifnet *, struct mbuf *);
 
         struct hrtimer mit_timer;

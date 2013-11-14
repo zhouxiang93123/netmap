@@ -122,9 +122,9 @@ void netmap_catch_packet_steering(struct netmap_generic_adapter *gna, int enable
          * and make the driver use it.
          */
         na->if_transmit = (void *)ifp->netdev_ops;
-        *gna->generic_ndo_p = *ifp->netdev_ops;  /* Copy */
-        gna->generic_ndo_p->ndo_select_queue = &generic_ndo_select_queue;
-        ifp->netdev_ops = gna->generic_ndo_p;
+        gna->generic_ndo = *ifp->netdev_ops;  /* Copy */
+        gna->generic_ndo.ndo_select_queue = &generic_ndo_select_queue;
+        ifp->netdev_ops = &gna->generic_ndo;
     } else {
 	/* Restore the original netdev_ops. */
         ifp->netdev_ops = (void *)na->if_transmit;

@@ -735,7 +735,7 @@ generic_netmap_dtor(struct netmap_adapter *na)
     struct netmap_generic_adapter *gna = (struct netmap_generic_adapter*)na;
     struct netmap_adapter *prev_na = gna->prev;
 
-    D("Released generic NA %p", na);
+    D("Released generic NA %p", gna);
     WNA(ifp) = prev_na;
     netmap_adapter_put(prev_na);
     D("Restored native NA %p", prev_na);
@@ -796,7 +796,7 @@ generic_netmap_attach(struct ifnet *ifp)
 
     retval = netmap_attach_common(na, 1);
     if (retval) {
-        free(na, M_DEVBUF);
+        free(gna, M_DEVBUF);
     }
 
     return retval;
