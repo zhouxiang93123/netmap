@@ -194,7 +194,7 @@ static struct rate_context rate_ctx;
  * Wrapper used by the generic adapter layer to notify
  * the poller threads.
  */
-int
+static int
 netmap_generic_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 {
 	if (unlikely(!(ifp->if_capenable & IFCAP_NETMAP)))
@@ -385,7 +385,7 @@ free_mbufs:
  * by netmap to transmit a packet. This usually happens when
  * the NIC notifies the driver that transmission is completed.
  */
-void
+static void
 generic_mbuf_destructor(struct mbuf *m)
 {
     ND("Tx irq (%p) queue %d", m, MBUF_TXQ(m));
@@ -422,7 +422,6 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
         if (unlikely(m == NULL)) {
 	    /* try to replenish the entry */
             tx_pool[ntc] = m = netmap_get_mbuf(GENERIC_BUF_SIZE);
-	    ND("replenish at %d", ntc);
             if (unlikely(m == NULL)) {
                 D("mbuf allocation failed, XXX error");
 		// XXX how do we proceed ? break ?
@@ -481,7 +480,7 @@ generic_tx_event_middle(struct netmap_kring *kring, u_int j)
  * There is a race but this is only called within txsync which does
  * a double check.
  */
-void
+static void
 generic_set_tx_event(struct netmap_kring *kring, u_int j)
 {
     struct mbuf *m;
@@ -500,10 +499,7 @@ generic_set_tx_event(struct netmap_kring *kring, u_int j)
 
     // XXX wmb() ?
     /* Decrement the refcount an free it if we have the last one. */
-    ND("about to freem on %p refcnt %d fn %p", m,
-	GET_MBUF_REFCNT(m), m->m_ext.ext_free);
     m_freem(m);
-    ND("destroyed mbuf at %p ref %d", m, GET_MBUF_REFCNT(m));
     smp_mb();
 }
 
@@ -515,7 +511,7 @@ generic_set_tx_event(struct netmap_kring *kring, u_int j)
  * On linux this is not done directly, but using dev_queue_xmit(),
  * since it implements the TX flow control (and takes some locks).
  */
-int
+static int
 generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
     struct netmap_adapter *na = NA(ifp);
@@ -593,8 +589,6 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 
         kring->nr_hwcur = j;
         kring->nr_hwavail -= n;
-	ND("queued %d packets, hwcur %d hwavail %d",
-		n, kring->nr_hwcur, kring->nr_hwavail);
         IFRATE(rate_ctx.new.txpkt += n);
         if (!ring->avail) {
             /* No more available slots? Set a notification event
@@ -657,7 +651,7 @@ void generic_rx_handler(struct ifnet *ifp, struct mbuf *m)
  * receive ring.
  * Access must be protected because the rx handler is asynchronous,
  */
-int
+static int
 generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
     struct netmap_adapter *na = NA(ifp);
@@ -754,7 +748,7 @@ generic_netmap_attach(struct ifnet *ifp)
     int retval;
     u_int num_tx_desc, num_rx_desc;
 
-    num_tx_desc = num_rx_desc = 16; /* starting point */
+    num_tx_desc = num_rx_desc = 256; /* starting point */
 
     generic_find_num_desc(ifp, &num_tx_desc, &num_rx_desc);
     ND("Netmap ring size: TX = %d, RX = %d\n", num_tx_desc, num_rx_desc);
