@@ -125,13 +125,14 @@ generic_xmit_frame(struct ifnet *ifp, struct mbuf *m,
     // copy data to the mbuf
     m_copyback(m, 0, len, addr);
     // inc refcount
-    prev = atomic_fetchadd_int(m->m_ext.ref_cnt, 2); // XXX
+    prev = atomic_fetchadd_int(m->m_ext.ref_cnt, 1); // XXX
     m->m_flags |= M_FLOWID;
     m->m_pkthdr.flowid = ring_nr;
     
-    D("called %d refcnt %d", ++count, *m->m_ext.ref_cnt);
+    ND("called %d refcnt %d", ++count, *m->m_ext.ref_cnt);
     ret = ifp->if_transmit(ifp, m);
-    D("after transmit %d ret %d refcnt %d", count, ret, *m->m_ext.ref_cnt);
+    D("after transmit %p %d ret %d refcnt %d", m, ++count, ret,
+	m->m_ext.ref_cnt ? *m->m_ext.ref_cnt : -1);
     return ret;
 }
 

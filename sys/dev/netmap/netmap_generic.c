@@ -100,7 +100,7 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257666 2013-11-05 01:06:22Z lui
 	} while (0)
 
 
-#define GET_MBUF_REFCNT(m)	(*(m)->m_ext.ref_cnt)
+#define GET_MBUF_REFCNT(m)	((m)->m_ext.ref_cnt ? *(m)->m_ext.ref_cnt : -1)
 
 
 
@@ -190,7 +190,7 @@ static struct rate_context rate_ctx;
  * Wrapper used by the generic adapter layer to notify
  * the poller threads.
  */
-static int
+int
 netmap_generic_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 {
 	if (unlikely(!(ifp->if_capenable & IFCAP_NETMAP)))
@@ -381,7 +381,7 @@ free_mbufs:
  * by netmap to transmit a packet. This usually happens when
  * the NIC notifies the driver that transmission is completed.
  */
-static void
+void
 generic_mbuf_destructor(struct mbuf *m)
 {
     static int count;
@@ -401,7 +401,7 @@ generic_mbuf_destructor(struct mbuf *m)
  * nr_hwcur is the first unsent buffer.
  * When cleaning, we try to recover buffers between nr_ntc and nr_hwcur.
  */
-static int
+int
 generic_netmap_tx_clean(struct netmap_kring *kring)
 {
     u_int num_slots = kring->nkr_num_slots;
@@ -480,23 +480,24 @@ generic_set_tx_event(struct netmap_kring *kring, u_int j)
 {
     struct mbuf *m;
     u_int e = generic_tx_event_middle(kring, j);
+    int refcnt;
 
     m = kring->tx_pool[e];
-    D("Event at %d mbuf %p refcnt %p", e, m, m->m_ext.ref_cnt);
-    if (unlikely(!m)) {
-        D("ERROR: This should never happen");
+    refcnt = GET_MBUF_REFCNT(m);
+    D("Event at %d mbuf %p refcnt %d", e, m, refcnt);
+    if (unlikely(!m) || refcnt < 1) {
+        D("ERROR: This should never happen refcnt %d", refcnt);
         return;
     }
     kring->tx_pool[e] = NULL;
-    D("refcnt was %p", m->m_ext.ref_cnt);
     SET_MBUF_DESTRUCTOR(m, generic_mbuf_destructor);
 
     // XXX wmb() ?
     /* Decrement the refcount an free it if we have the last one. */
-    D("about to call freem on %p refcnt %p fn %p", m,
-	m->m_ext.ref_cnt, m->m_ext.ext_free);
+    D("about to freem on %p refcnt %d fn %p", m,
+	GET_MBUF_REFCNT(m), m->m_ext.ext_free);
     m_freem(m);
-    D("destroyed mbuf at %p", m);
+    D("destroyed mbuf at %p ref %d", m, GET_MBUF_REFCNT(m));
     smp_mb();
 }
 
@@ -650,7 +651,7 @@ void generic_rx_handler(struct ifnet *ifp, struct mbuf *m)
  * receive ring.
  * Access must be protected because the rx handler is asynchronous,
  */
-static int
+int
 generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
     struct netmap_adapter *na = NA(ifp);
@@ -747,7 +748,7 @@ generic_netmap_attach(struct ifnet *ifp)
     int retval;
     u_int num_tx_desc, num_rx_desc;
 
-    num_tx_desc = num_rx_desc = 256; /* starting point */
+    num_tx_desc = num_rx_desc = 16; /* starting point */
 
     generic_find_num_desc(ifp, &num_tx_desc, &num_rx_desc);
     ND("Netmap ring size: TX = %d, RX = %d\n", num_tx_desc, num_rx_desc);
