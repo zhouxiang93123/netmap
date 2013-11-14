@@ -66,57 +66,57 @@ This makes sure that there is always a free slot.
  * nv_change_mtu twice above ETH_DATA_LEN.
  */
 static int
-forcedeth_netmap_reg(struct ifnet *dev, int onoff)
+forcedeth_netmap_reg(struct netmap_adapter *na, int onoff)
 {
-	struct netmap_adapter *na = NA(dev);
 	struct netmap_hw_adapter *hwna = (struct netmap_hw_adapter *)na;
-	struct SOFTC_T *np = netdev_priv(dev);
+        struct ifnet *ifp = na->ifp;
+	struct SOFTC_T *np = netdev_priv(ifp);
 	int error = 0;
-	u8 __iomem *base = get_hwbase(dev);
+	u8 __iomem *base = get_hwbase(ifp);
 
 	if (na == NULL)
 		return EINVAL;
 	// first half of nv_change_mtu() - down
-	nv_disable_irq(dev);
-	nv_napi_disable(dev);
-	netif_tx_lock_bh(dev);
-	netif_addr_lock(dev);
+	nv_disable_irq(ifp);
+	nv_napi_disable(ifp);
+	netif_tx_lock_bh(ifp);
+	netif_addr_lock(ifp);
 	spin_lock(&np->lock);
 	/* stop engines */
-	nv_stop_rxtx(dev);
-	nv_txrx_reset(dev);
+	nv_stop_rxtx(ifp);
+	nv_txrx_reset(ifp);
 	/* drain rx queue */
-	nv_drain_rxtx(dev);
+	nv_drain_rxtx(ifp);
 
 	if (onoff) {
-		dev->if_capenable |= IFCAP_NETMAP;
-		na->if_transmit = (void *)dev->netdev_ops;
-		dev->netdev_ops = &hwna->nm_ndo;
+		ifp->if_capenable |= IFCAP_NETMAP;
+		na->if_transmit = (void *)ifp->netdev_ops;
+		ifp->netdev_ops = hwna->nm_ndo_p;
 	} else {
 		/* restore if_transmit */
-		dev->netdev_ops = (void *)na->if_transmit;
-		dev->if_capenable &= ~IFCAP_NETMAP;
+		ifp->netdev_ops = (void *)na->if_transmit;
+		ifp->if_capenable &= ~IFCAP_NETMAP;
 	}
 	// second half of nv_change_mtu() -- up
-	if (nv_init_ring(dev)) {
+	if (nv_init_ring(ifp)) {
 		if (!np->in_shutdown)
 			mod_timer(&np->oom_kick, jiffies + OOM_REFILL);
 	}
 	/* reinit nic view of the rx queue */
 	writel(np->rx_buf_sz, base + NvRegOffloadConfig);
-	setup_hw_rings(dev, NV_SETUP_RX_RING | NV_SETUP_TX_RING);
+	setup_hw_rings(ifp, NV_SETUP_RX_RING | NV_SETUP_TX_RING);
 	writel(((np->rx_ring_size-1) << NVREG_RINGSZ_RXSHIFT) + ((np->tx_ring_size-1) << NVREG_RINGSZ_TXSHIFT),
 	base + NvRegRingSizes);
 	pci_push(base);
-	writel(NVREG_TXRXCTL_KICK|np->txrxctl_bits, get_hwbase(dev) + NvRegTxRxControl);
+	writel(NVREG_TXRXCTL_KICK|np->txrxctl_bits, get_hwbase(ifp) + NvRegTxRxControl);
 	pci_push(base);
 	/* restart rx engine */
-	nv_start_rxtx(dev);
+	nv_start_rxtx(ifp);
 	spin_unlock(&np->lock);
-	netif_addr_unlock(dev);
-	netif_tx_unlock_bh(dev);
-	nv_napi_enable(dev);
-	nv_enable_irq(dev);
+	netif_addr_unlock(ifp);
+	netif_tx_unlock_bh(ifp);
+	nv_napi_enable(ifp);
+	nv_enable_irq(ifp);
 
 	return (error);
 }
@@ -126,10 +126,10 @@ forcedeth_netmap_reg(struct ifnet *dev, int onoff)
  * Reconcile kernel and user view of the transmit ring.
  */
 static int
-forcedeth_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
+forcedeth_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *np = netdev_priv(ifp);
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k, l, n, lim = kring->nkr_num_slots - 1;
@@ -207,10 +207,10 @@ forcedeth_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
  * Reconcile kernel and user view of the receive ring.
  */
 static int
-forcedeth_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
+forcedeth_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *np = netdev_priv(ifp);
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k, l, n, lim = kring->nkr_num_slots - 1;

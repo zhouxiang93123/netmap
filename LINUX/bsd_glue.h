@@ -80,6 +80,15 @@ struct thread;
 
 #define bzero(a, len)		memset(a, 0, len)
 
+/* Atomic variables. */
+#define NM_ATOMIC_TEST_AND_SET(p)	test_and_set_bit(0, (p))
+#define NM_ATOMIC_CLEAR(p)		clear_bit(0, (p))
+
+#define NM_ATOMIC_SET(p, v)             atomic_set(p, v)
+#define NM_ATOMIC_INC(p)                atomic_inc(p)
+#define NM_ATOMIC_READ_AND_CLEAR(p)     atomic_xchg(p, 0)
+#define NM_ATOMIC_READ(p)               atomic_read(p)
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 28)
 #define	netdev_tx_t	int
 #define	netdev_ops	hard_start_xmit
@@ -104,6 +113,8 @@ struct net_device_ops {
 #define	m_nextpkt		next			// chain of mbufs
 #define m_freem(m)		dev_kfree_skb_any(m)	// free a sk_buff
 
+#define GET_MBUF_REFCNT(m)	NM_ATOMIC_READ(&((m)->users))
+#define netmap_get_mbuf(size)	alloc_skb(size, GFP_ATOMIC)
 
 /*
  * m_copydata() copies from mbuf to buffer following the mbuf chain.
@@ -316,13 +327,5 @@ int sysctl_handle_long(SYSCTL_HANDLER_ARGS);
 
 #define MALLOC_DECLARE(a)
 #define MALLOC_DEFINE(a, b, c)
-
-#define NM_ATOMIC_TEST_AND_SET(p)	test_and_set_bit(0, (p))
-#define NM_ATOMIC_CLEAR(p)		clear_bit(0, (p))
-
-#define NM_ATOMIC_SET(p, v)             atomic_set(p, v)
-#define NM_ATOMIC_INC(p)                atomic_inc(p)
-#define NM_ATOMIC_READ_AND_CLEAR(p)     atomic_xchg(p, 0)
-#define NM_ATOMIC_READ(p)               atomic_read(p)
 
 #endif /* _BSD_GLUE_H */

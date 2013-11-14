@@ -97,10 +97,10 @@ sfxge_netmap_init_buffers(struct sfxge_softc *sc)
  * Only called on the first register or the last unregister.
  */
 static int
-sfxge_netmap_reg(struct ifnet *ifp, int onoff)
+sfxge_netmap_reg(struct netmap_adapter *na, int onoff)
 {
+        struct ifnet *ifp = na->ifp;
 	struct sfxge_softc *sc = ifp->if_softc;
-	struct netmap_adapter *na = NA(ifp);
 	int error = 0;
 
 	if (na == NULL)
@@ -143,12 +143,12 @@ fail:
  * Reconcile kernel and user view of the transmit ring.
  */
 static int
-sfxge_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
+sfxge_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct sfxge_softc *sc = ifp->if_softc;
 	struct sfxge_txq *txr = sc->txq[ring_nr];
 
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k = ring->cur, l, n = 0, lim = kring->nkr_num_slots - 1;
@@ -287,12 +287,12 @@ ring_reset:
  *
  */
 static int
-sfxge_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
+sfxge_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct sfxge_softc *sc = ifp->if_softc;
 	struct sfxge_rxq *rxq = sc->rxq[ring_nr];
 	struct sfxge_evq *evq = sc->evq[ring_nr];
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;

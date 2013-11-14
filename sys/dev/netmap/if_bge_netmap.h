@@ -22,10 +22,10 @@
  * only called on the first register or the last unregister.
  */
 static int
-bge_netmap_reg(struct ifnet *ifp, int onoff)
+bge_netmap_reg(struct netmap_adapter *na, int onoff)
 {
+        struct ifnet *ifp = na->ifp;
 	struct bge_softc *adapter = ifp->if_softc;
-	struct netmap_adapter *na = NA(ifp);
 	int error = 0;
 
 	if (!na)
@@ -65,10 +65,10 @@ fail:
  * Reconcile kernel and user view of the transmit ring.
  */
 static int
-bge_netmap_txsync(void *a, u_int ring_nr, int flags)
+bge_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
-	struct bge_softc *sc = a;
-	struct netmap_adapter *na = NA(sc->bge_ifp);
+        struct ifnet *ifp = na->ifp;
+	struct bge_softc *sc = ifp;
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	int delta, j, k, l, lim = kring->nkr_num_slots - 1;
@@ -177,10 +177,10 @@ bge_netmap_txsync(void *a, u_int ring_nr, int flags)
  *	^---- we have freed some buffers
  */
 static int
-bge_netmap_rxsync(void *a, u_int ring_nr, int flags)
+bge_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct bge_softc *sc = a;
-	struct netmap_adapter *na = NA(sc->bge_ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	int j, k, n, lim = kring->nkr_num_slots - 1;

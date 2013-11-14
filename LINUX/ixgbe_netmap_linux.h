@@ -60,10 +60,10 @@
  * Only called on the first register or the last unregister.
  */
 static int
-ixgbe_netmap_reg(struct ifnet *ifp, int onoff)
+ixgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_hw_adapter *hwna = (struct netmap_hw_adapter*)na;
 	int error = 0;
 
@@ -82,7 +82,7 @@ ixgbe_netmap_reg(struct ifnet *ifp, int onoff)
 
 		/* save if_transmit and replace with our routine */
 		na->if_transmit = (void *)ifp->netdev_ops;
-		ifp->netdev_ops = &hwna->nm_ndo;
+		ifp->netdev_ops = hwna->nm_ndo_p;
 
 	} else { /* reset normal mode (explicit request or netmap failed) */
 		/* restore if_transmit */
@@ -119,11 +119,11 @@ ixgbe_netmap_reg(struct ifnet *ifp, int onoff)
  *
  */
 static int
-ixgbe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
+ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct ixgbe_ring *txr = adapter->tx_ring[ring_nr];
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k = ring->cur, l, n, lim = kring->nkr_num_slots - 1;
@@ -314,11 +314,11 @@ ring_reset:
  *
  */
 static int
-ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
+ixgbe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct ixgbe_ring *rxr = adapter->rx_ring[ring_nr];
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;

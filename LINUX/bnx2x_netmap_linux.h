@@ -114,10 +114,10 @@ bnx2x_netmap_diag(struct ifnet *ifp)
  * Only called on the first register or the last unregister.
  */
 static int
-bnx2x_netmap_reg(struct ifnet *ifp, int onoff)
+bnx2x_netmap_reg(struct netmap_adapter *na, int onoff)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
-	struct netmap_adapter *na = NA(ifp);
 	int error = 0, need_load = 0;
 
 	if (na == NULL)
@@ -143,7 +143,7 @@ else
 		ifp->if_capenable |= IFCAP_NETMAP;
 		/* save if_transmit and replace with our routine */
 		na->if_transmit = (void *)ifp->netdev_ops;
-		ifp->netdev_ops = &na->nm_ndo;
+		ifp->netdev_ops = na->nm_ndo_p;
 		D("-------------- set the SKIP_INTR flag");
 		// XXX na->na_flags |= NAF_SKIP_INTR; /* during load, use regular interrupts */
 	} else { /* reset normal mode */
@@ -222,12 +222,12 @@ set of queues.
 
  */
 static int
-bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
+bnx2x_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct bnx2x_fastpath *fp = &adapter->fp[ring_nr];
 	struct bnx2x_fp_txdata *txdata = &fp->txdata[0];
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k = ring->cur, n, lim = kring->nkr_num_slots - 1;
@@ -438,11 +438,11 @@ apparently the same.
 
  */
 static int
-bnx2x_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
+bnx2x_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct bnx2x_fastpath *rxr = &adapter->fp[ring_nr];
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;
