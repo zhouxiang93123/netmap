@@ -428,7 +428,6 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
                 return -ENOMEM;
             }
 	} else if (GET_MBUF_REFCNT(m) != 1) {
-	    ND("buf %p busy at %d ref %d", m, ntc, GET_MBUF_REFCNT(m));
 	    break; /* This mbuf is still busy: its refcnt is 2. */
 	}
         if (unlikely(++ntc == num_slots)) {
@@ -618,7 +617,7 @@ void generic_rx_handler(struct ifnet *ifp, struct mbuf *m)
     u_int work_done;
     u_int rr = 0;
 
-    D("called");
+    ND("called");
     /* limit the size of the queue */
     if (unlikely(mbq_len(&na->rx_rings[rr].rx_queue) > 1024)) {
         m_freem(m);

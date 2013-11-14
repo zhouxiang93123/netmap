@@ -116,6 +116,7 @@ struct net_device_ops {
 #define GET_MBUF_REFCNT(m)	NM_ATOMIC_READ(&((m)->users))
 #define netmap_get_mbuf(size)	alloc_skb(size, GFP_ATOMIC)
 #define MBUF_TXQ(m)		skb_get_queue_mapping(m)
+#define SET_MBUF_DESTRUCTOR(m, f) m->destructor = (void *)&f
 
 /*
  * m_copydata() copies from mbuf to buffer following the mbuf chain.
