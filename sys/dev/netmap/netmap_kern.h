@@ -589,7 +589,7 @@ enum {                                  /* verbose flags */
 #define	WNA(_ifp)	(_ifp)->if_pspare[0]
 #endif
 #define	NA(_ifp)	((struct netmap_adapter *)WNA(_ifp))
-#define	SWNA(_ifp)	(NA(_ifp) + 1)
+#define	SWNA(_na)	(_na + 1)
 
 /*
  * Macros to determine if an interface is netmap capable or netmap enabled.
