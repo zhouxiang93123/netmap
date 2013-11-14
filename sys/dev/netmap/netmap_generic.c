@@ -91,7 +91,7 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257666 2013-11-05 01:06:22Z lui
 /*
  * we allocate an EXT_PACKET
  */
-#define netmap_get_mbuf(len) m_getcl(M_NOWAIT, MT_DATA, M_PKTHDR)
+#define netmap_get_mbuf(len) m_getcl(M_NOWAIT, MT_DATA, M_PKTHDR|M_NOFREE)
 
 /* mbuf destructor, also need to change the type to EXT_EXTREF,
  * add an M_NOFREE flag, and then clear the flag and
@@ -100,7 +100,6 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257666 2013-11-05 01:06:22Z lui
  */
 #define SET_MBUF_DESTRUCTOR(m, fn)	do {		\
 		(m)->m_ext.ext_free = (void *)fn;	\
-		(m)->m_flags |= M_NOFREE;		\
 		(m)->m_ext.ext_type = EXT_EXTREF;	\
 	} while (0)
 
@@ -389,7 +388,7 @@ free_mbufs:
 void
 generic_mbuf_destructor(struct mbuf *m)
 {
-    D("Tx irq (%p) queue %d", m, MBUF_TXQ(m));
+    ND("Tx irq (%p) queue %d", m, MBUF_TXQ(m));
     netmap_generic_irq(MBUF_IFP(m), MBUF_TXQ(m), NULL);
 #ifdef __FreeBSD__
     m->m_ext.ext_type = EXT_PACKET;
@@ -423,14 +422,14 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
         if (unlikely(m == NULL)) {
 	    /* try to replenish the entry */
             tx_pool[ntc] = m = netmap_get_mbuf(GENERIC_BUF_SIZE);
-	    D("replenish at %d", ntc);
+	    ND("replenish at %d", ntc);
             if (unlikely(m == NULL)) {
                 D("mbuf allocation failed, XXX error");
 		// XXX how do we proceed ? break ?
                 return -ENOMEM;
             }
 	} else if (GET_MBUF_REFCNT(m) != 1) {
-	    D("buf %p busy at %d", m, ntc);
+	    ND("buf %p busy at %d ref %d", m, ntc, GET_MBUF_REFCNT(m));
 	    break; /* This mbuf is still busy: its refcnt is 2. */
 	}
         if (unlikely(++ntc == num_slots)) {
@@ -441,7 +440,7 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
     kring->nr_ntc = ntc;
     kring->nr_hwavail += n;
     kring->ring->avail += n;
-    D("tx completed [%d] -> hwavail %d", n, kring->nr_hwavail);
+    ND("tx completed [%d] -> hwavail %d", n, kring->nr_hwavail);
 
     return n;
 }
@@ -491,7 +490,7 @@ generic_set_tx_event(struct netmap_kring *kring, u_int j)
 
     m = kring->tx_pool[e];
     refcnt = GET_MBUF_REFCNT(m);
-    D("Event at %d mbuf %p refcnt %d", e, m, refcnt);
+    ND("Event at %d mbuf %p refcnt %d", e, m, refcnt);
     if (unlikely(!m) || refcnt < 1) {
         D("ERROR: This should never happen refcnt %d", refcnt);
         return;
@@ -501,10 +500,10 @@ generic_set_tx_event(struct netmap_kring *kring, u_int j)
 
     // XXX wmb() ?
     /* Decrement the refcount an free it if we have the last one. */
-    D("about to freem on %p refcnt %d fn %p", m,
+    ND("about to freem on %p refcnt %d fn %p", m,
 	GET_MBUF_REFCNT(m), m->m_ext.ext_free);
     m_freem(m);
-    D("destroyed mbuf at %p ref %d", m, GET_MBUF_REFCNT(m));
+    ND("destroyed mbuf at %p ref %d", m, GET_MBUF_REFCNT(m));
     smp_mb();
 }
 
@@ -594,7 +593,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 
         kring->nr_hwcur = j;
         kring->nr_hwavail -= n;
-	D("queued %d packets, hwcur %d hwavail %d",
+	ND("queued %d packets, hwcur %d hwavail %d",
 		n, kring->nr_hwcur, kring->nr_hwavail);
         IFRATE(rate_ctx.new.txpkt += n);
         if (!ring->avail) {
