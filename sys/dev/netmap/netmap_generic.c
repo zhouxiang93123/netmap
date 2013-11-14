@@ -416,12 +416,14 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
         if (unlikely(m == NULL)) {
 	    /* try to replenish the entry */
             tx_pool[ntc] = m = netmap_get_mbuf(GENERIC_BUF_SIZE);
+	    D("replenish at %d", ntc);
             if (unlikely(m == NULL)) {
                 D("mbuf allocation failed, XXX error");
 		// XXX how do we proceed ? break ?
                 return -ENOMEM;
             }
 	} else if (GET_MBUF_REFCNT(m) != 1) {
+	    D("buf %p busy at %d", m, ntc);
 	    break; /* This mbuf is still busy: its refcnt is 2. */
 	}
         if (unlikely(++ntc == num_slots)) {
@@ -432,7 +434,7 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
     kring->nr_ntc = ntc;
     kring->nr_hwavail += n;
     kring->ring->avail += n;
-    ND("tx completed [%d] -> hwavail %d", n, kring->nr_hwavail);
+    D("tx completed [%d] -> hwavail %d", n, kring->nr_hwavail);
 
     return n;
 }
@@ -452,7 +454,7 @@ generic_tx_event_middle(struct netmap_kring *kring, u_int j)
 
     if (j >= ntc) {
 	e = (j + ntc) / 2;
-    } else {
+    } else { /* wrap around */
 	e = (j + n + ntc) / 2;
 	if (e >= n) {
             e -= n;
@@ -479,8 +481,8 @@ generic_set_tx_event(struct netmap_kring *kring, u_int j)
     struct mbuf *m;
     u_int e = generic_tx_event_middle(kring, j);
 
-    D("Event at %d", e);
     m = kring->tx_pool[e];
+    D("Event at %d mbuf %p refcnt %p", e, m, m->m_ext.ref_cnt);
     if (unlikely(!m)) {
         D("ERROR: This should never happen");
         return;
@@ -494,6 +496,7 @@ generic_set_tx_event(struct netmap_kring *kring, u_int j)
     D("about to call freem on %p refcnt %p fn %p", m,
 	m->m_ext.ref_cnt, m->m_ext.ext_free);
     m_freem(m);
+    D("destroyed mbuf at %p", m);
     smp_mb();
 }
 
@@ -505,7 +508,7 @@ generic_set_tx_event(struct netmap_kring *kring, u_int j)
  * On linux this is not done directly, but using dev_queue_xmit(),
  * since it implements the TX flow control (and takes some locks).
  */
-static int
+int
 generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 {
     struct netmap_adapter *na = NA(ifp);
@@ -583,6 +586,8 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 
         kring->nr_hwcur = j;
         kring->nr_hwavail -= n;
+	D("queued %d packets, hwcur %d hwavail %d",
+		n, kring->nr_hwcur, kring->nr_hwavail);
         IFRATE(rate_ctx.new.txpkt += n);
         if (!ring->avail) {
             /* No more available slots? Set a notification event
@@ -612,6 +617,7 @@ void generic_rx_handler(struct ifnet *ifp, struct mbuf *m)
     u_int work_done;
     u_int rr = 0;
 
+    D("called");
     /* limit the size of the queue */
     if (unlikely(mbq_len(&na->rx_rings[rr].rx_queue) > 1024)) {
         m_freem(m);
@@ -744,7 +750,7 @@ generic_netmap_attach(struct ifnet *ifp)
     num_tx_desc = num_rx_desc = 256; /* starting point */
 
     generic_find_num_desc(ifp, &num_tx_desc, &num_rx_desc);
-    D("Netmap ring size: TX = %d, RX = %d\n", num_tx_desc, num_rx_desc);
+    ND("Netmap ring size: TX = %d, RX = %d\n", num_tx_desc, num_rx_desc);
 
     bzero(&na, sizeof(na));
     na.ifp = ifp;
