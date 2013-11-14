@@ -1086,7 +1086,7 @@ static int
 netmap_dtor_locked(struct netmap_priv_d *priv)
 {
         struct netmap_adapter *na = priv->np_na;
-	struct ifnet *ifp = na->ifp;
+	struct ifnet *ifp;
 
 #ifdef __FreeBSD__
 	/*
@@ -1097,6 +1097,11 @@ netmap_dtor_locked(struct netmap_priv_d *priv)
 		return 0;
 	}
 #endif /* __FreeBSD__ */
+        if (!na) {
+            return 1; //XXX is it correct?
+        }
+        ifp = na->ifp;
+
 	if (ifp) {
 		netmap_do_unregif(priv, priv->np_nifp);
 	}
