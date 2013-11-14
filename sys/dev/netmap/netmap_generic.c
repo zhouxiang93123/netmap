@@ -137,7 +137,6 @@ netmap_get_mbuf(int len)
 
 /* ================== STUFF DEFINED in netmap.c =================== */
 extern int netmap_generic_mit;
-extern void netmap_adapter_put(struct netmap_adapter *);
 
 
 /* ======================== usage stats =========================== */
@@ -226,8 +225,8 @@ netmap_generic_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 enum hrtimer_restart
 generic_timer_handler(struct hrtimer *t)
 {
-    struct netmap_generic_adapter *gna =
-	container_of(t, struct netmap_generic_adapter, mit_timer);
+    struct netmap_generic_adapter *gna = container_of(t, struct netmap_generic_adapter, mit_timer);
+    struct netmap_adapter *na = (struct netmap_adapter *)gna;
     u_int work_done;
 
     if (!gna->mit_pending) {
@@ -239,7 +238,7 @@ generic_timer_handler(struct hrtimer *t)
      * a notification.
      */
     gna->mit_pending = 0;
-    netmap_generic_irq(gna->up.up.ifp, 0, &work_done);
+    netmap_generic_irq(na->ifp, 0, &work_done);
     IFRATE(rate_ctx.new.rxirq++);
     netmap_mitigation_restart(gna);
 
@@ -251,7 +250,7 @@ generic_timer_handler(struct hrtimer *t)
 int generic_netmap_register(struct netmap_adapter *na, int enable)
 {
     struct ifnet *ifp = na->ifp;
-    struct netmap_generic_adapter *gna = (struct netmap_generic_adapter*)na;
+    struct netmap_generic_adapter *gna = (struct netmap_generic_adapter *)na;
     struct mbuf *m;
     int error;
     int i, r;
@@ -727,7 +726,6 @@ generic_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
     return 0;
 }
 
-
 static int
 generic_netmap_dtor(struct netmap_adapter *na)
 {
@@ -741,6 +739,7 @@ generic_netmap_dtor(struct netmap_adapter *na)
     D("Restored native NA %p", prev_na);
     if_rele(ifp);
     na->ifp = NULL;
+
     return 1;
 }
 
@@ -770,8 +769,8 @@ generic_netmap_attach(struct ifnet *ifp)
 
     gna = malloc(sizeof(*gna), M_DEVBUF, M_NOWAIT | M_ZERO);
     if (gna == NULL) {
-	D("no memory on attach, give up");
-	return ENOMEM;
+        D("no memory on attach, give up");
+        return ENOMEM;
     }
     na = (struct netmap_adapter *)gna;
     na->ifp = ifp;
@@ -794,7 +793,7 @@ generic_netmap_attach(struct ifnet *ifp)
 
     generic_find_num_queues(ifp, &na->num_tx_rings, &na->num_rx_rings);
 
-    retval = netmap_attach_common(na, 1);
+    retval = netmap_attach_common(na, na->num_rx_rings);
     if (retval) {
         free(gna, M_DEVBUF);
     }

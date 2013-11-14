@@ -367,10 +367,6 @@ void netmap_enable_all_rings(struct ifnet *ifp)
 	}
 }
 
-/* netmap_adapter creation/destruction */
-void netmap_adapter_get(struct netmap_adapter *na);
-int netmap_adapter_put(struct netmap_adapter *na);
-
 
 /*
  * generic bound_checking function

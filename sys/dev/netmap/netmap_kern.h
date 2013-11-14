@@ -594,6 +594,11 @@ int netmap_catch_rx(struct netmap_adapter *na, int intercept);
 void generic_rx_handler(struct ifnet *ifp, struct mbuf *m);;
 void netmap_catch_packet_steering(struct netmap_generic_adapter *na, int enable);
 
+/* netmap_adapter creation/destruction */
+void netmap_adapter_get(struct netmap_adapter *na);
+int netmap_adapter_put(struct netmap_adapter *na);
+
+
 /* netmap_mitigation API */
 void netmap_mitigation_init(struct netmap_generic_adapter *na);
 void netmap_mitigation_start(struct netmap_generic_adapter *na);

@@ -42,33 +42,33 @@ int netmap_hw_krings_create(struct netmap_adapter *);
 
 /* ========================== LINUX-SPECIFIC ROUTINES ================== */
 
-void netmap_mitigation_init(struct netmap_generic_adapter *na)
+void netmap_mitigation_init(struct netmap_generic_adapter *gna)
 {
-    hrtimer_init(&na->mit_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-    na->mit_timer.function = &generic_timer_handler;
-    na->mit_pending = 0;
+    hrtimer_init(&gna->mit_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+    gna->mit_timer.function = &generic_timer_handler;
+    gna->mit_pending = 0;
 }
 
 extern unsigned int netmap_generic_mit;
 
-void netmap_mitigation_start(struct netmap_generic_adapter *na)
+void netmap_mitigation_start(struct netmap_generic_adapter *gna)
 {
-    hrtimer_start(&na->mit_timer, ktime_set(0, netmap_generic_mit), HRTIMER_MODE_REL);
+    hrtimer_start(&gna->mit_timer, ktime_set(0, netmap_generic_mit), HRTIMER_MODE_REL);
 }
 
-void netmap_mitigation_restart(struct netmap_generic_adapter *na)
+void netmap_mitigation_restart(struct netmap_generic_adapter *gna)
 {
-    hrtimer_forward_now(&na->mit_timer, ktime_set(0, netmap_generic_mit));
+    hrtimer_forward_now(&gna->mit_timer, ktime_set(0, netmap_generic_mit));
 }
 
-int netmap_mitigation_active(struct netmap_generic_adapter *na)
+int netmap_mitigation_active(struct netmap_generic_adapter *gna)
 {
-    return hrtimer_active(&na->mit_timer);
+    return hrtimer_active(&gna->mit_timer);
 }
 
-void netmap_mitigation_cleanup(struct netmap_generic_adapter *na)
+void netmap_mitigation_cleanup(struct netmap_generic_adapter *gna)
 {
-    hrtimer_cancel(&na->mit_timer);
+    hrtimer_cancel(&gna->mit_timer);
 }
 
 /*
