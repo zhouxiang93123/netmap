@@ -277,6 +277,8 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, mmap_unreg, CTLFLAG_RW, &netmap_mmap_unreg, 0,
 SYSCTL_INT(_dev_netmap, OID_AUTO, admode, CTLFLAG_RW, &netmap_admode, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, generic_mit, CTLFLAG_RW, &netmap_generic_mit, 0 , "");
 
+#define NM_IFPNAME(ifp) ((ifp) ? (ifp)->if_xname : "zombie")
+
 NMG_LOCK_T	netmap_global_lock;
 
 /*
@@ -815,11 +817,11 @@ netmap_update_config(struct netmap_adapter *na)
 		return 0; /* nothing changed */
 	if (netmap_verbose || na->refcount > 0) {
 		D("stored config %s: txring %d x %d, rxring %d x %d",
-			ifp->if_xname,
+			NM_IFPNAME(ifp),
 			na->num_tx_rings, na->num_tx_desc,
 			na->num_rx_rings, na->num_rx_desc);
 		D("new config %s: txring %d x %d, rxring %d x %d",
-			ifp->if_xname, txr, txd, rxr, rxd);
+			NM_IFPNAME(ifp), txr, txd, rxr, rxd);
 	}
 	if (na->refcount == 0) {
 		D("configuration changed (but fine)");
@@ -1023,7 +1025,7 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 	if (na->refcount <= 0) {	/* last instance */
 
 		if (netmap_verbose)
-			D("deleting last instance for %s", ifp->if_xname);
+			D("deleting last instance for %s", NM_IFPNAME(ifp));
 		/*
 		 * (TO CHECK) This function is only called
 		 * when the last reference to this file descriptor goes
@@ -1038,7 +1040,8 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 		 * happens if the close() occurs while a concurrent
 		 * syscall is running.
 		 */
-		na->nm_register(na, 0); /* off, clear IFCAP_NETMAP */
+		if (ifp)
+			na->nm_register(na, 0); /* off, clear IFCAP_NETMAP */
 		/* Wake up any sleeping threads. netmap_poll will
 		 * then return POLLERR
 		 * XXX The wake up now must happen during *_down(), when
@@ -1054,6 +1057,8 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 	}
 	/* delete the nifp */
 	netmap_mem_if_delete(na, nifp);
+	netmap_adapter_put(na);
+	priv->np_na = NULL;
 }
 
 
@@ -1065,6 +1070,7 @@ nm_if_rele(struct ifnet *ifp)
 {
 	NMG_LOCK_ASSERT();
 
+#if 0
 	/* I can be called not only for get_ifp()-ed references where netmap's
 	 * capability is guaranteed, but also for non-netmap-capable NICs.
 	 */
@@ -1073,6 +1079,7 @@ nm_if_rele(struct ifnet *ifp)
 		return;
 	}
 	netmap_adapter_put(NA(ifp));
+#endif
 }
 
 static void
@@ -1139,20 +1146,9 @@ netmap_adapter_hw_dtor(struct netmap_adapter *na)
 {
 	struct ifnet *ifp = na->ifp;
 
-	ND("%s has %d references", ifp->if_xname, na->na_refcount);
+	D("%s has %d references", NM_IFPNAME(ifp), na->na_refcount);
 
-#if  0
-	if (na->na_bdg) {
-		netmap_bdg_hw_detach(na);
-	}
-#endif
-
-	if_rele(ifp);
-
-	/* hw netmap_adapters are only destroyed on nic module unload
-         * (i.e., by netmap_detach()
-         */
-	return 0;
+	return 1;
 }
 
 static int
@@ -1162,7 +1158,7 @@ netmap_adapter_vp_dtor(struct netmap_adapter *na)
 	struct nm_bridge *b = vpna->na_bdg;
 	struct ifnet *ifp = na->ifp;
 
-	ND("%s has %d references", ifp->if_xname, na->na_refcount);
+	ND("%s has %d references", NM_IFPNAME(ifp), na->na_refcount);
 
 	if (b) {
 		netmap_bdg_detach_common(b, vpna->bdg_port, -1);
@@ -1183,10 +1179,7 @@ static int
 netmap_dtor_locked(struct netmap_priv_d *priv)
 {
         struct netmap_adapter *na = priv->np_na;
-	struct ifnet *ifp;
-
-	ND("dtor %s", (ifp ? ifp->if_xname : "NULL"));
-
+	
 #ifdef __FreeBSD__
 	/*
 	 * np_refcount is the number of active mmaps on
@@ -1199,15 +1192,8 @@ netmap_dtor_locked(struct netmap_priv_d *priv)
         if (!na) {
             return 1; //XXX is it correct?
         }
-        ifp = na->ifp;
-
-	if (ifp) {
-		netmap_do_unregif(priv, priv->np_nifp);
-	}
+	netmap_do_unregif(priv, priv->np_nifp);
 	netmap_drop_memory_locked(priv);
-	if (ifp) {
-		nm_if_rele(ifp); /* might also destroy *na */
-	}
 	return 1;
 }
 
@@ -1507,6 +1493,7 @@ get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 	struct nm_bridge *b;
 	int i, j, cand = -1, cand2 = -1;
 	int needed;
+	int error = 0;
 
 	*na = NULL;     /* default return value */
 
@@ -1536,7 +1523,7 @@ get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 		// KASSERT(na != NULL);
 		ifp = vpna->up.ifp;
 		/* XXX make sure the name only contains one : */
-		if (!strcmp(ifp->if_xname, name)) {
+		if (!strcmp(NM_IFPNAME(ifp), name)) {
 			netmap_adapter_get(&vpna->up);
 			ND("found existing if %s refs %d", name,
 				vpna->na_bdg_refcount);
@@ -1570,7 +1557,6 @@ get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 		 * and attach it to the ifp
 		 */
 		struct netmap_adapter tmp_na;
-		int error;
 
 		if (nmr->nr_cmd) {
 			/* nr_cmd must be 0 for a virtual port */
@@ -1598,7 +1584,7 @@ get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 		if (!ifp)
 			return ENOMEM;
 
-		strcpy(ifp->if_xname, name);
+		strcpy(NM_IFPNAME(ifp), name);
 		tmp_na.ifp = ifp;
 		/* bdg_netmap_attach creates a struct netmap_adapter */
 		error = bdg_netmap_attach(&tmp_na);
@@ -1611,11 +1597,10 @@ get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 		cand2 = -1;	/* only need one port */
 	} else if (NETMAP_CAPABLE(ifp)) { /* this is a NIC */
 		struct ifnet *real_ifp = ifp;
-		int error;
 		/* make sure the NIC is not already in use */
 		if (NETMAP_OWNED_BY_ANY(NA(ifp))) {
 			D("NIC %s busy, cannot attach to bridge",
-				ifp->if_xname);
+				NM_IFPNAME(ifp));
 			if_rele(ifp); /* don't detach from bridge */
 			return EINVAL;
 		}
@@ -1623,7 +1608,7 @@ get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 		ifp = malloc(sizeof(*ifp), M_DEVBUF, M_NOWAIT | M_ZERO);
 		if (!ifp)
 			return ENOMEM;
-		strcpy(ifp->if_xname, name);
+		strcpy(NM_IFPNAME(ifp), name);
 		error = netmap_bwrap_attach(ifp, real_ifp);
 		if (error) {
 			free(ifp, M_DEVBUF);
@@ -1672,7 +1657,6 @@ no_bridge_port:
                                        i == NETMAP_ADMODE_GENERIC))
             || (NETMAP_CAPABLE(ifp) && !nma_is_generic(NA(ifp)) &&
                                         i == NETMAP_ADMODE_GENERIC)) {
-        	int error = 0;
         	struct netmap_adapter *prev_na;
 		struct netmap_generic_adapter *gna;
 
@@ -1683,19 +1667,13 @@ no_bridge_port:
                    we explicitely want to use the generic adapter. */
                 error = generic_netmap_attach(ifp);
                 if (error) {
-                        nm_if_rele(ifp);
-                        return error;
+			goto out;
                 }
                 ret = NA(ifp);
                 gna = (struct netmap_generic_adapter*)ret;
 		netmap_adapter_get(&gna->up.up);
                 gna->prev = prev_na; /* Store the previously used netmap_adapter. */
-		if (prev_na) {
-			/* we are holding two netmap adapters for the same ifp,
-			 * we need another ref
-			 */
-			ifunit_ref(name);
-		}
+		netmap_adapter_get(prev_na);
                 D("Created generic NA %p (prev %p)", gna, gna->prev);
         }
 
@@ -1703,17 +1681,21 @@ no_bridge_port:
                 ret = NA(ifp);
 		/* Users cannot use the NIC attached to a bridge directly */
 		if (NETMAP_OWNED_BY_KERN(ret)) {
-			if_rele(ifp); /* don't detach from bridge */
-			return EINVAL;
+			error = EINVAL;
+			goto out;
 		} else {
+			error = 0;
                         *na = ret;
-			return 0;	/* valid pointer, we hold the refcount */
+			netmap_adapter_get(ret);
+			goto out;	/* valid pointer, we hold the refcount */
                 }
 	}
         /* Not NETMAP capable and we require a native adapter. */
-        nm_if_rele(ifp);
 
-        return EINVAL;
+out:
+        if_rele(ifp);
+
+        return error;
 }
 
 
@@ -1737,7 +1719,7 @@ netmap_ring_reinit(struct netmap_kring *kring)
 	int errors = 0;
 
 	// XXX KASSERT nm_kr_tryget
-	RD(10, "called for %s", kring->na->ifp->if_xname);
+	RD(10, "called for %s", NM_IFPNAME(kring->na->ifp));
 	if (ring->cur > lim)
 		errors++;
 	for (i = 0; i <= lim; i++) {
@@ -1762,7 +1744,7 @@ netmap_ring_reinit(struct netmap_kring *kring)
 		RD(10, "total %d errors", errors);
 		errors++;
 		RD(10, "%s %s[%d] reinit, cur %d -> %d avail %d -> %d",
-			kring->na->ifp->if_xname,
+			NM_IFPNAME(kring->na->ifp),
 			pos < n ?  "TX" : "RX", pos < n ? pos : pos - n,
 			ring->cur, kring->nr_hwcur,
 			ring->avail, kring->nr_hwavail);
@@ -1806,12 +1788,12 @@ netmap_set_ringid(struct netmap_priv_d *priv, u_int ringid)
 	priv->np_txpoll = (ringid & NETMAP_NO_TX_POLL) ? 0 : 1;
     if (netmap_verbose) {
 	if (ringid & NETMAP_SW_RING)
-		D("ringid %s set to SW RING", ifp->if_xname);
+		D("ringid %s set to SW RING", NM_IFPNAME(ifp));
 	else if (ringid & NETMAP_HW_RING)
-		D("ringid %s set to HW RING %d", ifp->if_xname,
+		D("ringid %s set to HW RING %d", NM_IFPNAME(ifp),
 			priv->np_qfirst);
 	else
-		D("ringid %s set to all %d HW RINGS", ifp->if_xname, lim);
+		D("ringid %s set to all %d HW RINGS", NM_IFPNAME(ifp), lim);
     }
 	return 0;
 }
@@ -1845,7 +1827,7 @@ netmap_do_regif(struct netmap_priv_d *priv, struct netmap_adapter *na,
 		if (error)
 			goto out;
 	}
-	nifp = netmap_if_new(ifp->if_xname, na);
+	nifp = netmap_if_new(NM_IFPNAME(ifp), na);
 	if (nifp == NULL) { /* allocation failed */
 		/* we should drop the allocator, but only
 		 * if we were the ones who grabbed it
@@ -1926,7 +1908,7 @@ nm_bdg_attach(struct nmreq *nmr)
 
 	bna->na_kpriv = npriv;
 	NMG_UNLOCK();
-	ND("registered %s to netmap-mode", na->ifp->if_xname);
+	ND("registered %s to netmap-mode", NM_IFPNAME(na->ifp));
 	return 0;
 
 unref_exit:
@@ -2188,7 +2170,6 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 				error = get_na(nmr, &na, 1 /* create */);
 				if (error)
 					break;
-                                ifp = na->ifp;
 				nmd = na->nm_mem; /* get memory allocator */
 			}
 			
@@ -2206,9 +2187,8 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			nmr->nr_tx_slots = na->num_tx_desc;
 			if (memflags & NETMAP_MEM_PRIVATE)
 				nmr->nr_ringid |= NETMAP_PRIV_MEM;
+			netmap_adapter_put(na);
 		} while (0);
-		if (ifp)
-			nm_if_rele(ifp);	/* return the refcount */
 		NMG_UNLOCK();
 		break;
 
@@ -2244,14 +2224,17 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 				break;
                         ifp = na->ifp;
 			if (NETMAP_OWNED_BY_KERN(na)) {
-				nm_if_rele(ifp);
+				netmap_adapter_put(na);
 				error = EBUSY;
 				break;
 			}
 			nifp = netmap_do_regif(priv, na, nmr->nr_ringid, &error);
 			if (!nifp) {    /* reg. failed, release priv and ref */
-				nm_if_rele(ifp);        /* return the refcount */
-				priv->np_na = NULL;
+				netmap_adapter_put(na);
+				if (priv->np_na) {
+					netmap_adapter_put(priv->np_na);
+					priv->np_na = NULL;
+				}
 				priv->np_nifp = NULL;
 				break;
 			}
@@ -2263,7 +2246,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			nmr->nr_tx_slots = na->num_tx_desc;
 			error = netmap_mem_get_info(na->nm_mem, &nmr->nr_memsize, &memflags);
 			if (error) {
-				nm_if_rele(ifp);
+				netmap_adapter_put(na);
 				break;
 			}
 			if (memflags & NETMAP_MEM_PRIVATE) {
@@ -2293,6 +2276,11 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 
                 na = priv->np_na;      /* we have a reference */
                 ifp = na->ifp;
+		if (ifp == NULL) {
+			RD(1, "the ifp is gone");
+			error = ENXIO;
+			break;
+		}
 
 		if (na == NULL) {
 			D("Internal error: nifp != NULL && na == NULL");
@@ -2355,6 +2343,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		NMG_LOCK();
 		error = get_na(nmr, &na, 0 /* don't create */); /* keep reference */
 		if (error) {
+			netmap_adapter_put(na);
 			NMG_UNLOCK();
 			break;
 		}
@@ -2362,7 +2351,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		so.so_vnet = ifp->if_vnet;
 		// so->so_proto not null.
 		error = ifioctl(&so, cmd, data, td);
-		nm_if_rele(ifp);
+		netmap_adapter_put(na);
 		NMG_UNLOCK();
 		break;
 	    }
@@ -2421,12 +2410,17 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 
         na = priv->np_na;
         ifp = na->ifp;
-	// XXX check for deleting() ?
+	// check for deleted
+	if (ifp == NULL) {
+		RD(1, "the ifp is gone");
+		return POLLERR;
+	}
+
 	if ( (ifp->if_capenable & IFCAP_NETMAP) == 0)
 		return POLLERR;
 
 	if (netmap_verbose & 0x8000)
-		D("device %s events 0x%x", ifp->if_xname, events);
+		D("device %s events 0x%x", NM_IFPNAME(ifp), events);
 	want_tx = events & (POLLOUT | POLLWRNORM);
 	want_rx = events & (POLLIN | POLLRDNORM);
 
@@ -2533,7 +2527,7 @@ flush_tx:
 
 			if (netmap_verbose & NM_VERB_TXSYNC)
 				D("send %d on %s %d",
-					kring->ring->cur, ifp->if_xname, i);
+					kring->ring->cur, NM_IFPNAME(ifp), i);
 			if (na->nm_txsync(na, i, 0))
 				revents |= POLLERR;
 
@@ -2658,6 +2652,7 @@ netmap_attach_common(struct netmap_adapter *na, u_int num_queues)
 	struct ifnet *ifp = na->ifp;
 
 	WNA(ifp) = na;
+	netmap_adapter_get(na);
 	NETMAP_SET_CAPABLE(ifp);
 	if (na->nm_krings_create == NULL) {
 		na->nm_krings_create = netmap_hw_krings_create;
@@ -2680,7 +2675,7 @@ void
 netmap_detach_common(struct netmap_adapter *na)
 {
 	if (na->ifp)
-		WNA(na->ifp) = NULL;
+		WNA(na->ifp) = NULL; /* XXX do we need this? */
 
 	mtx_destroy(&na->core_lock);
 
@@ -2735,7 +2730,7 @@ netmap_attach(struct netmap_adapter *arg, u_int num_queues)
 	}
 	hwna->nm_ndo.ndo_start_xmit = linux_netmap_start_xmit;
 #endif /* linux */
-	D("success for %s", ifp->if_xname);
+	D("success for %s", NM_IFPNAME(ifp));
 	return 0;
 
 fail:
@@ -2747,7 +2742,7 @@ fail:
 void
 netmap_adapter_get(struct netmap_adapter *na)
 {
-	ND("getting %s (%d)", na->ifp->if_xname, na->na_refcount);
+	D("getting %s (%d)", NM_IFPNAME(na->ifp), na->na_refcount);
 	refcount_acquire(&na->na_refcount);
 }
 
@@ -2758,7 +2753,7 @@ netmap_adapter_put(struct netmap_adapter *na)
 	if (!na)
 		return 1;
 
-	ND("putting %s (%d)", na->ifp->if_xname, na->na_refcount);
+	D("putting %s (%d)", NM_IFPNAME(na->ifp), na->na_refcount);
 
 	if (!refcount_release(&na->na_refcount))
 		return 0;
@@ -2836,11 +2831,12 @@ netmap_detach(struct ifnet *ifp)
 	if (!na)
 		return;
 
-	if (na->na_refcount)
-		D("BUG: freeing na of %s with refcount %d",
-			ifp->if_xname, na->na_refcount);
-	
-	netmap_detach_common(na);
+	NMG_LOCK();
+	netmap_disable_all_rings(ifp);
+	na->ifp = NULL;
+	netmap_enable_all_rings(ifp);
+	netmap_adapter_put(na);
+	NMG_UNLOCK();
 }
 
 
@@ -2879,11 +2875,11 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	kring = &na->rx_rings[na->num_rx_rings];
 	lim = kring->nkr_num_slots - 1;
 	if (netmap_verbose & NM_VERB_HOST)
-		D("%s packet %d len %d from the stack", ifp->if_xname,
+		D("%s packet %d len %d from the stack", NM_IFPNAME(ifp),
 			kring->nr_hwcur + kring->nr_hwavail, len);
 	// XXX reconsider long packets if we handle fragments
 	if (len > NETMAP_BDG_BUF_SIZE(na->nm_mem)) { /* too long for us */
-		D("%s from_host, drop packet size %d > %d", ifp->if_xname,
+		D("%s from_host, drop packet size %d > %d", NM_IFPNAME(ifp),
 			len, NETMAP_BDG_BUF_SIZE(na->nm_mem));
 		goto done;
 	}
@@ -2897,7 +2893,7 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	mtx_lock(&kring->q_lock);
 	if (kring->nr_hwavail >= lim) {
 		if (netmap_verbose)
-			D("stack ring %s full\n", ifp->if_xname);
+			D("stack ring %s full\n", NM_IFPNAME(ifp));
 	} else {
 		/* compute the insert position */
 		i = nm_kr_rxpos(kring);
@@ -2907,7 +2903,7 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 		slot->flags = kring->nkr_slot_flags;
 		kring->nr_hwavail++;
 		if (netmap_verbose  & NM_VERB_HOST)
-			D("wake up host ring %s %d", na->ifp->if_xname, na->num_rx_rings);
+			D("wake up host ring %s %d", NM_IFPNAME(na->ifp), na->num_rx_rings);
 		na->nm_notify(ifp, na->num_rx_rings, NR_RX, 0);
 		error = 0;
 	}
@@ -3469,7 +3465,7 @@ retry:
 			    /* round to a multiple of 64 */
 
 			    ND("send %d %d bytes at %s:%d",
-				i, ft_p->ft_len, dst_ifp->if_xname, j);
+				i, ft_p->ft_len, NM_IFPNAME(dst_ifp), j);
 			    if (ft_p->ft_flags & NS_INDIRECT) {
 				if (copyin(src, dst, len)) {
 					// invalid user pointer, pretend len is 0
@@ -3592,7 +3588,7 @@ done:
 	kring->nr_hwcur = j;
 	ring->avail = kring->nr_hwavail;
 	if (netmap_verbose)
-		D("%s ring %d flags %d", na->up.ifp->if_xname, ring_nr, flags);
+		D("%s ring %d flags %d", NM_IFPNAME(na->up.ifp), ring_nr, flags);
 	return 0;
 }
 
@@ -3688,7 +3684,7 @@ bdg_netmap_attach(struct netmap_adapter *arg)
 	na->nm_dtor = netmap_adapter_vp_dtor;
 	na->nm_krings_create = netmap_vp_krings_create;
 	na->nm_krings_delete = netmap_vp_krings_delete;
-	na->nm_mem = netmap_mem_private_new(arg->ifp->if_xname,
+	na->nm_mem = netmap_mem_private_new(NM_IFPNAME(arg->ifp),
 			na->num_tx_rings, na->num_tx_desc,
 			na->num_rx_rings, na->num_rx_desc);
 	error = netmap_attach_common(na, na->num_tx_rings);
@@ -3733,7 +3729,7 @@ netmap_bwrap_intr_notify(struct ifnet *ifp, u_int ring_nr, enum txrx tx, int fla
 	struct netmap_vp_adapter *vpna = &bna->up;
 	int error = 0;
 
-	ND("%s[%d] %s %x", ifp->if_xname, ring_nr, (tx == NR_TX ? "TX" : "RX"), flags);
+	ND("%s[%d] %s %x", NM_IFPNAME(ifp), ring_nr, (tx == NR_TX ? "TX" : "RX"), flags);
 
 	if (!(ifp->if_capenable & IFCAP_NETMAP))
 		return 0;
@@ -3763,7 +3759,7 @@ netmap_bwrap_intr_notify(struct ifnet *ifp, u_int ring_nr, enum txrx tx, int fla
 	}
 	if (kring->nr_hwavail == 0 && netmap_verbose) {
 		D("how strange, interrupt with no packets on %s",
-			ifp->if_xname);
+			NM_IFPNAME(ifp));
 		goto put_out;
 	}
 	/* XXX avail ? */
@@ -3786,7 +3782,7 @@ netmap_bwrap_register(struct netmap_adapter *na, int onoff)
 	struct netmap_adapter *hwna = bna->hwna;
 	int error;
 
-	ND("%s %d", ifp->if_xname, onoff);
+	ND("%s %d", NM_IFPNAME(ifp), onoff);
 
 	if (onoff) {
 		int i;
@@ -3844,7 +3840,7 @@ netmap_bwrap_krings_create(struct netmap_adapter *na)
 	struct netmap_adapter *hostna = &bna->host.up;
 	int error;
 
-	ND("%s", na->ifp->if_xname);
+	ND("%s", NM_IFPNAME(na->ifp));
 
 	error = netmap_vp_krings_create(na);
 	if (error)
@@ -3869,7 +3865,7 @@ netmap_bwrap_krings_delete(struct netmap_adapter *na)
 		(struct netmap_bwrap_adapter *)na;
 	struct netmap_adapter *hwna = bna->hwna;
 
-	ND("%s", na->ifp->if_xname);
+	ND("%s", NM_IFPNAME(na->ifp));
 
 	hwna->nm_krings_delete(hwna);
 	netmap_vp_krings_delete(na);
@@ -3908,7 +3904,7 @@ netmap_bwrap_notify(struct ifnet *ifp, u_int ring_n, enum txrx tx, int flags)
 		}
 		ring->cur = k;
 		ND("%s[%d] PRE rx(%d, %d) ring(%d, %d, %d) tx(%d, %d)",
-			ifp->if_xname, ring_n,
+			NM_IFPNAME(ifp), ring_n,
 			kring->nr_hwcur, kring->nr_hwavail, 
 			ring->cur, ring->avail, ring->reserved,
 			hw_kring->nr_hwcur, hw_kring->nr_hwavail);
@@ -3917,7 +3913,7 @@ netmap_bwrap_notify(struct ifnet *ifp, u_int ring_n, enum txrx tx, int flags)
 		kring->nr_hwavail = 0;
 		ring->reserved = lim - ring->avail;
 		ND("%s[%d] PST rx(%d, %d) ring(%d, %d, %d) tx(%d, %d)",
-			ifp->if_xname, ring_n,
+			NM_IFPNAME(ifp), ring_n,
 			kring->nr_hwcur, kring->nr_hwavail, 
 			ring->cur, ring->avail, ring->reserved,
 			hw_kring->nr_hwcur, hw_kring->nr_hwavail);

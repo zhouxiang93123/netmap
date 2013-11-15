@@ -245,9 +245,9 @@ linux_netmap_poll(struct file * file, struct poll_table_struct *pwait)
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,28)
 	int events = POLLIN | POLLOUT; /* XXX maybe... */
 #elif LINUX_VERSION_CODE < KERNEL_VERSION(3,4,0)
-	int events = pwait ? pwait->key : POLLIN | POLLOUT;
+	int events = pwait ? pwait->key : POLLIN | POLLOUT | POLLERR;
 #else /* in 3.4.0 field 'key' was renamed to '_key' */
-	int events = pwait ? pwait->_key : POLLIN | POLLOUT;
+	int events = pwait ? pwait->_key : POLLIN | POLLOUT | POLLERR;
 #endif
 	return netmap_poll((void *)pwait, events, (void *)file);
 }

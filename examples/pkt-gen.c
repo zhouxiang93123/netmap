@@ -971,6 +971,11 @@ sender_body(void *data)
 			D("poll error/timeout on queue %d", targ->me);
 			goto quit;
 		}
+		if (fds[0].revents & POLLERR) {
+			D("poll error");
+			targ->cancel = 1;
+			break;
+		}
 		/*
 		 * scan our queues and send on those with room
 		 */
