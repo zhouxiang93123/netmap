@@ -1584,7 +1584,7 @@ get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 		if (!ifp)
 			return ENOMEM;
 
-		strcpy(NM_IFPNAME(ifp), name);
+		strcpy(ifp->if_xname, name);
 		tmp_na.ifp = ifp;
 		/* bdg_netmap_attach creates a struct netmap_adapter */
 		error = bdg_netmap_attach(&tmp_na);
@@ -1608,7 +1608,7 @@ get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 		ifp = malloc(sizeof(*ifp), M_DEVBUF, M_NOWAIT | M_ZERO);
 		if (!ifp)
 			return ENOMEM;
-		strcpy(NM_IFPNAME(ifp), name);
+		strcpy(ifp->if_xname, name);
 		error = netmap_bwrap_attach(ifp, real_ifp);
 		if (error) {
 			free(ifp, M_DEVBUF);
