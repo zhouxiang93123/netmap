@@ -201,31 +201,12 @@ linux_netmap_find_driver(struct device *dev)
 struct net_device *
 ifunit_ref(const char *name)
 {
-	struct net_device *ifp = dev_get_by_name(&init_net, name);
-	struct device_driver *dd;
-
-	if (ifp == NULL)
-		return NULL;
-
-	if ( (dd = linux_netmap_find_driver(&ifp->dev)) == NULL )
-		goto error;
-
-	if (!try_module_get(dd->owner))
-		goto error;
-
-	return ifp;
-error:
-	dev_put(ifp);
-	return NULL;
+	return dev_get_by_name(&init_net, name);
 }
 
 void if_rele(struct net_device *ifp)
 {
-	struct device_driver *dd;
-	dd = linux_netmap_find_driver(&ifp->dev);
 	dev_put(ifp);
-	if (dd)
-		module_put(dd->owner);
 }
 
 
