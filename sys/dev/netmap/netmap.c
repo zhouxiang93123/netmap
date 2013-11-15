@@ -2742,6 +2742,10 @@ fail:
 void
 netmap_adapter_get(struct netmap_adapter *na)
 {
+        if (!na) {
+            return;
+        }
+
 	D("getting %s (%d)", NM_IFPNAME(na->ifp), na->na_refcount);
 	refcount_acquire(&na->na_refcount);
 }
