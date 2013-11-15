@@ -484,15 +484,13 @@ generic_set_tx_event(struct netmap_kring *kring, u_int j)
 {
     struct mbuf *m;
     u_int e = generic_tx_event_middle(kring, j);
-    int refcnt;
 
     m = kring->tx_pool[e];
-    refcnt = GET_MBUF_REFCNT(m);
-    ND("Event at %d mbuf %p refcnt %d", e, m, refcnt);
-    if (unlikely(!m) || refcnt < 1) {
-        D("ERROR: This should never happen refcnt %d", refcnt);
+    if (unlikely(!m)) {
+        D("ERROR: This should never happen");
         return;
     }
+    ND("Event at %d mbuf %p refcnt %d", e, m, GET_MBUF_REFCNT(m));
     kring->tx_pool[e] = NULL;
     SET_MBUF_DESTRUCTOR(m, generic_mbuf_destructor);
 
