@@ -186,18 +186,6 @@ generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq)
     *rxq = 1; /* TODO ifp->real_num_rx_queues */
 }
 
-static struct device_driver *
-linux_netmap_find_driver(struct device *dev)
-{
-	struct device_driver *dd;
-
-	while ( (dd = dev->driver) == NULL ) {
-		if ( (dev = dev->parent) == NULL )
-			return NULL;
-	}
-	return dd;
-}
-
 struct net_device *
 ifunit_ref(const char *name)
 {
