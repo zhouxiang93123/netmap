@@ -174,7 +174,7 @@ static void rate_callback(unsigned long arg)
     r = mod_timer(&ctx->timer, jiffies +
                                 msecs_to_jiffies(RATE_PERIOD * 1000));
     if (unlikely(r))
-        D("[v1000] Error: mod_timer()\n");
+        D("[v1000] Error: mod_timer()");
 }
 
 static struct rate_context rate_ctx;
@@ -486,8 +486,9 @@ generic_set_tx_event(struct netmap_kring *kring, u_int j)
     u_int e = generic_tx_event_middle(kring, j);
 
     m = kring->tx_pool[e];
-    if (unlikely(!m)) {
-        D("ERROR: This should never happen");
+    if (m == NULL) {
+        /* This can happen if there is already an event on the netmap
+           slot 'e': There is nothing to do. */
         return;
     }
     ND("Event at %d mbuf %p refcnt %d", e, m, GET_MBUF_REFCNT(m));
@@ -556,7 +557,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
              */
             tx_ret = generic_xmit_frame(ifp, m, addr, len, ring_nr);
             if (unlikely(tx_ret)) {
-                D("start_xmit failed: err %d [%d,%d,%d]", tx_ret, j, k, kring->nr_hwavail);
+                RD(5, "start_xmit failed: err %d [%d,%d,%d,%d]", tx_ret, kring->nr_ntc, j, k, kring->nr_hwavail);
                 /*
                  * No room for this mbuf in the device driver.
 		 * Request a notification FOR A PREVIOUS MBUF,
@@ -748,7 +749,7 @@ generic_netmap_attach(struct ifnet *ifp)
     num_tx_desc = num_rx_desc = 256; /* starting point */
 
     generic_find_num_desc(ifp, &num_tx_desc, &num_rx_desc);
-    ND("Netmap ring size: TX = %d, RX = %d\n", num_tx_desc, num_rx_desc);
+    ND("Netmap ring size: TX = %d, RX = %d", num_tx_desc, num_rx_desc);
 
     bzero(&na, sizeof(na));
     na.ifp = ifp;
