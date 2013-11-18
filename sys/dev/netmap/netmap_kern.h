@@ -595,8 +595,29 @@ void generic_rx_handler(struct ifnet *ifp, struct mbuf *m);;
 void netmap_catch_packet_steering(struct netmap_generic_adapter *na, int enable);
 
 /* netmap_adapter creation/destruction */
+#define NM_IFPNAME(ifp) ((ifp) ? (ifp)->if_xname : "zombie")
+#define NM_DEBUG_PUTGET 1
+#ifdef NM_DEBUG_PUTGET
+#define NM_DBG(f) __##f
+void __netmap_adapter_get(struct netmap_adapter *na);
+#define netmap_adapter_get(na) 							\
+	do {									\
+		struct netmap_adapter *__na = na;				\
+		D("getting %s (%d)", NM_IFPNAME(__na->ifp), __na->na_refcount);	\
+		__netmap_adapter_get(__na);					\
+	} while (0)
+int __netmap_adapter_put(struct netmap_adapter *na);
+#define netmap_adapter_put(na)							\
+	do {									\
+		struct netmap_adapter *__na = na;				\
+		D("putting %s (%d)", NM_IFPNAME(__na->ifp), __na->na_refcount);	\
+		__netmap_adapter_put(__na);					\
+	} while (0)
+#else
+#define NM_DBG(f) f
 void netmap_adapter_get(struct netmap_adapter *na);
 int netmap_adapter_put(struct netmap_adapter *na);
+#endif
 
 
 /* netmap_mitigation API */

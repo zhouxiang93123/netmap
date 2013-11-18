@@ -277,8 +277,6 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, mmap_unreg, CTLFLAG_RW, &netmap_mmap_unreg, 0,
 SYSCTL_INT(_dev_netmap, OID_AUTO, admode, CTLFLAG_RW, &netmap_admode, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, generic_mit, CTLFLAG_RW, &netmap_generic_mit, 0 , "");
 
-#define NM_IFPNAME(ifp) ((ifp) ? (ifp)->if_xname : "zombie")
-
 NMG_LOCK_T	netmap_global_lock;
 
 /*
@@ -1624,7 +1622,7 @@ get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 		if_rele(ifp); /* don't detach from bridge */
 		return EINVAL;
 	}
-	vpna = (struct netmap_vp_adapter *)NA(ifp);
+	vpna = (struct netmap_vp_adapter *)ret;
 
 	BDG_WLOCK(b);
 	vpna->bdg_port = cand;
@@ -1642,10 +1640,10 @@ get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 		b->bdg_active_ports++;
 		ND("host %p to bridge port %d", hostna, cand2);
 	}
-	netmap_adapter_get(&vpna->up);
 	ND("if %s refs %d", name, vpna->up.na_refcount);
 	BDG_WUNLOCK(b);
 	*na = ret;
+	netmap_adapter_get(ret);
 	return 0;
 
 no_bridge_port:
@@ -1813,7 +1811,7 @@ netmap_do_regif(struct netmap_priv_d *priv, struct netmap_adapter *na,
 {
         struct ifnet *ifp = na->ifp;
 	struct netmap_if *nifp = NULL;
-	int error, need_mem;
+	int error, need_mem = 0;
 
 	NMG_LOCK_ASSERT();
 	/* ring configuration may have changed, fetch from the card */
@@ -2278,15 +2276,16 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		rmb(); /* make sure following reads are not from cache */
 
                 na = priv->np_na;      /* we have a reference */
-                ifp = na->ifp;
-		if (ifp == NULL) {
-			RD(1, "the ifp is gone");
+
+		if (na == NULL) {
+			D("Internal error: nifp != NULL && na == NULL");
 			error = ENXIO;
 			break;
 		}
 
-		if (na == NULL) {
-			D("Internal error: nifp != NULL && na == NULL");
+                ifp = na->ifp;
+		if (ifp == NULL) {
+			RD(1, "the ifp is gone");
 			error = ENXIO;
 			break;
 		}
@@ -2655,7 +2654,6 @@ netmap_attach_common(struct netmap_adapter *na, u_int num_queues)
 	struct ifnet *ifp = na->ifp;
 
 	WNA(ifp) = na;
-	netmap_adapter_get(na);
 	NETMAP_SET_CAPABLE(ifp);
 	if (na->nm_krings_create == NULL) {
 		na->nm_krings_create = netmap_hw_krings_create;
@@ -2722,6 +2720,7 @@ netmap_attach(struct netmap_adapter *arg, u_int num_queues)
 	hwna->up.nm_dtor = netmap_adapter_hw_dtor;
 	if (netmap_attach_common(&hwna->up, num_queues))
 		goto fail;
+	netmap_adapter_get(&hwna->up);
 #ifdef linux
 	if (ifp->netdev_ops) {
             /* prepare a clone of the netdev ops */
@@ -2743,24 +2742,21 @@ fail:
 }
 
 void
-netmap_adapter_get(struct netmap_adapter *na)
+NM_DBG(netmap_adapter_get)(struct netmap_adapter *na)
 {
         if (!na) {
             return;
         }
 
-	D("getting %s (%d)", NM_IFPNAME(na->ifp), na->na_refcount);
 	refcount_acquire(&na->na_refcount);
 }
 
 /* returns 1 iff the netmap_adapter is destroyed */
 int
-netmap_adapter_put(struct netmap_adapter *na)
+NM_DBG(netmap_adapter_put)(struct netmap_adapter *na)
 {
 	if (!na)
 		return 1;
-
-	D("putting %s (%d)", NM_IFPNAME(na->ifp), na->na_refcount);
 
 	if (!refcount_release(&na->na_refcount))
 		return 0;
@@ -2840,9 +2836,9 @@ netmap_detach(struct ifnet *ifp)
 
 	NMG_LOCK();
 	netmap_disable_all_rings(ifp);
+	netmap_adapter_put(na);
 	na->ifp = NULL;
 	netmap_enable_all_rings(ifp);
-	netmap_adapter_put(na);
 	NMG_UNLOCK();
 }
 
