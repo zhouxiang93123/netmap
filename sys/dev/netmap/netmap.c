@@ -3723,7 +3723,7 @@ netmap_bwrap_intr_notify(struct ifnet *ifp, u_int ring_nr, enum txrx tx, int fla
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_bwrap_adapter *bna = na->na_private;
 	struct netmap_vp_adapter *hostna = &bna->host;
-	struct netmap_kring *kring;
+	struct netmap_kring *kring, *bkring;
 	struct netmap_ring *ring;
 	int is_host_ring = ring_nr == na->num_rx_rings;
 	struct netmap_vp_adapter *vpna = &bna->up;
@@ -3734,6 +3734,16 @@ netmap_bwrap_intr_notify(struct ifnet *ifp, u_int ring_nr, enum txrx tx, int fla
 	if (!(ifp->if_capenable & IFCAP_NETMAP))
 		return 0;
 
+	if (tx == NR_TX) {
+		kring = &na->tx_rings[ring_nr];
+		bkring = &vpna->up.rx_rings[ring_nr];
+		if (kring->nkr_stopped)
+			nm_disable_ring(bkring);
+		else
+			bkring->nkr_stopped = 0;
+		return 0;
+	}
+
 	kring = &na->rx_rings[ring_nr];
 	ring = kring->ring;
 
@@ -3741,7 +3751,7 @@ netmap_bwrap_intr_notify(struct ifnet *ifp, u_int ring_nr, enum txrx tx, int fla
 	if (nm_kr_tryget(kring)) 
 		return 0;
 
-	if (tx == NR_TX || (is_host_ring && hostna->na_bdg == NULL)) {
+	if (is_host_ring && hostna->na_bdg == NULL) {
 		error = bna->save_notify(ifp, ring_nr, tx, flags);
 		goto put_out;
 	}
@@ -3885,7 +3895,7 @@ netmap_bwrap_notify(struct ifnet *ifp, u_int ring_n, enum txrx tx, int flags)
 	u_int lim, k;
 	int error = 0;
 	
-	if (tx != NR_RX)
+	if (tx == NR_TX)
 	        return ENXIO;
 	
 	kring = &na->rx_rings[ring_n];
@@ -3898,9 +3908,9 @@ netmap_bwrap_notify(struct ifnet *ifp, u_int ring_n, enum txrx tx, int flags)
 	if (ring_n == na->num_rx_rings) {
 		netmap_txsync_to_host(hwna);
 	} else {
-		if (nm_kr_tryget(hw_kring)) {
-			return 0;
-		}
+		//if (nm_kr_tryget(hw_kring)) {
+		//	return 0;
+		//}
 		if (hwna->ifp == NULL || !(hwna->ifp->if_capenable & IFCAP_NETMAP))
 			return 0;
 		ring->cur = k;
@@ -3918,7 +3928,7 @@ netmap_bwrap_notify(struct ifnet *ifp, u_int ring_n, enum txrx tx, int flags)
 			kring->nr_hwcur, kring->nr_hwavail, 
 			ring->cur, ring->avail, ring->reserved,
 			hw_kring->nr_hwcur, hw_kring->nr_hwavail);
-		nm_kr_put(hw_kring);
+		//nm_kr_put(hw_kring);
 	}
 	
 	return error;
