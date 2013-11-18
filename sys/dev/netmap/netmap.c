@@ -614,6 +614,12 @@ nma_is_hw(struct netmap_adapter *na)
 	return !nma_is_vp(na) && !nma_is_host(na) && !nma_is_generic(na);
 }
 
+static __inline int
+nma_is_bwrap(struct netmap_adapter *na)
+{
+	return na->nm_register == netmap_bwrap_register;
+}
+
 
 /*
  * If the NIC is owned by the kernel
@@ -621,14 +627,9 @@ nma_is_hw(struct netmap_adapter *na)
  * if the NIC is owned by a user, only users can share it.
  * Evaluation must be done under NMG_LOCK().
  */
-#if 0
-#define NETMAP_OWNED_BY_KERN(na)	(!nma_is_vp(na) && na->na_bdg)
+#define NETMAP_OWNED_BY_KERN(na)	(na->na_private)
 #define NETMAP_OWNED_BY_ANY(na) \
 	(NETMAP_OWNED_BY_KERN(na) || (na->refcount > 0))
-#else
-#define NETMAP_OWNED_BY_KERN(ifp)	0
-#define NETMAP_OWNED_BY_ANY(ifp)	0
-#endif
 
 /*
  * NA(ifp)->bdg_port	port index
@@ -1887,13 +1888,13 @@ nm_bdg_attach(struct nmreq *nmr)
 	/* get_na() sets na_bdg if this is a physical interface
 	 * that we can attach to a switch.
 	 */
-	//if (!NETMAP_OWNED_BY_KERN(na)) {
-	//	/* got reference to a virtual port or direct access to a NIC.
-	//	 * perhaps specified no bridge prefix or wrong NIC name
-	//	 */
-	//	error = EINVAL;
-	//	goto unref_exit;
-	//}
+	if (!nma_is_bwrap(na)) {
+		/* got reference to a virtual port or direct access to a NIC.
+		 * perhaps specified no bridge prefix or wrong NIC name
+		 */
+		error = EINVAL;
+		goto unref_exit;
+	}
 
 	if (na->refcount > 0) { /* already registered */
 		error = EBUSY;
@@ -1933,15 +1934,14 @@ nm_bdg_detach(struct nmreq *nmr)
 	if (error) { /* no device, or another bridge or user owns the device */
 		goto unlock_exit;
 	}
+	if (!nma_is_bwrap(na)) {
+		/* got reference to a virtual port or direct access to a NIC.
+		 * perhaps specified no bridge's prefix or wrong NIC's name
+		 */
+		error = EINVAL;
+		goto unref_exit;
+	}
 	bna = (struct netmap_bwrap_adapter *)na;
-	/* XXX do we need to check this ? */
-	//if (!NETMAP_OWNED_BY_KERN(na)) {
-	//	/* got reference to a virtual port or direct access to a NIC.
-	//	 * perhaps specified no bridge's prefix or wrong NIC's name
-	//	 */
-	//	error = EINVAL;
-	//	goto unref_exit;
-	//}
 
 	if (na->refcount == 0) { /* not registered */
 		error = EINVAL;
@@ -2831,18 +2831,12 @@ netmap_detach(struct ifnet *ifp)
 	if (!na)
 		return;
 
-	D("1");
 	NMG_LOCK();
-	D("2");
 	netmap_disable_all_rings(ifp);
-	D("3");
 	netmap_adapter_put(na);
 	na->ifp = NULL;
-	D("4");
 	netmap_enable_all_rings(ifp);
-	D("5");
 	NMG_UNLOCK();
-	D("6");
 }
 
 
