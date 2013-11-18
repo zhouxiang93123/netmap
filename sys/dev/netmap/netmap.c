@@ -1057,8 +1057,6 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 	}
 	/* delete the nifp */
 	netmap_mem_if_delete(na, nifp);
-	netmap_adapter_put(na);
-	priv->np_na = NULL;
 }
 
 
@@ -1193,7 +1191,12 @@ netmap_dtor_locked(struct netmap_priv_d *priv)
             return 1; //XXX is it correct?
         }
 	netmap_do_unregif(priv, priv->np_nifp);
+	priv->np_nifp = NULL;
 	netmap_drop_memory_locked(priv);
+	if (priv->np_na) {
+		netmap_adapter_put(na);
+		priv->np_na = NULL;
+	}
 	return 1;
 }
 
