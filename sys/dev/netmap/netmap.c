@@ -1618,6 +1618,7 @@ get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 		ret = NA(ifp);
 		if (nmr->nr_arg1 != NETMAP_BDG_HOST)
 			cand2 = -1; /* only need one port */
+		if_rele(real_ifp);
 	} else { /* not a netmap-capable NIC */
 		if_rele(ifp); /* don't detach from bridge */
 		return EINVAL;
@@ -1684,12 +1685,10 @@ no_bridge_port:
 		if (NETMAP_OWNED_BY_KERN(ret)) {
 			error = EINVAL;
 			goto out;
-		} else {
-			error = 0;
-                        *na = ret;
-			netmap_adapter_get(ret);
-			goto out;	/* valid pointer, we hold the refcount */
-                }
+		} 
+		error = 0;
+		*na = ret;
+		netmap_adapter_get(ret);
 	}
         /* Not NETMAP capable and we require a native adapter. */
 
@@ -1888,14 +1887,13 @@ nm_bdg_attach(struct nmreq *nmr)
 	/* get_na() sets na_bdg if this is a physical interface
 	 * that we can attach to a switch.
 	 */
-	bna = (struct netmap_bwrap_adapter*)na;
-	if (!NETMAP_OWNED_BY_KERN(na)) {
-		/* got reference to a virtual port or direct access to a NIC.
-		 * perhaps specified no bridge prefix or wrong NIC name
-		 */
-		error = EINVAL;
-		goto unref_exit;
-	}
+	//if (!NETMAP_OWNED_BY_KERN(na)) {
+	//	/* got reference to a virtual port or direct access to a NIC.
+	//	 * perhaps specified no bridge prefix or wrong NIC name
+	//	 */
+	//	error = EINVAL;
+	//	goto unref_exit;
+	//}
 
 	if (na->refcount > 0) { /* already registered */
 		error = EBUSY;
@@ -1907,6 +1905,7 @@ nm_bdg_attach(struct nmreq *nmr)
 		goto unref_exit;
 	}
 
+	bna = (struct netmap_bwrap_adapter*)na;
 	bna->na_kpriv = npriv;
 	NMG_UNLOCK();
 	ND("registered %s to netmap-mode", NM_IFPNAME(na->ifp));
@@ -1936,13 +1935,13 @@ nm_bdg_detach(struct nmreq *nmr)
 	}
 	bna = (struct netmap_bwrap_adapter *)na;
 	/* XXX do we need to check this ? */
-	if (!NETMAP_OWNED_BY_KERN(na)) {
-		/* got reference to a virtual port or direct access to a NIC.
-		 * perhaps specified no bridge's prefix or wrong NIC's name
-		 */
-		error = EINVAL;
-		goto unref_exit;
-	}
+	//if (!NETMAP_OWNED_BY_KERN(na)) {
+	//	/* got reference to a virtual port or direct access to a NIC.
+	//	 * perhaps specified no bridge's prefix or wrong NIC's name
+	//	 */
+	//	error = EINVAL;
+	//	goto unref_exit;
+	//}
 
 	if (na->refcount == 0) { /* not registered */
 		error = EINVAL;
@@ -1962,15 +1961,13 @@ nm_bdg_detach(struct nmreq *nmr)
 		bzero(npriv, sizeof(*npriv));
 		free(npriv, M_DEVBUF);
 	}
-	nm_if_rele(na->ifp);
-	NMG_UNLOCK();
-	return error;
 
 unref_exit:
-	nm_if_rele(na->ifp);
+	netmap_adapter_put(na);
 unlock_exit:
 	NMG_UNLOCK();
 	return error;
+
 }
 
 
@@ -2834,12 +2831,18 @@ netmap_detach(struct ifnet *ifp)
 	if (!na)
 		return;
 
+	D("1");
 	NMG_LOCK();
+	D("2");
 	netmap_disable_all_rings(ifp);
+	D("3");
 	netmap_adapter_put(na);
 	na->ifp = NULL;
+	D("4");
 	netmap_enable_all_rings(ifp);
+	D("5");
 	NMG_UNLOCK();
+	D("6");
 }
 
 
@@ -3801,9 +3804,11 @@ netmap_bwrap_register(struct netmap_adapter *na, int onoff)
 		}
 	}
 
-	error = hwna->nm_register(hwna, onoff);
-	if (error)
-		return error;
+	if (hwna->ifp) {
+		error = hwna->nm_register(hwna, onoff);
+		if (error)
+			return error;
+	}
 
 	bdg_netmap_reg(na, onoff);
 
@@ -3886,9 +3891,6 @@ netmap_bwrap_notify(struct ifnet *ifp, u_int ring_n, enum txrx tx, int flags)
 	u_int lim, k;
 	int error = 0;
 	
-	if (!(hwna->ifp->if_capenable & IFCAP_NETMAP)) 
-	        return 0;
-	
 	if (tx != NR_RX)
 	        return ENXIO;
 	
@@ -3905,6 +3907,8 @@ netmap_bwrap_notify(struct ifnet *ifp, u_int ring_n, enum txrx tx, int flags)
 		if (nm_kr_tryget(hw_kring)) {
 			return 0;
 		}
+		if (hwna->ifp == NULL || !(hwna->ifp->if_capenable & IFCAP_NETMAP))
+			return 0;
 		ring->cur = k;
 		ND("%s[%d] PRE rx(%d, %d) ring(%d, %d, %d) tx(%d, %d)",
 			NM_IFPNAME(ifp), ring_n,
@@ -3969,7 +3973,8 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 	bna->up.retry = 1; /* XXX maybe this should depend on the hwna */
 
 	bna->hwna = hwna;
-	hwna->na_private = bna;
+	netmap_adapter_get(hwna);
+	hwna->na_private = bna; /* weak reference */
 
 	hostna = &bna->host.up;
 	hostna->ifp = hwna->ifp;
@@ -3983,7 +3988,7 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 	hostna->nm_mem = na->nm_mem;
 	hostna->na_private = bna;
 
-	ND("%s<->%s txr %d txd %d rxr %d rxd %d", fake->if_xname, real->if_xname,
+	D("%s<->%s txr %d txd %d rxr %d rxd %d", fake->if_xname, real->if_xname,
 		na->num_tx_rings, na->num_tx_desc,
 		na->num_rx_rings, na->num_rx_desc);
 	
