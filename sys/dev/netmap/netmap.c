@@ -1465,6 +1465,42 @@ unlock_out:
 }
 
 
+int
+get_hw_na(struct ifnet *ifp, struct netmap_adapter **na)
+{
+	/* generic support */
+	int i = netmap_admode;	/* Take a snapshot. */
+
+	*na = NULL;
+        if ((!NETMAP_CAPABLE(ifp) && (i == NETMAP_ADMODE_BEST ||
+                                       i == NETMAP_ADMODE_GENERIC))
+            || (NETMAP_CAPABLE(ifp) && !nma_is_generic(NA(ifp)) &&
+                                        i == NETMAP_ADMODE_GENERIC)) {
+        	struct netmap_adapter *prev_na;
+		struct netmap_generic_adapter *gna;
+		int error;
+
+                prev_na = NA(ifp);  /* Previously used netmap adapter (can be NULL). */
+                /* We create a generic netmap adapter (which doesn't require
+                   driver support), when the interface is not netmap capable (and we are
+                   not forbidden to use the generic adapter), or when
+                   we explicitely want to use the generic adapter. */
+                error = generic_netmap_attach(ifp);
+                if (error) {
+			return error;
+                }
+                gna = (struct netmap_generic_adapter*)NA(ifp);
+                gna->prev = prev_na; /* Store the previously used netmap_adapter. */
+		if (prev_na != NULL)
+			netmap_adapter_get(prev_na);
+                D("Created generic NA %p (prev %p)", gna, gna->prev);
+        }
+	if (NETMAP_CAPABLE(ifp))
+		*na = NA(ifp);
+	return 0;
+}
+
+
 /*
  * MUST BE CALLED UNDER NMG_LOCK()
  *
@@ -1597,33 +1633,37 @@ get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 		}
 		ret = NA(ifp);
 		cand2 = -1;	/* only need one port */
-	} else if (NETMAP_CAPABLE(ifp)) { /* this is a NIC */
-		struct ifnet *real_ifp = ifp;
+	} else {  /* this is a NIC */
+		struct ifnet *fake_ifp;
+
+		error = get_hw_na(ifp, &ret);
+		if (error || na == NULL)
+			goto out;
+
 		/* make sure the NIC is not already in use */
-		if (NETMAP_OWNED_BY_ANY(NA(ifp))) {
+		if (NETMAP_OWNED_BY_ANY(ret)) {
 			D("NIC %s busy, cannot attach to bridge",
 				NM_IFPNAME(ifp));
-			if_rele(ifp); /* don't detach from bridge */
-			return EINVAL;
+			error = EINVAL;
+			goto out;
 		}
 		/* create a fake interface */
-		ifp = malloc(sizeof(*ifp), M_DEVBUF, M_NOWAIT | M_ZERO);
-		if (!ifp)
-			return ENOMEM;
-		strcpy(ifp->if_xname, name);
-		error = netmap_bwrap_attach(ifp, real_ifp);
-		if (error) {
-			free(ifp, M_DEVBUF);
-			return error;
+		fake_ifp = malloc(sizeof(*ifp), M_DEVBUF, M_NOWAIT | M_ZERO);
+		if (!fake_ifp) {
+			error = ENOMEM;
+			goto out;
 		}
-		ret = NA(ifp);
+		strcpy(ifp->if_xname, name);
+		error = netmap_bwrap_attach(fake_ifp, ifp);
+		if (error) {
+			free(fake_ifp, M_DEVBUF);
+			goto out;
+		}
+		ret = NA(fake_ifp);
 		if (nmr->nr_arg1 != NETMAP_BDG_HOST)
 			cand2 = -1; /* only need one port */
-		if_rele(real_ifp);
-	} else { /* not a netmap-capable NIC */
-		if_rele(ifp); /* don't detach from bridge */
-		return EINVAL;
-	}
+		if_rele(ifp);
+	} 
 	vpna = (struct netmap_vp_adapter *)ret;
 
 	BDG_WLOCK(b);
@@ -1654,34 +1694,11 @@ no_bridge_port:
 	        return ENXIO;
         }
 
-	/* generic support */
-	i = netmap_admode;	/* Take a snapshot. */
-        if ((!NETMAP_CAPABLE(ifp) && (i == NETMAP_ADMODE_BEST ||
-                                       i == NETMAP_ADMODE_GENERIC))
-            || (NETMAP_CAPABLE(ifp) && !nma_is_generic(NA(ifp)) &&
-                                        i == NETMAP_ADMODE_GENERIC)) {
-        	struct netmap_adapter *prev_na;
-		struct netmap_generic_adapter *gna;
+	error = get_hw_na(ifp, &ret);
+	if (error)
+		goto out;
 
-                prev_na = NA(ifp);  /* Previously used netmap adapter (can be NULL). */
-                /* We create a generic netmap adapter (which doesn't require
-                   driver support), when the interface is not netmap capable (and we are
-                   not forbidden to use the generic adapter), or when
-                   we explicitely want to use the generic adapter. */
-                error = generic_netmap_attach(ifp);
-                if (error) {
-			goto out;
-                }
-                ret = NA(ifp);
-                gna = (struct netmap_generic_adapter*)ret;
-		netmap_adapter_get(&gna->up.up);
-                gna->prev = prev_na; /* Store the previously used netmap_adapter. */
-		netmap_adapter_get(prev_na);
-                D("Created generic NA %p (prev %p)", gna, gna->prev);
-        }
-
-	if (NETMAP_CAPABLE(ifp)) {
-                ret = NA(ifp);
+	if (ret != NULL) {
 		/* Users cannot use the NIC attached to a bridge directly */
 		if (NETMAP_OWNED_BY_KERN(ret)) {
 			error = EINVAL;
