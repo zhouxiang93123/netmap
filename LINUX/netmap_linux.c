@@ -24,6 +24,7 @@
  */
 
 #include "bsd_glue.h"
+#include <linux/file.h>   /* fget(int fd) */
 
 #include <net/netmap.h>
 #include <dev/netmap/netmap_kern.h>
@@ -438,9 +439,14 @@ static struct file_operations netmap_fops = {
 };
 
 
-struct socket *netmap_get_socket(struct file *filp)
+struct socket *get_netmap_socket(int fd)
 {
+    struct file *filp = fget(fd);
     struct netmap_priv_d *priv;
+
+    if (!filp) {
+        return ERR_PTR(EBADF);
+    }
 
     if (filp->f_op != &netmap_fops) {
         return ERR_PTR(EINVAL);
@@ -448,12 +454,12 @@ struct socket *netmap_get_socket(struct file *filp)
 
     priv = (struct netmap_priv_d *)filp->private_data;
     if (!priv || !priv->np_sock) {
-        return ERR_PTR(EBADFD);
+        return ERR_PTR(EBADF);
     }
 
     return &priv->np_sock->sock;
 }
-EXPORT_SYMBOL(netmap_get_socket);
+EXPORT_SYMBOL(get_netmap_socket);
 
 
 struct miscdevice netmap_cdevsw = { /* same name as FreeBSD */

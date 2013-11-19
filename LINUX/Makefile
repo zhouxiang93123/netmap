@@ -7,6 +7,7 @@
 # and then the corresponding foo-objs
 
 CONFIG_NETMAP:=m
+CONFIG_V1000:=m
 CONFIG_R8169:=m
 CONFIG_FORCEDETH:=m
 CONFIG_E1000:=m
@@ -18,6 +19,7 @@ CONFIG_BNX2X:=m
 netmap_lin-objs := netmap.o netmap_mem2.o netmap_linux.o netmap_generic.o netmap_mbq.o
 
 obj-$(CONFIG_NETMAP) = netmap_lin.o
+obj-$(CONFIG_V1000) += vhost-port/
 ifndef NODRIVERS
 obj-m += $(DRIVERS)
 endif
