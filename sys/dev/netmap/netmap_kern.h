@@ -182,6 +182,7 @@ struct netmap_kring {
 	uint32_t nr_hwcur;
 	uint32_t nr_hwavail;
 	uint32_t nr_kflags;	/* private driver flags */
+	int32_t nr_reserved;
 #define NKR_PENDINTR	0x1	// Pending interrupt.
 	uint32_t nkr_num_slots;
 	int32_t	nkr_hwofs;	/* offset between NIC and netmap ring */
@@ -438,7 +439,7 @@ nm_kr_space(struct netmap_kring *k, int is_rx)
 	int space;
 
 	if (is_rx) {
-		int busy = k->nkr_hwlease - k->nr_hwcur;
+		int busy = k->nkr_hwlease - k->nr_hwcur + k->nr_reserved;
 		if (busy < 0)
 			busy += k->nkr_num_slots;
 		space = k->nkr_num_slots - 1 - busy;

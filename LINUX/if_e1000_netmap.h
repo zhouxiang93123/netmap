@@ -99,9 +99,6 @@ e1000_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	/* generate an interrupt approximately every half ring */
 	int report_frequency = kring->nkr_num_slots >> 1;
 
-	if (!netif_carrier_ok(ifp))
-		return 0;
-
 	/* take a copy of ring->cur now, and never read it again */
 	k = ring->cur;
 	if (k > lim)
@@ -113,12 +110,19 @@ e1000_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	 * netmap ring, l is the corresponding index in the NIC ring.
 	 */
 	j = kring->nr_hwcur;
-	d = k - j;
+	d = k - j - kring->nr_reserved;
 	if (d < 0)
 		d += kring->nkr_num_slots;
 	if (d > kring->nr_hwavail) {
 		ND("=== j %d k %d d %d hwavail %d", j, k, d, kring->nr_hwavail);
 		return netmap_ring_reinit(kring);
+	}
+	if (!netif_carrier_ok(ifp)) {
+		kring->nr_reserved += d;
+		kring->nr_hwavail -= d;
+		ring->reserved = kring->nr_reserved;
+		ring->avail = kring->nr_hwavail;
+		return 0;
 	}
 	if (j != k) {	/* we have new packets to send */
 		l = netmap_idx_k2n(kring, j);
@@ -151,7 +155,11 @@ e1000_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			l = (l == lim) ? 0 : l + 1;
 		}
 		kring->nr_hwcur = k; /* the saved ring->cur */
-		kring->nr_hwavail -= n;
+		kring->nr_reserved -= n;
+		if (kring->nr_reserved < 0) {
+			kring->nr_hwavail += kring->nr_reserved;
+			kring->nr_reserved = 0;
+		}
 
 		wmb(); /* synchronize writes to the NIC ring */
 
@@ -180,6 +188,7 @@ e1000_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	}
 	/* update avail to what the kernel knows */
 	ring->avail = kring->nr_hwavail;
+	ring->reserved = kring->nr_reserved;
 
 	return 0;
 }
