@@ -181,6 +181,14 @@ void netmap_mitigation_cleanup(struct netmap_adapter *na)
     D("called");
 }
 
+int netmap_sock_setup(struct netmap_priv_d *priv)
+{
+    return 0;
+}
+
+void netmap_sock_teardown(struct netmap_priv_d *priv)
+{
+}
 
 /*
  * In order to track whether pages are still mapped, we hook into

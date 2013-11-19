@@ -960,18 +960,7 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 	 * the last instance also buffers, rings and krings.
 	 */
 	netmap_mem_if_delete(na, nifp);
-#ifdef linux
-        if (priv->np_sock) {
-            sock_put(&priv->np_sock->sk);
-            /* XXX What?
-            kfree(priv->np_sock);
-            sk_release_kernel(&priv->np_sock->sk);
-            */
-            sk_free(&priv->np_sock->sk);
-            priv->np_sock = NULL;
-            D("socket support freed (%p)", priv);
-        }
-#endif
+        netmap_sock_teardown(priv);
 }
 
 
@@ -1715,73 +1704,6 @@ netmap_set_ringid(struct netmap_priv_d *priv, u_int ringid)
 	return 0;
 }
 
-#ifdef linux
-static int netmap_socket_sendmsg(struct kiocb *iocb, struct socket *sock,
-                                 struct msghdr *m, size_t total_len)
-{
-    D("message_len %d", (int)total_len);
-    return total_len;
-}
-
-static int netmap_socket_recvmsg(struct kiocb *iocb, struct socket *sock,
-                                 struct msghdr *m, size_t total_len, int flags)
-{
-    D("total_len %d", (int)total_len);
-
-    return 0;
-}
-
-static struct proto netmap_socket_proto = {
-        .name = "netmap",
-        .owner = THIS_MODULE,
-        .obj_size = sizeof(struct netmap_socket),
-};
-
-static struct proto_ops netmap_socket_ops = {
-        .sendmsg = netmap_socket_sendmsg,
-        .recvmsg = netmap_socket_recvmsg,
-};
-
-static void netmap_sock_write_space(struct sock *sk)
-{
-    wait_queue_head_t *wqueue;
-
-    if (!sock_writeable(sk) ||
-        !test_and_clear_bit(SOCK_ASYNC_NOSPACE, &sk->sk_socket->flags)) {
-            return;
-    }
-
-    wqueue = sk_sleep(sk);
-    if (wqueue && waitqueue_active(wqueue)) {
-        wake_up_interruptible_poll(wqueue, POLLOUT | POLLWRNORM | POLLWRBAND);
-    }
-}
-
-static int netmap_sock_setup(struct netmap_priv_d *priv)
-{
-        struct netmap_socket *np_sock;
-
-        np_sock = priv->np_sock = (struct netmap_socket *)sk_alloc(&init_net, AF_UNSPEC,
-                                                        GFP_KERNEL, &netmap_socket_proto);
-        if (!np_sock) {
-            return ENOMEM;
-        }
-
-        np_sock->sock.wq = &np_sock->wq;   /* XXX rcu? */
-        init_waitqueue_head(&np_sock->wq.wait);
-        np_sock->sock.file = priv->filp;
-        np_sock->sock.ops = &netmap_socket_ops;
-        sock_init_data(&np_sock->sock, &np_sock->sk);
-        np_sock->sk.sk_write_space = &netmap_sock_write_space;
-
-        sock_hold(&np_sock->sk);
-
-        D("socket support OK (%p)", priv);
-
-        return 0;
-}
-#endif  /* linux */
-
 
 /*
  * possibly move the interface to netmap-mode.
@@ -1860,9 +1782,7 @@ netmap_do_regif(struct netmap_priv_d *priv, struct ifnet *ifp,
 			BDG_WUNLOCK(NA(ifp)->na_bdg);
 
 	}
-#ifdef linux
         error = netmap_sock_setup(priv);
-#endif  /* linux */
 out:
 	*err = error;
 	if (nifp != NULL) {

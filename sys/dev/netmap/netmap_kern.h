@@ -554,6 +554,8 @@ int netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct t
 int netmap_catch_rx(struct netmap_adapter *na, int intercept);
 void generic_rx_handler(struct ifnet *ifp, struct mbuf *m);;
 void netmap_catch_packet_steering(struct netmap_adapter *na, int enable);
+int netmap_sock_setup(struct netmap_priv_d *priv);
+void netmap_sock_teardown(struct netmap_priv_d *priv);
 
 /* netmap_mitigation API */
 void netmap_mitigation_init(struct netmap_adapter *na);
