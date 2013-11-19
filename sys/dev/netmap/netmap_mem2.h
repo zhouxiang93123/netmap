@@ -196,13 +196,13 @@ struct netmap_mem_d {
 
 extern struct netmap_mem_d nm_mem;
 
-vm_paddr_t netmap_mem_ofstophys(struct netmap_mem_d *nm_mem, vm_ooffset_t offset);
-int	   netmap_mem_finalize(struct netmap_mem_d *nm_mem);
+vm_paddr_t netmap_mem_ofstophys(struct netmap_mem_d *, vm_ooffset_t);
+int	   netmap_mem_finalize(struct netmap_mem_d *);
 int 	   netmap_mem_init(void);
 void 	   netmap_mem_fini(void);
-void* 	   netmap_mem_if_new(const char *ifname, struct netmap_adapter *na);
+struct netmap_if *   netmap_mem_if_new(const char *, struct netmap_adapter *);
 void 	   netmap_mem_if_delete(struct netmap_adapter *na, struct netmap_if *nifp);
-void 	   netmap_mem_deref(struct netmap_mem_d *nm_mem);
+void 	   netmap_mem_deref(struct netmap_mem_d *);
 int	   netmap_mem_get_info(struct netmap_mem_d *nm_mem, u_int *size, u_int *memflags);
 ssize_t    netmap_mem_if_offset(struct netmap_mem_d *nm_mem, const void *vaddr);
 struct netmap_mem_d*

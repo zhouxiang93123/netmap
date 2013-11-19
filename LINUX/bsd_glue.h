@@ -51,6 +51,7 @@
 #include <linux/moduleparam.h>
 #include <linux/virtio.h>	// virt_to_phys
 #include <net/sock.h>
+#include <linux/hrtimer.h>
 
 #define printf(fmt, arg...)	printk(KERN_ERR fmt, ##arg)
 #define KASSERT(a, b)		BUG_ON(!(a))
@@ -80,6 +81,15 @@ struct thread;
 
 #define bzero(a, len)		memset(a, 0, len)
 
+/* Atomic variables. */
+#define NM_ATOMIC_TEST_AND_SET(p)	test_and_set_bit(0, (p))
+#define NM_ATOMIC_CLEAR(p)		clear_bit(0, (p))
+
+#define NM_ATOMIC_SET(p, v)             atomic_set(p, v)
+#define NM_ATOMIC_INC(p)                atomic_inc(p)
+#define NM_ATOMIC_READ_AND_CLEAR(p)     atomic_xchg(p, 0)
+#define NM_ATOMIC_READ(p)               atomic_read(p)
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 28)
 #define	netdev_tx_t	int
 #define	netdev_ops	hard_start_xmit
@@ -103,6 +113,11 @@ struct net_device_ops {
 #define	mbuf			sk_buff
 #define	m_nextpkt		next			// chain of mbufs
 #define m_freem(m)		dev_kfree_skb_any(m)	// free a sk_buff
+
+#define GET_MBUF_REFCNT(m)	NM_ATOMIC_READ(&((m)->users))
+#define netmap_get_mbuf(size)	alloc_skb(size, GFP_ATOMIC)
+#define MBUF_TXQ(m)		skb_get_queue_mapping(m)
+#define SET_MBUF_DESTRUCTOR(m, f) m->destructor = (void *)&f
 
 /*
  * m_copydata() copies from mbuf to buffer following the mbuf chain.
@@ -137,6 +152,16 @@ struct net_device_ops {
 #define ifnet           	net_device      /* remap */
 #define	if_xname		name		/* field ifnet-> net_device */
 #define	if_capenable		priv_flags	/* IFCAP_NETMAP */
+
+/* some other FreeBSD APIs */
+struct net_device* ifunit_ref(const char *name);
+void if_rele(struct net_device *ifp);
+
+/* char device support */
+extern struct miscdevice netmap_cdevsw;
+
+/* hook to send from user space */
+netdev_tx_t linux_netmap_start_xmit(struct sk_buff *, struct net_device *);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 27)
 typedef unsigned long phys_addr_t;
@@ -305,8 +330,5 @@ int sysctl_handle_long(SYSCTL_HANDLER_ARGS);
 
 #define MALLOC_DECLARE(a)
 #define MALLOC_DEFINE(a, b, c)
-
-#define NM_ATOMIC_TEST_AND_SET(p)	test_and_set_bit(0, (p))
-#define NM_ATOMIC_CLEAR(p)		clear_bit(0, (p))
 
 #endif /* _BSD_GLUE_H */

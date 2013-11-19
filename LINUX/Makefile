@@ -15,7 +15,7 @@ CONFIG_IXGBE:=m
 CONFIG_IGB:=m
 CONFIG_BNX2X:=m
 
-netmap_lin-objs := netmap.o netmap_mem2.o
+netmap_lin-objs := netmap.o netmap_mem2.o netmap_linux.o netmap_generic.o netmap_mbq.o
 
 obj-$(CONFIG_NETMAP) = netmap_lin.o
 ifndef NODRIVERS
@@ -97,12 +97,21 @@ clean:
 		Module.symvers .*.cmd get-drivers )
 
 # the source is not here so we need to specify a dependency
+# XXX can we do better ?
 $(obj)/netmap.o: $(M)/../sys/dev/netmap/netmap.c
 	$(call cmd,cc_o_c)
 	$(call cmd,modversions)
 #	$(call quiet_cmd,cc_o_c)
 
 $(obj)/netmap_mem2.o: $(M)/../sys/dev/netmap/netmap_mem2.c
+	$(call cmd,cc_o_c)
+	$(call cmd,modversions)
+
+$(obj)/netmap_generic.o: $(M)/../sys/dev/netmap/netmap_generic.c
+	$(call cmd,cc_o_c)
+	$(call cmd,modversions)
+
+$(obj)/netmap_mbq.o: $(M)/../sys/dev/netmap/netmap_mbq.c
 	$(call cmd,cc_o_c)
 	$(call cmd,modversions)
 

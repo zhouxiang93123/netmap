@@ -39,17 +39,31 @@
 #define unlikely(x)	__builtin_expect((long)!!(x), 0L)
 
 #define	NM_LOCK_T	struct mtx
+#define	NMG_LOCK_T	struct mtx
+
+extern NMG_LOCK_T	netmap_global_lock;
+#define NMG_LOCK()	mtx_lock(&netmap_global_lock)
+#define NMG_UNLOCK()	mtx_unlock(&netmap_global_lock)
+
 #define	NM_SELINFO_T	struct selinfo
 #define	MBUF_LEN(m)	((m)->m_pkthdr.len)
+#define	MBUF_IFP(m)	((m)->m_pkthdr.rcvif)
 #define	NM_SEND_UP(ifp, m)	((ifp)->if_input)(ifp, m)
 
 #define NM_ATOMIC_T	volatile int
+
+// XXX linux struct, not used in FreeBSD
+struct net_device_ops {
+};
+struct hrtimer {
+};
 
 #elif defined (linux)
 
 #define	NM_LOCK_T	safe_spinlock_t	// see bsd_glue.h
 #define	NM_SELINFO_T	wait_queue_head_t
 #define	MBUF_LEN(m)	((m)->len)
+#define	MBUF_IFP(m)	((m)->dev)
 #define	NM_SEND_UP(ifp, m)	netif_rx(m)
 
 #define NM_ATOMIC_T	volatile long unsigned int
@@ -114,6 +128,8 @@ struct nm_bridge;
 struct netmap_priv_d;
 
 const char *nm_dump_buf(char *p, int len, int lim, char *dst);
+
+#include "netmap_mbq.h"
 
 /*
  * private, kernel view of a ring. Keeps track of the status of
@@ -183,6 +199,17 @@ struct netmap_kring {
 	NM_ATOMIC_T nr_busy;	/* prevent concurrent syscalls */
 
 	volatile int nkr_stopped;
+
+	/* support for adapters without native netmap support.
+	 * On tx rings we preallocate an array of tx buffers
+	 * (same size as the netmap ring), on rx rings we
+	 * store incoming packets in a queue.
+	 * XXX who writes to the rx queue ?
+	 */
+	struct mbuf **tx_pool;
+        u_int nr_ntc;                   /* Emulation of a next-to-clean RX ring pointer. */
+        struct mbq rx_queue;            /* A queue for intercepted rx mbufs. */
+
 } __attribute__((__aligned__(64)));
 
 
@@ -346,9 +373,22 @@ struct netmap_adapter {
 
 	/* memory allocator */
  	struct netmap_mem_d *nm_mem;
-#ifdef linux
-	struct net_device_ops nm_ndo;
-#endif /* linux */
+
+        /* Pointer to a previously used netmap adapter. */
+        struct netmap_adapter *prev;
+
+	struct net_device_ops *nm_ndo_p;
+
+        /* generic netmap adapters support:
+	 * a net_device_ops struct overrides ndo_select_queue(),
+	 * save_if_input saves the if_input hook (FreeBSD),
+	 * mit_timer and mit_pending implement rx interrupt mitigation,
+	 */
+        struct net_device_ops *generic_ndo_p;
+	void (*save_if_input)(struct ifnet *, struct mbuf *);
+
+        struct hrtimer mit_timer;
+        int mit_pending;
 };
 
 /*
@@ -500,6 +540,28 @@ u_int netmap_bdg_learning(char *, u_int, uint8_t *, struct netmap_adapter *);
 #define	NM_BDG_MAXPORTS		254	/* up to 32 for bitmap, 254 ok otherwise */
 #define	NM_BDG_BROADCAST	NM_BDG_MAXPORTS
 #define	NM_BDG_NOPORT		(NM_BDG_MAXPORTS+1)
+
+/* Various prototypes */
+int netmap_poll(struct cdev *dev, int events, struct thread *td);
+int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m, void *addr, u_int len, u_int ring_nr);
+int generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx);
+void generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq);
+int netmap_init(void);
+void netmap_fini(void);
+int netmap_get_memory(struct netmap_priv_d* p);
+void netmap_dtor(void *data);
+int netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td);
+int netmap_catch_rx(struct netmap_adapter *na, int intercept);
+void generic_rx_handler(struct ifnet *ifp, struct mbuf *m);;
+void netmap_catch_packet_steering(struct netmap_adapter *na, int enable);
+
+/* netmap_mitigation API */
+void netmap_mitigation_init(struct netmap_adapter *na);
+void netmap_mitigation_start(struct netmap_adapter *na);
+void netmap_mitigation_restart(struct netmap_adapter *na);
+int netmap_mitigation_active(struct netmap_adapter *na);
+void netmap_mitigation_cleanup(struct netmap_adapter *na);
+enum hrtimer_restart generic_timer_handler(struct hrtimer *t);
 
 extern u_int netmap_buf_size;
 #define NETMAP_BUF_SIZE	netmap_buf_size	// XXX remove
@@ -701,6 +763,7 @@ PNMB(struct netmap_slot *slot, uint64_t *pp)
 /* default functions to handle rx/tx interrupts */
 int netmap_rx_irq(struct ifnet *, u_int, u_int *);
 #define netmap_tx_irq(_n, _q) netmap_rx_irq(_n, _q, NULL)
+int netmap_common_irq(struct ifnet *, u_int, u_int *work_done);
 
 #ifdef __FreeBSD__
 MALLOC_DECLARE(M_NETMAP);
@@ -709,5 +772,63 @@ MALLOC_DECLARE(M_NETMAP);
 
 void netmap_disable_all_rings(struct ifnet *);
 void netmap_enable_all_rings(struct ifnet *);
+
+#ifdef linux
+struct netmap_socket {
+    struct sock sk;
+    struct socket sock;
+    struct socket_wq wq;
+};
+#endif
+
+/* Structure associated to each thread which registered an interface.
+ *
+ * The first 4 fields of this structure are written by NIOCREGIF and
+ * read by poll() and NIOC?XSYNC.
+ * There is low contention among writers (actually, a correct user program
+ * should have no contention among writers) and among writers and readers,
+ * so we use a single global lock to protect the structure initialization.
+ * Since initialization involves the allocation of memory, we reuse the memory
+ * allocator lock.
+ * Read access to the structure is lock free. Readers must check that
+ * np_nifp is not NULL before using the other fields.
+ * If np_nifp is NULL initialization has not been performed, so they should
+ * return an error to userlevel.
+ *
+ * The ref_done field is used to regulate access to the refcount in the
+ * memory allocator. The refcount must be incremented at most once for
+ * each open("/dev/netmap"). The increment is performed by the first
+ * function that calls netmap_get_memory() (currently called by
+ * mmap(), NIOCGINFO and NIOCREGIF).
+ * If the refcount is incremented, it is then decremented when the
+ * private structure is destroyed.
+ */
+struct netmap_priv_d {
+	struct netmap_if * volatile np_nifp;	/* netmap if descriptor. */
+
+	struct ifnet	*np_ifp;	/* device for which we hold a ref. */
+	int		np_ringid;	/* from the ioctl */
+	u_int		np_qfirst, np_qlast;	/* range of rings to scan */
+	uint16_t	np_txpoll;
+
+	struct netmap_mem_d *np_mref;	/* use with NMG_LOCK held */
+#ifdef __FreeBSD__
+	int		np_refcount;	/* use with NMG_LOCK held */
+#endif /* __FreeBSD__ */
+#ifdef linux
+        struct netmap_socket *np_sock;   /* socket support for netmap */
+        struct file *filp;
+#endif
+
+};
+
+
+/*
+ * generic netmap emulation for devices that do not have
+ * native netmap support
+ */
+int generic_netmap_register(struct ifnet *ifp, int enable);
+int generic_netmap_attach(struct ifnet *ifp);
+
 
 #endif /* _NET_NETMAP_KERN_H_ */

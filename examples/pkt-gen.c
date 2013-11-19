@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2012 Matteo Landi, Luigi Rizzo. All rights reserved.
+ * Copyright (C) 2011-2013 Matteo Landi, Luigi Rizzo. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -1267,8 +1267,10 @@ start_threads(struct glob_arg *g)
 			D("Unable to register %s", g->ifname);
 			continue;
 		}
+		D("memsize is %d MB", tifreq.nr_memsize >> 20);
 		targs[i].nmr = tifreq;
 		targs[i].nifp = NETMAP_IF(g->mmap_addr, tifreq.nr_offset);
+		D("nifp flags 0x%x", targs[i].nifp->ni_flags);
 		/* start threads. */
 		targs[i].qfirst = (g->nthreads > 1) ? i : 0;
 		targs[i].qlast = (g->nthreads > 1) ? i+1 :

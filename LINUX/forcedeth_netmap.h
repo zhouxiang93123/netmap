@@ -90,7 +90,7 @@ forcedeth_netmap_reg(struct ifnet *dev, int onoff)
 	if (onoff) {
 		dev->if_capenable |= IFCAP_NETMAP;
 		na->if_transmit = (void *)dev->netdev_ops;
-		dev->netdev_ops = &na->nm_ndo;
+		dev->netdev_ops = na->nm_ndo_p;
 	} else {
 		/* restore if_transmit */
 		dev->netdev_ops = (void *)na->if_transmit;
