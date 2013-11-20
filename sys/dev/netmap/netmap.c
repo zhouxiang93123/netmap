@@ -3753,7 +3753,7 @@ netmap_bwrap_intr_notify(struct netmap_adapter *na, u_int ring_nr, enum txrx tx,
 		return 0;
 
 	if (is_host_ring && hostna->na_bdg == NULL) {
-		error = bna->save_notify(ifp, ring_nr, tx, flags);
+		error = bna->save_notify(na, ring_nr, tx, flags);
 		goto put_out;
 	}
 
