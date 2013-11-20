@@ -3933,16 +3933,16 @@ netmap_bwrap_notify(struct ifnet *ifp, u_int ring_n, enum txrx tx, int flags)
 		ring->cur = k;
 		ND("%s[%d] PRE rx(%d, %d, %d, %d) ring(%d, %d, %d) tx(%d, %d)",
 			NM_IFPNAME(ifp), ring_n,
-			kring->nr_hwcur, kring->nr_hwavail, kring->nkr_hwlease, kring->nr_reserved,
+			kring->nr_hwcur, kring->nr_hwavail, kring->nkr_hwlease, kring->nr_hwreserved,
 			ring->cur, ring->avail, ring->reserved,
 			hw_kring->nr_hwcur, hw_kring->nr_hwavail);
 		error = hwna->nm_txsync(hwna, ring_n, flags);
 		kring->nr_hwcur = ring->cur;
 		kring->nr_hwavail = 0;
-		kring->nr_reserved = ring->reserved;
+		kring->nr_hwreserved = ring->reserved;
 		ND("%s[%d] PST rx(%d, %d, %d, %d) ring(%d, %d, %d) tx(%d, %d)",
 			NM_IFPNAME(ifp), ring_n, 
-			kring->nr_hwcur, kring->nr_hwavail, kring->nkr_hwlease, kring->nr_reserved,
+			kring->nr_hwcur, kring->nr_hwavail, kring->nkr_hwlease, kring->nr_hwreserved,
 			ring->cur, ring->avail, ring->reserved,
 			hw_kring->nr_hwcur, hw_kring->nr_hwavail);
 		//nm_kr_put(hw_kring);
