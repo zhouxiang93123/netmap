@@ -29,9 +29,10 @@
 #include <net/netmap.h>
 #include <dev/netmap/netmap_kern.h>
 #include <dev/netmap/netmap_mem2.h>
+#include <net/netmap_user.h>
 
 
-/* ========================== LINUX-SPECIFIC ROUTINES ================== */
+/* =========================== MITIGATION SUPPORT ============================= */
 
 void netmap_mitigation_init(struct netmap_adapter *na)
 {
@@ -61,6 +62,10 @@ void netmap_mitigation_cleanup(struct netmap_adapter *na)
 {
     hrtimer_cancel(&na->mit_timer);
 }
+
+
+
+/* ========================= GENERIC ADAPTER SUPPORT =========================== */
 
 /*
  * This handler is registered within the attached net_device
@@ -92,7 +97,6 @@ netmap_catch_rx(struct netmap_adapter *na, int intercept)
         return 0;
     }
 }
-
 
 static u16 generic_ndo_select_queue(struct ifnet *ifp, struct mbuf *m)
 {
@@ -176,10 +180,114 @@ generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq)
     *rxq = 1; /* TODO ifp->real_num_rx_queues */
 }
 
+
+
+/* =========================== SOCKET SUPPORT ============================ */
+
+// TODO move this to netmap_kern.h
+#include <dev/netmap/netmap_mem2.h>
+/* The bridge references the buffers using the device specific look up table */
+static inline void *
+BDG_NMB(struct netmap_mem_d *nmd, struct netmap_slot *slot)
+{
+	struct lut_entry *lut = nmd->pools[NETMAP_BUF_POOL].lut;
+	uint32_t i = slot->buf_idx;
+	return (unlikely(i >= nmd->pools[NETMAP_BUF_POOL].objtotal)) ?  lut[0].vaddr : lut[i].vaddr;
+}
+
 static int netmap_socket_sendmsg(struct kiocb *iocb, struct socket *sock,
                                  struct msghdr *m, size_t total_len)
 {
-    D("message_len %d", (int)total_len);
+    struct netmap_socket *np_sock = container_of(sock, struct netmap_socket, sock);
+    struct netmap_priv_d *priv = np_sock->priv;
+    struct ifnet *ifp = priv->np_ifp;
+    struct netmap_adapter *na;
+    struct netmap_ring *ring;
+    unsigned i, last;
+    unsigned avail;
+    unsigned j;
+    unsigned nm_buf_size;
+    struct iovec *iov = m->msg_iov;
+    size_t iovcnt = m->msg_iovlen;
+    unsigned slot_flags = NS_MOREFRAG | NS_VNET_HDR;
+
+    ND("message_len %d, %p", (int)total_len, np_sock);
+
+    if (unlikely(ifp == NULL || !NETMAP_CAPABLE(ifp))) {
+        if (ifp == NULL) {
+            RD(5, "NULL ifp");
+        } else {
+            RD(5, "Not netmap capable");
+        }
+        return total_len;
+    }
+
+    na = NA(ifp);
+
+    /* Grab the netmap ring normally used from userspace. */
+    ring = na->tx_rings[0].ring;
+    nm_buf_size = ring->nr_buf_size;
+
+    i = last = ring->cur;
+    avail = ring->avail;
+    ND("A) cur=%d avail=%d, hwcur=%d, hwavail=%d\n", i, avail, na->tx_rings[0].nr_hwcur,
+                                                               na->tx_rings[0].nr_hwavail);
+    if (avail < iovcnt) {
+        /* Not enough netmap slots. */
+        return 0;
+    }
+
+    for (j=0; j<iovcnt; j++) {
+        uint8_t *iov_frag = iov[j].iov_base;
+        unsigned iov_frag_size = iov[j].iov_len;
+        unsigned offset = 0;
+#if 0
+        unsigned k = 0;
+        uint8_t ch;
+
+        printk("len=%d: ", iov_frag_size);
+        for (k=0; k<iov_frag_size && k<36; k++) {
+            if(copy_from_user(&ch, iov_frag + k, 1)) {
+                D("failed");
+            }
+            printk("%02x:", ch);
+        }printk("\n");
+#endif
+        while (iov_frag_size) {
+            unsigned nm_frag_size = min(iov_frag_size, nm_buf_size);
+            uint8_t *dst;
+
+            if (unlikely(avail == 0)) {
+                return 0;
+            }
+
+            dst = BDG_NMB(na->nm_mem, &ring->slot[i]);
+
+            ring->slot[i].len = nm_frag_size;
+            ring->slot[i].flags = slot_flags;
+            slot_flags &= ~NS_VNET_HDR;
+            if (copy_from_user(dst, iov_frag + offset, nm_frag_size)) {
+                D("copy_from_user() error");
+            }
+
+            last = i;
+            i = NETMAP_RING_NEXT(ring, i);
+            avail--;
+
+            offset += nm_frag_size;
+            iov_frag_size -= nm_frag_size;
+        }
+    }
+
+    ring->slot[last].flags &= ~NS_MOREFRAG;
+
+    ring->cur = i;
+    ring->avail = avail;
+
+    na->nm_txsync(ifp, 0, 0);
+    ND("B) cur=%d avail=%d, hwcur=%d, hwavail=%d\n", i, avail, na->tx_rings[0].nr_hwcur,
+                                                               na->tx_rings[0].nr_hwavail);
+
     return total_len;
 }
 
@@ -233,6 +341,8 @@ int netmap_sock_setup(struct netmap_priv_d *priv)
         np_sock->sock.ops = &netmap_socket_ops;
         sock_init_data(&np_sock->sock, &np_sock->sk);
         np_sock->sk.sk_write_space = &netmap_sock_write_space;
+        /* Set the backpointer to the netmap_priv_d parent structure. */
+        np_sock->priv = priv;
 
         sock_hold(&np_sock->sk);
 
@@ -255,6 +365,8 @@ void netmap_sock_teardown(struct netmap_priv_d *priv)
     }
 }
 
+
+/* ========================= FILE OPERATIONS SUPPORT =========================== */
 
 static struct device_driver *
 linux_netmap_find_driver(struct device *dev)
@@ -424,6 +536,7 @@ linux_netmap_open(struct inode *inode, struct file *file)
 		return -ENOMEM;
 
 	file->private_data = priv;
+        /* Set the backpointer to the parent file structure. */
         priv->filp = file;
 
 	return (0);

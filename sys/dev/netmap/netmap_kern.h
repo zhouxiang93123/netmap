@@ -776,10 +776,13 @@ void netmap_disable_all_rings(struct ifnet *);
 void netmap_enable_all_rings(struct ifnet *);
 
 #ifdef linux
+struct netmap_priv_d;
+
 struct netmap_socket {
     struct sock sk;
     struct socket sock;
     struct socket_wq wq;
+    struct netmap_priv_d *priv;
 };
 #endif
 
