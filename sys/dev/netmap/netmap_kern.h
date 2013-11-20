@@ -357,7 +357,7 @@ struct netmap_adapter {
 					u_int *rxr, u_int *rxd);
 	int (*nm_krings_create)(struct netmap_adapter *);
 	void (*nm_krings_delete)(struct netmap_adapter *);
-	int (*nm_notify)(struct ifnet *, u_int ring, enum txrx, int flags);
+	int (*nm_notify)(struct netmap_adapter *, u_int ring, enum txrx, int flags);
 #define NAF_GLOBAL_NOTIFY 4
 
 	/* standard refcount to control the lifetime of the adapter
@@ -420,7 +420,7 @@ struct netmap_bwrap_adapter {
 	struct netmap_adapter *hwna;
 
 	/* backup of the hwna notify callback */
-	int (*save_notify)(struct ifnet *, u_int ring, enum txrx, int flags);
+	int (*save_notify)(struct netmap_adapter *, u_int ring, enum txrx, int flags);
 	/* When we attach a physical interface to the bridge, we
 	 * allow the controlling process to terminate, so we need
 	 * a place to store the netmap_priv_d data structure.

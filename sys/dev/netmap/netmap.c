@@ -338,12 +338,12 @@ void netmap_disable_all_rings(struct ifnet *ifp)
 
 	for (i = 0; i < na->num_tx_rings + 1; i++) {
 		nm_disable_ring(na->tx_rings + i);
-		na->nm_notify(ifp, i, NR_TX, 
+		na->nm_notify(na, i, NR_TX, 
 			(i == na->num_tx_rings ? NAF_GLOBAL_NOTIFY: 0));
 	}
 	for (i = 0; i < na->num_rx_rings + 1; i++) {
 		nm_disable_ring(na->rx_rings + i);
-		na->nm_notify(ifp, i, NR_RX, 
+		na->nm_notify(na, i, NR_RX, 
 			(i == na->num_rx_rings ? NAF_GLOBAL_NOTIFY: 0));
 	}
 }
@@ -2629,9 +2629,8 @@ static int netmap_bwrap_krings_create(struct netmap_adapter *);
 static void netmap_bwrap_krings_delete(struct netmap_adapter *);
 
 static int
-netmap_notify(struct ifnet *ifp, u_int n_ring, enum txrx tx, int flags)
+netmap_notify(struct netmap_adapter *na, u_int n_ring, enum txrx tx, int flags)
 {
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring;
 
 	if (tx == NR_TX) {
@@ -2907,7 +2906,7 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 		kring->nr_hwavail++;
 		if (netmap_verbose  & NM_VERB_HOST)
 			D("wake up host ring %s %d", NM_IFPNAME(na->ifp), na->num_rx_rings);
-		na->nm_notify(ifp, na->num_rx_rings, NR_RX, 0);
+		na->nm_notify(na, na->num_rx_rings, NR_RX, 0);
 		error = 0;
 	}
 	mtx_unlock(&kring->q_lock);
@@ -2994,7 +2993,7 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
 	 * We do the wakeup here, but the ring is not yet reconfigured.
 	 * However, we are under lock so there are no races.
 	 */
-	na->nm_notify(na->ifp, n, tx, NAF_GLOBAL_NOTIFY);
+	na->nm_notify(na, n, tx, NAF_GLOBAL_NOTIFY);
 	return kring->ring->slot;
 }
 
@@ -3106,14 +3105,14 @@ netmap_common_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 			return 0;	// not a physical queue
 		kring = na->rx_rings + q;
 		kring->nr_kflags |= NKR_PENDINTR;	// XXX atomic ?
-		na->nm_notify(ifp, q, NR_RX,
+		na->nm_notify(na, q, NR_RX,
 			(na->num_rx_rings > 1 ? NAF_GLOBAL_NOTIFY : 0));
 		*work_done = 1; /* do not fire napi again */
 	} else { /* TX path */
 		if (q >= na->num_tx_rings)
 			return 0;	// not a physical queue
 		kring = na->tx_rings + q;
-		na->nm_notify(ifp, q, NR_TX,
+		na->nm_notify(na, q, NR_TX,
 			(na->num_tx_rings > 1 ? NAF_GLOBAL_NOTIFY : 0));
 	}
 	return 1;
@@ -3420,7 +3419,7 @@ retry:
 			goto cleanup;
 		}
 		if (dst_na->retry) {
-			dst_na->up.nm_notify(dst_na->up.ifp, dst_nr, NR_RX, 0);
+			dst_na->up.nm_notify(&dst_na->up, dst_nr, NR_RX, 0);
 		}	
 		my_start = j = kring->nkr_hwlease;
 		howmany = nm_kr_space(kring, 1);
@@ -3542,7 +3541,7 @@ retry:
 					D("avail shrink %d -> %d",
 						old_avail, kring->nr_hwavail);
 				}
-				dst_na->up.nm_notify(dst_na->up.ifp, dst_nr, NR_RX, 0);
+				dst_na->up.nm_notify(&dst_na->up, dst_nr, NR_RX, 0);
 				still_locked = 0;
 				mtx_unlock(&kring->q_lock);
 				if (dst_na->retry && retry--)
@@ -3720,9 +3719,9 @@ netmap_bwrap_dtor(struct netmap_adapter *na)
  * the info in the 'ring'.
  */
 static int
-netmap_bwrap_intr_notify(struct ifnet *ifp, u_int ring_nr, enum txrx tx, int flags)
+netmap_bwrap_intr_notify(struct netmap_adapter *na, u_int ring_nr, enum txrx tx, int flags)
 {
-	struct netmap_adapter *na = NA(ifp);
+	struct ifnet *ifp = na->ifp;
 	struct netmap_bwrap_adapter *bna = na->na_private;
 	struct netmap_vp_adapter *hostna = &bna->host;
 	struct netmap_kring *kring, *bkring;
@@ -3886,9 +3885,8 @@ netmap_bwrap_krings_delete(struct netmap_adapter *na)
 }
 
 static int
-netmap_bwrap_notify(struct ifnet *ifp, u_int ring_n, enum txrx tx, int flags)
+netmap_bwrap_notify(struct netmap_adapter *na, u_int ring_n, enum txrx tx, int flags)
 {
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_bwrap_adapter *bna =
 		(struct netmap_bwrap_adapter *)na;
 	struct netmap_adapter *hwna = bna->hwna;
@@ -3910,14 +3908,11 @@ netmap_bwrap_notify(struct ifnet *ifp, u_int ring_n, enum txrx tx, int flags)
 	if (ring_n == na->num_rx_rings) {
 		netmap_txsync_to_host(hwna);
 	} else {
-		//if (nm_kr_tryget(hw_kring)) {
-		//	return 0;
-		//}
 		if (hwna->ifp == NULL || !(hwna->ifp->if_capenable & IFCAP_NETMAP))
 			return 0;
 		ring->cur = k;
 		ND("%s[%d] PRE rx(%d, %d, %d, %d) ring(%d, %d, %d) tx(%d, %d)",
-			NM_IFPNAME(ifp), ring_n,
+			NM_IFPNAME(na->ifp), ring_n,
 			kring->nr_hwcur, kring->nr_hwavail, kring->nkr_hwlease, kring->nr_hwreserved,
 			ring->cur, ring->avail, ring->reserved,
 			hw_kring->nr_hwcur, hw_kring->nr_hwavail);
@@ -3926,25 +3921,23 @@ netmap_bwrap_notify(struct ifnet *ifp, u_int ring_n, enum txrx tx, int flags)
 		kring->nr_hwavail = 0;
 		kring->nr_hwreserved = ring->reserved;
 		ND("%s[%d] PST rx(%d, %d, %d, %d) ring(%d, %d, %d) tx(%d, %d)",
-			NM_IFPNAME(ifp), ring_n, 
+			NM_IFPNAME(na->ifp), ring_n, 
 			kring->nr_hwcur, kring->nr_hwavail, kring->nkr_hwlease, kring->nr_hwreserved,
 			ring->cur, ring->avail, ring->reserved,
 			hw_kring->nr_hwcur, hw_kring->nr_hwavail);
-		//nm_kr_put(hw_kring);
 	}
 	
 	return error;
 }
 
 static int
-netmap_bwrap_host_notify(struct ifnet *ifp, u_int ring_n, enum txrx tx, int flags)
+netmap_bwrap_host_notify(struct netmap_adapter *na, u_int ring_n, enum txrx tx, int flags)
 {
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_bwrap_adapter *bna = na->na_private;
 	struct netmap_adapter *port_na = &bna->up.up;
 	if (tx == NR_TX || ring_n != 0)
 		return ENXIO;
-	return netmap_bwrap_notify(port_na->ifp, port_na->num_rx_rings, NR_RX, flags);
+	return netmap_bwrap_notify(port_na, port_na->num_rx_rings, NR_RX, flags);
 }
 
 static int
