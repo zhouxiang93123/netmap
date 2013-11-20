@@ -3905,27 +3905,27 @@ netmap_bwrap_notify(struct netmap_adapter *na, u_int ring_n, enum txrx tx, int f
 	lim = kring->nkr_num_slots - 1;
 	k = nm_kr_rxpos(kring);
 	
+	if (hwna->ifp == NULL || !(hwna->ifp->if_capenable & IFCAP_NETMAP))
+		return 0;
+	ring->cur = k;
+	ND("%s[%d] PRE rx(%d, %d, %d, %d) ring(%d, %d, %d) tx(%d, %d)",
+		NM_IFPNAME(na->ifp), ring_n,
+		kring->nr_hwcur, kring->nr_hwavail, kring->nkr_hwlease, kring->nr_hwreserved,
+		ring->cur, ring->avail, ring->reserved,
+		hw_kring->nr_hwcur, hw_kring->nr_hwavail);
 	if (ring_n == na->num_rx_rings) {
 		netmap_txsync_to_host(hwna);
 	} else {
-		if (hwna->ifp == NULL || !(hwna->ifp->if_capenable & IFCAP_NETMAP))
-			return 0;
-		ring->cur = k;
-		ND("%s[%d] PRE rx(%d, %d, %d, %d) ring(%d, %d, %d) tx(%d, %d)",
-			NM_IFPNAME(na->ifp), ring_n,
-			kring->nr_hwcur, kring->nr_hwavail, kring->nkr_hwlease, kring->nr_hwreserved,
-			ring->cur, ring->avail, ring->reserved,
-			hw_kring->nr_hwcur, hw_kring->nr_hwavail);
 		error = hwna->nm_txsync(hwna, ring_n, flags);
-		kring->nr_hwcur = ring->cur;
-		kring->nr_hwavail = 0;
-		kring->nr_hwreserved = ring->reserved;
-		ND("%s[%d] PST rx(%d, %d, %d, %d) ring(%d, %d, %d) tx(%d, %d)",
-			NM_IFPNAME(na->ifp), ring_n, 
-			kring->nr_hwcur, kring->nr_hwavail, kring->nkr_hwlease, kring->nr_hwreserved,
-			ring->cur, ring->avail, ring->reserved,
-			hw_kring->nr_hwcur, hw_kring->nr_hwavail);
 	}
+	kring->nr_hwcur = ring->cur;
+	kring->nr_hwavail = 0;
+	kring->nr_hwreserved = ring->reserved;
+	ND("%s[%d] PST rx(%d, %d, %d, %d) ring(%d, %d, %d) tx(%d, %d)",
+		NM_IFPNAME(na->ifp), ring_n, 
+		kring->nr_hwcur, kring->nr_hwavail, kring->nkr_hwlease, kring->nr_hwreserved,
+		ring->cur, ring->avail, ring->reserved,
+		hw_kring->nr_hwcur, hw_kring->nr_hwavail);
 	
 	return error;
 }
