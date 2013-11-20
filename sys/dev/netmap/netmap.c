@@ -1640,7 +1640,7 @@ get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 			error = ENOMEM;
 			goto out;
 		}
-		strcpy(ifp->if_xname, name);
+		strcpy(fake_ifp->if_xname, name);
 		error = netmap_bwrap_attach(fake_ifp, ifp);
 		if (error) {
 			free(fake_ifp, M_DEVBUF);
