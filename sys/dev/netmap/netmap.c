@@ -1138,17 +1138,7 @@ netmap_bdg_detach_common(struct nm_bridge *b, int hw, int sw)
 	}
 }
 
-static int
-netmap_adapter_hw_dtor(struct netmap_adapter *na)
-{
-	struct ifnet *ifp = na->ifp;
-
-	D("%s has %d references", NM_IFPNAME(ifp), na->na_refcount);
-
-	return 1;
-}
-
-static int
+static void
 netmap_adapter_vp_dtor(struct netmap_adapter *na)
 {
 	struct netmap_vp_adapter *vpna = (struct netmap_vp_adapter*)na;
@@ -1164,9 +1154,6 @@ netmap_adapter_vp_dtor(struct netmap_adapter *na)
 	bzero(ifp, sizeof(*ifp));
 	free(ifp, M_DEVBUF);
 	na->ifp = NULL;
-
-	/* destroy the adapter */
-	return 1;
 }
 
 /*
@@ -2731,7 +2718,6 @@ netmap_attach(struct netmap_adapter *arg, u_int num_queues)
 	if (hwna == NULL)
 		goto fail;
 	hwna->up = *arg;
-	hwna->up.nm_dtor = netmap_adapter_hw_dtor;
 	if (netmap_attach_common(&hwna->up, num_queues))
 		goto fail;
 	netmap_adapter_get(&hwna->up);
@@ -2775,8 +2761,8 @@ NM_DBG(netmap_adapter_put)(struct netmap_adapter *na)
 	if (!refcount_release(&na->na_refcount))
 		return 0;
 
-	if (na->nm_dtor && !na->nm_dtor(na))
-		return 0;
+	if (na->nm_dtor)
+		na->nm_dtor(na);
 
 	netmap_detach_common(na);
 
@@ -3712,7 +3698,7 @@ bdg_netmap_attach(struct netmap_adapter *arg)
 	return 0;
 }
 
-static int
+static void
 netmap_bwrap_dtor(struct netmap_adapter *na)
 {
 	struct netmap_bwrap_adapter *bna = (struct netmap_bwrap_adapter*)na;
@@ -3722,7 +3708,6 @@ netmap_bwrap_dtor(struct netmap_adapter *na)
 	netmap_adapter_vp_dtor(na);
 	hwna->na_private = NULL;
 	netmap_adapter_put(hwna);
-	return 1;	
 }
 
 /*

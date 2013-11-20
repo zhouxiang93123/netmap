@@ -343,8 +343,8 @@ struct netmap_adapter {
 
 	NM_LOCK_T core_lock;	/* used if no device lock available */
 
-	/* private cleanup. Must return 1 iff the adapter can be freed */
-	int (*nm_dtor)(struct netmap_adapter *);
+	/* private cleanup */
+	void (*nm_dtor)(struct netmap_adapter *);
 
 	int (*nm_register)(struct netmap_adapter *, int onoff);
 
