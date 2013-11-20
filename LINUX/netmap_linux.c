@@ -424,6 +424,7 @@ linux_netmap_open(struct inode *inode, struct file *file)
 		return -ENOMEM;
 
 	file->private_data = priv;
+        priv->filp = file;
 
 	return (0);
 }
