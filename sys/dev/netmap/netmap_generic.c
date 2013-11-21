@@ -81,38 +81,32 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257666 2013-11-05 01:06:22Z lui
 
 #define rtnl_lock() D("rtnl_lock called");
 #define rtnl_unlock() D("rtnl_lock called");
-#define skb_get_queue_mapping(m)	0
+#define MBUF_TXQ(m)	((m)->m_pkthdr.flowid)
 #define smp_mb()
 
 /*
  * mbuf wrappers
  */
-static struct mbuf *
-netmap_get_mbuf(int len)
-{
-	struct mbuf *m;
 
-	if (len < 0 || len > MCLBYTES) {
-		D("invalid size %d", len);
-		return NULL;
-	}
-	m = m_getcl(M_NOWAIT, MT_DATA, M_PKTHDR);
+/*
+ * we allocate an EXT_PACKET
+ */
+#define netmap_get_mbuf(len) m_getcl(M_NOWAIT, MT_DATA, M_PKTHDR|M_NOFREE)
 
-	if (m == NULL)
-		return m;
-	/* XXX not sure we should set the len now */
-	m->m_len = m->m_pkthdr.len = len;
-	return m;
-}
-
-#define GET_MBUF_REFCNT(m)	(*(m)->m_ext.ref_cnt)
-
-/* mbuf destructor, also need to change the type to EXT_EXTREF
- * and then chain into uma_zfree(zone_clust, m->m_ext.ext_buf)
+/* mbuf destructor, also need to change the type to EXT_EXTREF,
+ * add an M_NOFREE flag, and then clear the flag and
+ * chain into uma_zfree(zone_pack, mf)
  * (or reinstall the buffer ?)
  */
+#define SET_MBUF_DESTRUCTOR(m, fn)	do {		\
+		(m)->m_ext.ext_free = (void *)fn;	\
+		(m)->m_ext.ext_type = EXT_EXTREF;	\
+	} while (0)
 
-#define	destructor		m_ext.ext_free
+
+#define GET_MBUF_REFCNT(m)	((m)->m_ext.ref_cnt ? *(m)->m_ext.ref_cnt : -1)
+
+
 
 #else /* linux */
 
@@ -180,7 +174,7 @@ static void rate_callback(unsigned long arg)
     r = mod_timer(&ctx->timer, jiffies +
                                 msecs_to_jiffies(RATE_PERIOD * 1000));
     if (unlikely(r))
-        D("[v1000] Error: mod_timer()\n");
+        D("[v1000] Error: mod_timer()");
 }
 
 static struct rate_context rate_ctx;
@@ -396,8 +390,15 @@ free_mbufs:
 static void
 generic_mbuf_destructor(struct mbuf *m)
 {
-    ND("Tx irq (%p)", arg);
-    netmap_generic_irq(MBUF_IFP(m), skb_get_queue_mapping(m), NULL);
+    ND("Tx irq (%p) queue %d", m, MBUF_TXQ(m));
+    netmap_generic_irq(MBUF_IFP(m), MBUF_TXQ(m), NULL);
+#ifdef __FreeBSD__
+    m->m_ext.ext_type = EXT_PACKET;
+    m->m_ext.ext_free = NULL;
+    if (*(m->m_ext.ref_cnt) == 0)
+	*(m->m_ext.ref_cnt) = 1;
+    uma_zfree(zone_pack, m);
+#endif /* __FreeBSD__ */
     IFRATE(rate_ctx.new.txirq++);
 }
 
@@ -408,7 +409,7 @@ generic_mbuf_destructor(struct mbuf *m)
  * nr_hwcur is the first unsent buffer.
  * When cleaning, we try to recover buffers between nr_ntc and nr_hwcur.
  */
-static int
+int
 generic_netmap_tx_clean(struct netmap_kring *kring)
 {
     u_int num_slots = kring->nkr_num_slots;
@@ -459,7 +460,7 @@ generic_tx_event_middle(struct netmap_kring *kring, u_int j)
 
     if (j >= ntc) {
 	e = (j + ntc) / 2;
-    } else {
+    } else { /* wrap around */
 	e = (j + n + ntc) / 2;
 	if (e >= n) {
             e -= n;
@@ -486,15 +487,16 @@ generic_set_tx_event(struct netmap_kring *kring, u_int j)
     struct mbuf *m;
     u_int e = generic_tx_event_middle(kring, j);
 
-    ND("Event at %d", e);
     m = kring->tx_pool[e];
-    if (unlikely(!m)) {
-        D("ERROR: This should never happen");
+    if (m == NULL) {
+        /* This can happen if there is already an event on the netmap
+           slot 'e': There is nothing to do. */
         return;
     }
+    ND("Event at %d mbuf %p refcnt %d", e, m, GET_MBUF_REFCNT(m));
     kring->tx_pool[e] = NULL;
-    //skb_shinfo(m)->destructor_arg = NULL + e;
-    m->destructor = (void *)&generic_mbuf_destructor; // XXX
+    SET_MBUF_DESTRUCTOR(m, generic_mbuf_destructor);
+
     // XXX wmb() ?
     /* Decrement the refcount an free it if we have the last one. */
     m_freem(m);
@@ -557,7 +559,7 @@ generic_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
              */
             tx_ret = generic_xmit_frame(ifp, m, addr, len, ring_nr);
             if (unlikely(tx_ret)) {
-                ND("start_xmit failed: err %d [%d,%d,%d]", tx_ret, j, k, kring->nr_hwavail);
+                RD(5, "start_xmit failed: err %d [%d,%d,%d,%d]", tx_ret, kring->nr_ntc, j, k, kring->nr_hwavail);
                 /*
                  * No room for this mbuf in the device driver.
 		 * Request a notification FOR A PREVIOUS MBUF,
@@ -617,6 +619,7 @@ void generic_rx_handler(struct ifnet *ifp, struct mbuf *m)
     u_int work_done;
     u_int rr = 0;
 
+    ND("called");
     /* limit the size of the queue */
     if (unlikely(mbq_len(&na->rx_rings[rr].rx_queue) > 1024)) {
         m_freem(m);
@@ -768,7 +771,7 @@ generic_netmap_attach(struct ifnet *ifp)
     num_tx_desc = num_rx_desc = 256; /* starting point */
 
     generic_find_num_desc(ifp, &num_tx_desc, &num_rx_desc);
-    D("Netmap ring size: TX = %d, RX = %d\n", num_tx_desc, num_rx_desc);
+    ND("Netmap ring size: TX = %d, RX = %d", num_tx_desc, num_rx_desc);
 
     gna = malloc(sizeof(*gna), M_DEVBUF, M_NOWAIT | M_ZERO);
     if (gna == NULL) {

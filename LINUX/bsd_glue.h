@@ -103,7 +103,7 @@ struct net_device_ops {
 #define	m_devget(_buf, _len, _ofs, _dev, _fn)	( {		\
 	struct sk_buff *s = netdev_alloc_skb(_dev, _len);	\
 	if (s) {						\
-		s->len += _len;					\
+		skb_put(s, _len);					\
 		skb_copy_to_linear_data_offset(s, _ofs, _buf, _len);	\
 		s->protocol = eth_type_trans(s, _dev);		\
 	}							\
@@ -115,6 +115,8 @@ struct net_device_ops {
 
 #define GET_MBUF_REFCNT(m)	NM_ATOMIC_READ(&((m)->users))
 #define netmap_get_mbuf(size)	alloc_skb(size, GFP_ATOMIC)
+#define MBUF_TXQ(m)		skb_get_queue_mapping(m)
+#define SET_MBUF_DESTRUCTOR(m, f) m->destructor = (void *)&f
 
 /*
  * m_copydata() copies from mbuf to buffer following the mbuf chain.

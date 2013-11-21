@@ -70,7 +70,7 @@ netmap_catch_rx(struct netmap_adapter *na, int intercept)
             return EINVAL; /* already set */
         }
         na->save_if_input = ifp->if_input;
-        ifp->if_input = generic_rx_handler;
+        // ifp->if_input = generic_rx_handler; XXX tmp commented out
     } else {
         if (!na->save_if_input){
             D("cannot restore");
@@ -119,12 +119,16 @@ generic_xmit_frame(struct ifnet *ifp, struct mbuf *m,
 {
     int ret;
 
-    D("called");
+    m->m_len = m->m_pkthdr.len = 0;
+
     // copy data to the mbuf
-    // inc refcount
+    m_copyback(m, 0, len, addr);
+
+    // inc refcount. We are alone, so we can skip the atomic
     atomic_fetchadd_int(m->m_ext.ref_cnt, 1);
     m->m_flags |= M_FLOWID;
     m->m_pkthdr.flowid = ring_nr;
+    m->m_pkthdr.rcvif = ifp; /* used for tx notification */
     ret = ifp->if_transmit(ifp, m);
     return ret;
 }
