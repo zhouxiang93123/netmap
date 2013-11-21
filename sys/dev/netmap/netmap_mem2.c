@@ -1025,22 +1025,19 @@ void
 netmap_mem_rings_delete(struct netmap_adapter *na)
 {
 	/* last instance, release bufs and rings */
-	u_int i, j, lim;
+	u_int i, lim;
+	struct netmap_kring *kring;
 	struct netmap_ring *ring;
 
 	NMA_LOCK(na->nm_mem);
 
-	for (i = 0; i < na->num_tx_rings + 1; i++) {
-		ring = na->tx_rings[i].ring;
-		lim = na->tx_rings[i].nkr_num_slots;
-		for (j = 0; j < lim; j++)
-			netmap_free_buf(na->nm_mem, ring->slot[j].buf_idx);
-	}
-	for (i = 0; i < na->num_rx_rings + 1; i++) {
-		ring = na->rx_rings[i].ring;
-		lim = na->rx_rings[i].nkr_num_slots;
-		for (j = 0; j < lim; j++)
-			netmap_free_buf(na->nm_mem, ring->slot[j].buf_idx);
+	for (kring = na->tx_rings; kring != na->tailroom; kring++) {
+		ring = kring->ring;
+		if (ring == NULL)
+			continue;
+		lim = kring->nkr_num_slots;
+		for (i = 0; i < lim; i++)
+			netmap_free_buf(na->nm_mem, ring->slot[i].buf_idx);
 	}
 	netmap_free_rings(na);
 
