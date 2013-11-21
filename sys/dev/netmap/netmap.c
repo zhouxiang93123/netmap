@@ -1842,8 +1842,6 @@ netmap_do_regif(struct netmap_priv_d *priv, struct netmap_adapter *na,
 		/* we should drop the allocator, but only
 		 * if we were the ones who grabbed it
 		 */
-		if (need_mem)
-			netmap_drop_memory_locked(priv);
 		error = ENOMEM;
 		goto out;
 	}
@@ -1865,6 +1863,11 @@ netmap_do_regif(struct netmap_priv_d *priv, struct netmap_adapter *na,
 	}
 out:
 	*err = error;
+	if (error) {
+		priv->np_na = NULL;
+		if (need_mem)
+			netmap_drop_memory_locked(priv);
+	}
 	if (nifp != NULL) {
 		/*
 		 * advertise that the interface is ready bt setting ni_nifp.
@@ -2238,10 +2241,6 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			nifp = netmap_do_regif(priv, na, nmr->nr_ringid, &error);
 			if (!nifp) {    /* reg. failed, release priv and ref */
 				netmap_adapter_put(na);
-				if (priv->np_na) {
-					netmap_adapter_put(priv->np_na);
-					priv->np_na = NULL;
-				}
 				priv->np_nifp = NULL;
 				break;
 			}
