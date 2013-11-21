@@ -1472,14 +1472,19 @@ get_hw_na(struct ifnet *ifp, struct netmap_adapter **na)
                    driver support), when the interface is not netmap capable (and we are
                    not forbidden to use the generic adapter), or when
                    we explicitely want to use the generic adapter. */
+		if (prev_na && NETMAP_OWNED_BY_ANY(prev_na)) {
+			return EBUSY;
+		}
                 error = generic_netmap_attach(ifp);
                 if (error) {
 			return error;
                 }
                 gna = (struct netmap_generic_adapter*)NA(ifp);
                 gna->prev = prev_na; /* Store the previously used netmap_adapter. */
-		if (prev_na != NULL)
+		if (prev_na != NULL) {
+			ifunit_ref(ifp->if_xname);
 			netmap_adapter_get(prev_na);
+		}
                 D("Created generic NA %p (prev %p)", gna, gna->prev);
         }
 	if (NETMAP_CAPABLE(ifp))

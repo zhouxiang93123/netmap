@@ -729,7 +729,7 @@ generic_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
     return 0;
 }
 
-static int
+static void
 generic_netmap_dtor(struct netmap_adapter *na)
 {
     struct ifnet *ifp = na->ifp;
@@ -738,6 +738,7 @@ generic_netmap_dtor(struct netmap_adapter *na)
 
     if (prev_na != NULL) {
         D("Released generic NA %p", gna);
+	if_rele(na->ifp);
         netmap_adapter_put(prev_na);
     }
     if (ifp != NULL) {
@@ -745,8 +746,6 @@ generic_netmap_dtor(struct netmap_adapter *na)
         D("Restored native NA %p", prev_na);
         na->ifp = NULL;
     }
-
-    return 1;
 }
 
 /*

@@ -604,14 +604,14 @@ void __netmap_adapter_get(struct netmap_adapter *na);
 #define netmap_adapter_get(na) 							\
 	do {									\
 		struct netmap_adapter *__na = na;				\
-		D("getting %s (%d)", NM_IFPNAME(__na->ifp), __na->na_refcount);	\
+		D("getting %p:%s (%d)", __na, NM_IFPNAME(__na->ifp), __na->na_refcount);	\
 		__netmap_adapter_get(__na);					\
 	} while (0)
 int __netmap_adapter_put(struct netmap_adapter *na);
 #define netmap_adapter_put(na)							\
 	do {									\
 		struct netmap_adapter *__na = na;				\
-		D("putting %s (%d)", NM_IFPNAME(__na->ifp), __na->na_refcount);	\
+		D("putting %p:%s (%d)", __na, NM_IFPNAME(__na->ifp), __na->na_refcount);	\
 		__netmap_adapter_put(__na);					\
 	} while (0)
 #else
