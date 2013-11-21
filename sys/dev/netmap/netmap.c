@@ -953,7 +953,7 @@ netmap_get_memory_locked(struct netmap_priv_d* p)
 	struct netmap_mem_d *nmd;
 	int error = 0;
 
-	if (p->np_na->ifp == NULL) {  // XXX check this check
+	if (p->np_na == NULL) {
 		if (!netmap_mmap_unreg)
 			return ENODEV;
 		/* for compatibility with older versions of the API
