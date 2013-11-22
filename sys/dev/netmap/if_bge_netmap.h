@@ -22,10 +22,10 @@
  * only called on the first register or the last unregister.
  */
 static int
-bge_netmap_reg(struct ifnet *ifp, int onoff)
+bge_netmap_reg(struct netmap_adapter *na, int onoff)
 {
+        struct ifnet *ifp = na->ifp;
 	struct bge_softc *adapter = ifp->if_softc;
-	struct netmap_adapter *na = NA(ifp);
 	int error = 0;
 
 	if (!na)
@@ -38,6 +38,7 @@ bge_netmap_reg(struct ifnet *ifp, int onoff)
 
         if (onoff) {
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 
 		/* save if_transmit and restore it */
 		na->if_transmit = ifp->if_transmit;
@@ -55,6 +56,7 @@ fail:
 		/* restore if_transmit */
 		ifp->if_transmit = na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 		bge_init_locked(adapter);	/* also enables intr */
 	}
 	return (error);
@@ -65,10 +67,10 @@ fail:
  * Reconcile kernel and user view of the transmit ring.
  */
 static int
-bge_netmap_txsync(void *a, u_int ring_nr, int flags)
+bge_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
-	struct bge_softc *sc = a;
-	struct netmap_adapter *na = NA(sc->bge_ifp);
+        struct ifnet *ifp = na->ifp;
+	struct bge_softc *sc = ifp;
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	int delta, j, k, l, lim = kring->nkr_num_slots - 1;
@@ -177,10 +179,10 @@ bge_netmap_txsync(void *a, u_int ring_nr, int flags)
  *	^---- we have freed some buffers
  */
 static int
-bge_netmap_rxsync(void *a, u_int ring_nr, int flags)
+bge_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct bge_softc *sc = a;
-	struct netmap_adapter *na = NA(sc->bge_ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	int j, k, n, lim = kring->nkr_num_slots - 1;
@@ -290,11 +292,16 @@ bge_netmap_tx_init(struct bge_softc *sc)
 	struct bge_tx_bd *d = sc->bge_ldata.bge_tx_ring;
 	int i;
 	struct netmap_adapter *na = NA(sc->bge_ifp);
-	struct netmap_slot *slot = netmap_reset(na, NR_TX, 0, 0);
+	struct netmap_slot *slot;
 
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return;
+        }
+
+        slot = netmap_reset(na, NR_TX, 0, 0);
 	/* slot is NULL if we are not in netmap mode */
 	if (!slot)
-		return;
+		return; // XXX useless
 	/* in netmap mode, overwrite addresses and maps */
 	for (i = 0; i < BGE_TX_RING_CNT; i++) {
 		/*
@@ -327,12 +334,17 @@ bge_netmap_rx_init(struct bge_softc *sc)
 {
 	/* slot is NULL if we are not in netmap mode */
 	struct netmap_adapter *na = NA(sc->bge_ifp);
-	struct netmap_slot *slot = netmap_reset(na, NR_RX, 0, 0);
+	struct netmap_slot *slot;
 	struct bge_rx_bd *r = sc->bge_ldata.bge_rx_std_ring;
 	int i;
 
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return;
+        }
+
+        slot = netmap_reset(na, NR_RX, 0, 0);
 	if (!slot)
-		return;
+		return; // XXX cannot happen
 
 	for (i = 0; i < BGE_STD_RX_RING_CNT; i++) {
 		/*
@@ -383,6 +395,7 @@ bge_netmap_attach(struct bge_softc *sc)
 	na.nm_txsync = bge_netmap_txsync;
 	na.nm_rxsync = bge_netmap_rxsync;
 	na.nm_register = bge_netmap_reg;
-	netmap_attach(&na, 1);
+	na.num_tx_rings = na.num_rx_rings = 1;
+	netmap_attach(&na);
 }
 /* end of file */

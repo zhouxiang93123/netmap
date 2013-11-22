@@ -62,22 +62,23 @@
 int
 netmap_catch_rx(struct netmap_adapter *na, int intercept)
 {
+    struct netmap_generic_adapter *gna = (struct netmap_generic_adapter *)na;
     struct ifnet *ifp = na->ifp;
 
     if (intercept) {
-        if (na->save_if_input) {
+        if (gna->save_if_input) {
             D("cannot intercept again");
             return EINVAL; /* already set */
         }
-        na->save_if_input = ifp->if_input;
+        gna->save_if_input = ifp->if_input;
         // ifp->if_input = generic_rx_handler; XXX tmp commented out
     } else {
-        if (!na->save_if_input){
+        if (!gna->save_if_input){
             D("cannot restore");
             return EINVAL;  /* not saved */
         }
-        ifp->if_input = na->save_if_input;
-        na->save_if_input = NULL;
+        ifp->if_input = gna->save_if_input;
+        gna->save_if_input = NULL;
     }
 
     return 0;
@@ -91,7 +92,7 @@ netmap_catch_rx(struct netmap_adapter *na, int intercept)
  * XXX see if FreeBSD has such a mechanism
  */
 void
-netmap_catch_packet_steering(struct netmap_adapter *na, int enable)
+netmap_catch_packet_steering(struct netmap_generic_adapter *na, int enable)
 {
     if (enable) {
     } else {
@@ -152,7 +153,7 @@ generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq)
     *rxq = 1;
 }
 
-void netmap_mitigation_init(struct netmap_adapter *na)
+void netmap_mitigation_init(struct netmap_generic_adapter *na)
 {
     D("called");
     na->mit_pending = 0;
@@ -160,23 +161,23 @@ void netmap_mitigation_init(struct netmap_adapter *na)
 
 extern unsigned int netmap_generic_mit;
 
-void netmap_mitigation_start(struct netmap_adapter *na)
+void netmap_mitigation_start(struct netmap_generic_adapter *na)
 {
     D("called");
 }
 
-void netmap_mitigation_restart(struct netmap_adapter *na)
+void netmap_mitigation_restart(struct netmap_generic_adapter *na)
 {
     D("called");
 }
 
-int netmap_mitigation_active(struct netmap_adapter *na)
+int netmap_mitigation_active(struct netmap_generic_adapter *na)
 {
     D("called");
     return 0;
 }
 
-void netmap_mitigation_cleanup(struct netmap_adapter *na)
+void netmap_mitigation_cleanup(struct netmap_generic_adapter *na)
 {
     D("called");
 }

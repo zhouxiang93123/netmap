@@ -60,10 +60,11 @@
  * Only called on the first register or the last unregister.
  */
 static int
-ixgbe_netmap_reg(struct ifnet *ifp, int onoff)
+ixgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
-	struct netmap_adapter *na = NA(ifp);
+	struct netmap_hw_adapter *hwna = (struct netmap_hw_adapter*)na;
 	int error = 0;
 
 	if (na == NULL)
@@ -78,15 +79,17 @@ ixgbe_netmap_reg(struct ifnet *ifp, int onoff)
 
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 
 		/* save if_transmit and replace with our routine */
 		na->if_transmit = (void *)ifp->netdev_ops;
-		ifp->netdev_ops = na->nm_ndo_p;
+		ifp->netdev_ops = &hwna->nm_ndo;
 
 	} else { /* reset normal mode (explicit request or netmap failed) */
 		/* restore if_transmit */
 		ifp->netdev_ops = (void *)na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 	}
 	if (netif_running(adapter->netdev))
 		ixgbe_up(adapter);	/* also enables intr */
@@ -118,11 +121,11 @@ ixgbe_netmap_reg(struct ifnet *ifp, int onoff)
  *
  */
 static int
-ixgbe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
+ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct ixgbe_ring *txr = adapter->tx_ring[ring_nr];
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k = ring->cur, l, n, lim = kring->nkr_num_slots - 1;
@@ -313,11 +316,11 @@ ring_reset:
  *
  */
 static int
-ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
+ixgbe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct ixgbe_ring *rxr = adapter->rx_ring[ring_nr];
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;
@@ -441,11 +444,16 @@ static int
 ixgbe_netmap_configure_tx_ring(struct SOFTC_T *adapter, int ring_nr)
 {
 	struct netmap_adapter *na = NA(adapter->netdev);
-	struct netmap_slot *slot = netmap_reset(na, NR_TX, ring_nr, 0);
+	struct netmap_slot *slot;
 	//int j;
 
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
+
+        slot = netmap_reset(na, NR_TX, ring_nr, 0);
 	if (!slot)
-		return 0;	// not in netmap;
+		return 0;	// not in netmap; XXX cannot happen
 #if 0
 	/*
 	 * on a generic card we should set the address in the slot.
@@ -483,12 +491,18 @@ ixgbe_netmap_configure_rx_ring(struct SOFTC_T *adapter, int ring_nr)
 	 * so RDT = num_rx_desc - 1 means the whole ring is available.
 	 */
 	struct netmap_adapter *na = NA(adapter->netdev);
-	struct netmap_slot *slot = netmap_reset(na, NR_RX, ring_nr, 0);
+	struct netmap_slot *slot;
 	int lim, i;
 	struct ixgbe_ring *ring = adapter->rx_ring[ring_nr];
+
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
+
+        slot = netmap_reset(na, NR_RX, ring_nr, 0);
         /* same as in ixgbe_setup_transmit_ring() */
 	if (!slot)
-		return 0;	// not in netmap;
+		return 0;	// not in netmap; XXX cannot happen
 
 	lim = na->num_rx_desc - 1 - na->rx_rings[ring_nr].nr_hwavail;
 
@@ -530,6 +544,8 @@ ixgbe_netmap_attach(struct SOFTC_T *adapter)
 	na.nm_txsync = ixgbe_netmap_txsync;
 	na.nm_rxsync = ixgbe_netmap_rxsync;
 	na.nm_register = ixgbe_netmap_reg;
-	netmap_attach(&na, adapter->num_tx_queues);
+	na.num_tx_rings = adapter->num_tx_queues;
+	na.num_rx_rings = adapter->num_rx_queues;
+	netmap_attach(&na);
 }
 /* end of file */

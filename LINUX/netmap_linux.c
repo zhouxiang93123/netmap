@@ -30,35 +30,45 @@
 #include <dev/netmap/netmap_mem2.h>
 
 
+/* ====================== STUFF DEFINED in netmap.c ===================== */
+int netmap_get_memory(struct netmap_priv_d* p);
+void netmap_dtor(void *data);
+int netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td);
+int netmap_poll(struct cdev *dev, int events, struct thread *td);
+int netmap_init(void);
+void netmap_fini(void);
+int netmap_krings_create(struct netmap_adapter *);
+int netmap_hw_krings_create(struct netmap_adapter *);
+
 /* ========================== LINUX-SPECIFIC ROUTINES ================== */
 
-void netmap_mitigation_init(struct netmap_adapter *na)
+void netmap_mitigation_init(struct netmap_generic_adapter *gna)
 {
-    hrtimer_init(&na->mit_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-    na->mit_timer.function = &generic_timer_handler;
-    na->mit_pending = 0;
+    hrtimer_init(&gna->mit_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+    gna->mit_timer.function = &generic_timer_handler;
+    gna->mit_pending = 0;
 }
 
 extern unsigned int netmap_generic_mit;
 
-void netmap_mitigation_start(struct netmap_adapter *na)
+void netmap_mitigation_start(struct netmap_generic_adapter *gna)
 {
-    hrtimer_start(&na->mit_timer, ktime_set(0, netmap_generic_mit), HRTIMER_MODE_REL);
+    hrtimer_start(&gna->mit_timer, ktime_set(0, netmap_generic_mit), HRTIMER_MODE_REL);
 }
 
-void netmap_mitigation_restart(struct netmap_adapter *na)
+void netmap_mitigation_restart(struct netmap_generic_adapter *gna)
 {
-    hrtimer_forward_now(&na->mit_timer, ktime_set(0, netmap_generic_mit));
+    hrtimer_forward_now(&gna->mit_timer, ktime_set(0, netmap_generic_mit));
 }
 
-int netmap_mitigation_active(struct netmap_adapter *na)
+int netmap_mitigation_active(struct netmap_generic_adapter *gna)
 {
-    return hrtimer_active(&na->mit_timer);
+    return hrtimer_active(&gna->mit_timer);
 }
 
-void netmap_mitigation_cleanup(struct netmap_adapter *na)
+void netmap_mitigation_cleanup(struct netmap_generic_adapter *gna)
 {
-    hrtimer_cancel(&na->mit_timer);
+    hrtimer_cancel(&gna->mit_timer);
 }
 
 /*
@@ -99,8 +109,9 @@ static u16 generic_ndo_select_queue(struct ifnet *ifp, struct mbuf *m)
 }
 
 /* Must be called under rtnl. */
-void netmap_catch_packet_steering(struct netmap_adapter *na, int enable)
+void netmap_catch_packet_steering(struct netmap_generic_adapter *gna, int enable)
 {
+    struct netmap_adapter *na = &gna->up.up;
     struct ifnet *ifp = na->ifp;
 
     if (enable) {
@@ -111,9 +122,9 @@ void netmap_catch_packet_steering(struct netmap_adapter *na, int enable)
          * and make the driver use it.
          */
         na->if_transmit = (void *)ifp->netdev_ops;
-        *na->generic_ndo_p = *ifp->netdev_ops;  /* Copy */
-        na->generic_ndo_p->ndo_select_queue = &generic_ndo_select_queue;
-        ifp->netdev_ops = na->generic_ndo_p;
+        gna->generic_ndo = *ifp->netdev_ops;  /* Copy */
+        gna->generic_ndo.ndo_select_queue = &generic_ndo_select_queue;
+        ifp->netdev_ops = &gna->generic_ndo;
     } else {
 	/* Restore the original netdev_ops. */
         ifp->netdev_ops = (void *)na->if_transmit;
@@ -175,46 +186,15 @@ generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq)
     *rxq = 1; /* TODO ifp->real_num_rx_queues */
 }
 
-static struct device_driver *
-linux_netmap_find_driver(struct device *dev)
-{
-	struct device_driver *dd;
-
-	while ( (dd = dev->driver) == NULL ) {
-		if ( (dev = dev->parent) == NULL )
-			return NULL;
-	}
-	return dd;
-}
-
 struct net_device *
 ifunit_ref(const char *name)
 {
-	struct net_device *ifp = dev_get_by_name(&init_net, name);
-	struct device_driver *dd;
-
-	if (ifp == NULL)
-		return NULL;
-
-	if ( (dd = linux_netmap_find_driver(&ifp->dev)) == NULL )
-		goto error;
-
-	if (!try_module_get(dd->owner))
-		goto error;
-
-	return ifp;
-error:
-	dev_put(ifp);
-	return NULL;
+	return dev_get_by_name(&init_net, name);
 }
 
 void if_rele(struct net_device *ifp)
 {
-	struct device_driver *dd;
-	dd = linux_netmap_find_driver(&ifp->dev);
 	dev_put(ifp);
-	if (dd)
-		module_put(dd->owner);
 }
 
 
@@ -234,9 +214,9 @@ linux_netmap_poll(struct file * file, struct poll_table_struct *pwait)
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,28)
 	int events = POLLIN | POLLOUT; /* XXX maybe... */
 #elif LINUX_VERSION_CODE < KERNEL_VERSION(3,4,0)
-	int events = pwait ? pwait->key : POLLIN | POLLOUT;
+	int events = pwait ? pwait->key : POLLIN | POLLOUT | POLLERR;
 #else /* in 3.4.0 field 'key' was renamed to '_key' */
-	int events = pwait ? pwait->_key : POLLIN | POLLOUT;
+	int events = pwait ? pwait->_key : POLLIN | POLLOUT | POLLERR;
 #endif
 	return netmap_poll((void *)pwait, events, (void *)file);
 }
@@ -396,6 +376,7 @@ EXPORT_SYMBOL(netmap_bdg_ctl);		/* bridge configuration routine */
 EXPORT_SYMBOL(netmap_bdg_learning);	/* the default lookup function */
 EXPORT_SYMBOL(netmap_disable_all_rings);
 EXPORT_SYMBOL(netmap_enable_all_rings);
+EXPORT_SYMBOL(netmap_krings_create);
 
 
 MODULE_AUTHOR("http://info.iet.unipi.it/~luigi/netmap/");

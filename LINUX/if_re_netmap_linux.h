@@ -46,9 +46,9 @@ static void rtl8169_wait_for_quiescence(struct ifnet *);
  * Register/unregister, mostly the reinit task
  */
 static int
-re_netmap_reg(struct ifnet *ifp, int onoff)
+re_netmap_reg(struct netmap_adapter *na, int onoff)
 {
-	struct netmap_adapter *na = NA(ifp);
+        struct ifnet *ifp = na->ifp;
 	int error = 0;
 
 	if (na == NULL)
@@ -59,6 +59,7 @@ re_netmap_reg(struct ifnet *ifp, int onoff)
 
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 		na->if_transmit = (void *)ifp->netdev_ops;
 		ifp->netdev_ops = na->nm_ndo_p;
 
@@ -69,6 +70,7 @@ re_netmap_reg(struct ifnet *ifp, int onoff)
 	} else {
 fail:
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 		ifp->netdev_ops = (void *)na->if_transmit;
 		error = rtl8169_open(ifp) ? EINVAL : 0;
 	}
@@ -81,11 +83,11 @@ fail:
  * Reconcile kernel and user view of the transmit ring.
  */
 static int
-re_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
+re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *sc = netdev_priv(ifp);
 	void __iomem *ioaddr = sc->mmio_addr;
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
@@ -161,10 +163,10 @@ re_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
  * Reconcile kernel and user view of the receive ring.
  */
 static int
-re_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
+re_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *sc = netdev_priv(ifp);
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;
@@ -261,12 +263,17 @@ static int
 re_netmap_tx_init(struct SOFTC_T *sc)
 {
 	struct netmap_adapter *na = NA(sc->dev);
-	struct netmap_slot *slot = netmap_reset(na, NR_TX, 0, 0);
+	struct netmap_slot *slot;
 	struct TxDesc *desc = sc->TxDescArray;
 	int i, l;
 	uint64_t paddr;
 
-	/* slot is NULL if we are not in netmap mode */
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
+
+        slot = netmap_reset(na, NR_TX, 0, 0);
+	/* slot is NULL if we are not in netmap mode XXX cannot happen */
 	if (!slot)
 		return 0;
 
@@ -284,14 +291,19 @@ static int
 re_netmap_rx_init(struct SOFTC_T *sc)
 {
 	struct netmap_adapter *na = NA(sc->dev);
-	struct netmap_slot *slot = netmap_reset(na, NR_RX, 0, 0);
+	struct netmap_slot *slot;
 	struct RxDesc *desc = sc->RxDescArray;
 	uint32_t cmdstat;
 	int i, lim, l;
 	uint64_t paddr;
 
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
+
+        slot = netmap_reset(na, NR_RX, 0, 0);
 	if (!slot)
-		return 0;
+		return 0;  /* XXX cannot happen */
 	/*
 	 * userspace knows that hwavail packets were ready before
 	 * the reset, so only indexes < lim are made available for rx.
@@ -326,6 +338,7 @@ re_netmap_attach(struct SOFTC_T *sc)
 	na.nm_txsync = re_netmap_txsync;
 	na.nm_rxsync = re_netmap_rxsync;
 	na.nm_register = re_netmap_reg;
-	netmap_attach(&na, 1);
+	na.num_tx_rings = na.num_rx_rings = 1;
+	netmap_attach(&na);
 }
 /* end of file */

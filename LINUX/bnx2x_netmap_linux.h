@@ -114,10 +114,10 @@ bnx2x_netmap_diag(struct ifnet *ifp)
  * Only called on the first register or the last unregister.
  */
 static int
-bnx2x_netmap_reg(struct ifnet *ifp, int onoff)
+bnx2x_netmap_reg(struct netmap_adapter *na, int onoff)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
-	struct netmap_adapter *na = NA(ifp);
 	int error = 0, need_load = 0;
 
 	if (na == NULL)
@@ -141,6 +141,7 @@ if (0) // only load/unload
 else
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 		/* save if_transmit and replace with our routine */
 		na->if_transmit = (void *)ifp->netdev_ops;
 		ifp->netdev_ops = na->nm_ndo_p;
@@ -149,6 +150,7 @@ else
 	} else { /* reset normal mode */
 		ifp->netdev_ops = (void *)na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 	}
 	if (need_load) {
 		D("loading the NIC");
@@ -222,12 +224,12 @@ set of queues.
 
  */
 static int
-bnx2x_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
+bnx2x_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct bnx2x_fastpath *fp = &adapter->fp[ring_nr];
 	struct bnx2x_fp_txdata *txdata = &fp->txdata[0];
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k = ring->cur, n, lim = kring->nkr_num_slots - 1;
@@ -438,11 +440,11 @@ apparently the same.
 
  */
 static int
-bnx2x_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
+bnx2x_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct bnx2x_fastpath *rxr = &adapter->fp[ring_nr];
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;
@@ -593,9 +595,13 @@ bnx2x_netmap_config(struct SOFTC_T *bp)
 	int j, ring_nr;
 	int nq;	/* number of queues to use */
 
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
+
 	slot = netmap_reset(na, NR_TX, 0, 0);	// quick test on first ring
 	if (!slot)
-		return 0;	// not in netmap;
+		return 0;	// not in netmap; XXX is this useless (NAF_NATIVE_ON)?
 	nq = na->num_rx_rings;
 	D("# queues: tx %d rx %d act %d %d",
 		bp->dev->num_tx_queues, bp->dev->num_rx_queues,
@@ -673,7 +679,8 @@ bnx2x_netmap_attach(struct SOFTC_T *adapter)
 	 * but we still cosider it. If FCOE is supported, the last hw
 	 * queue is used for it.
  	 */
-	netmap_attach(&na, BNX2X_NUM_ETH_QUEUES(adapter));
+	na.num_tx_rings = na.num_rx_rings = BNX2X_NUM_ETH_QUEUES(adapter);
+	netmap_attach(&na);
 	D("%d queues, tx: %d rx %d slots", na.num_rx_rings,
 			na.num_tx_desc, na.num_rx_desc);
 }

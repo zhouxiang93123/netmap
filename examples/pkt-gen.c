@@ -971,6 +971,10 @@ sender_body(void *data)
 			D("poll error/timeout on queue %d", targ->me);
 			goto quit;
 		}
+		if (fds[0].revents & POLLERR) {
+			D("poll error");
+			goto quit;
+		}
 		/*
 		 * scan our queues and send on those with room
 		 */
@@ -1082,7 +1086,7 @@ receiver_body(void *data)
 		i = poll(fds, 1, 1000);
 		if (i > 0 && !(fds[0].revents & POLLERR))
 			break;
-		D("waiting for initial packets, poll returns %d %d", i, fds[0].revents);
+		RD(1, "waiting for initial packets, poll returns %d %d", i, fds[0].revents);
 	}
 
 	/* main loop, exit after 1s silence */
@@ -1109,6 +1113,11 @@ receiver_body(void *data)
 			clock_gettime(CLOCK_REALTIME_PRECISE, &targ->toc);
 			targ->toc.tv_sec -= 1; /* Subtract timeout time. */
 			break;
+		}
+
+		if (fds[0].revents & POLLERR) {
+			D("poll err");
+			goto quit;
 		}
 
 		for (i = targ->qfirst; i < targ->qlast; i++) {

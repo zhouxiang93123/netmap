@@ -59,10 +59,11 @@
  * Register/unregister, similar to e1000_reinit_safe()
  */
 static int
-igb_netmap_reg(struct ifnet *ifp, int onoff)
+igb_netmap_reg(struct netmap_adapter *na, int onoff)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
-	struct netmap_adapter *na = NA(ifp);
+	struct netmap_hw_adapter *hwna = (struct netmap_hw_adapter*)na;
 	int error = 0;
 
 	if (na == NULL)
@@ -78,10 +79,12 @@ igb_netmap_reg(struct ifnet *ifp, int onoff)
 
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 		na->if_transmit = (void *)ifp->netdev_ops;
-		ifp->netdev_ops = na->nm_ndo_p;
+		ifp->netdev_ops = &hwna->nm_ndo;
 	} else {
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 		ifp->netdev_ops = (void *)na->if_transmit;
 	}
 
@@ -102,11 +105,11 @@ igb_netmap_reg(struct ifnet *ifp, int onoff)
  * Reconcile kernel and user view of the transmit ring.
  */
 static int
-igb_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
+igb_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct igb_ring* txr = adapter->tx_ring[ring_nr];
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
@@ -211,10 +214,10 @@ igb_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
  * Reconcile kernel and user view of the receive ring.
  */
 static int
-igb_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
+igb_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
-	struct netmap_adapter *na = NA(ifp);
 	struct igb_ring *rxr = adapter->rx_ring[ring_nr];
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
@@ -308,14 +311,19 @@ igb_netmap_configure_tx_ring(struct SOFTC_T *adapter, int ring_nr)
 {
 	struct ifnet *ifp = adapter->netdev;
 	struct netmap_adapter* na = NA(ifp);
-	struct netmap_slot* slot = netmap_reset(na, NR_TX, ring_nr, 0);
+	struct netmap_slot* slot;
 	struct igb_ring *txr = adapter->tx_ring[ring_nr];
 	int i, si;
 	void *addr;
 	uint64_t paddr;
 
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
+
+        slot = netmap_reset(na, NR_TX, ring_nr, 0);
 	if (!slot)
-		return 0;
+		return 0;  // XXX this should never happen
 	for (i = 0; i < na->num_tx_desc; i++) {
 		union e1000_adv_tx_desc *tx_desc;
 		si = netmap_idx_n2k(&na->tx_rings[ring_nr], i);
@@ -334,8 +342,12 @@ igb_netmap_configure_rx_ring(struct igb_ring *rxr)
 	struct ifnet *ifp = rxr->netdev;
 	struct netmap_adapter* na = NA(ifp);
 	int reg_idx = rxr->reg_idx;
-	struct netmap_slot* slot = netmap_reset(na, NR_RX, reg_idx, 0);
+	struct netmap_slot* slot;
 	u_int i;
+
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
 
 	/*
 	 * XXX watch out, the main driver must not use
@@ -347,6 +359,7 @@ igb_netmap_configure_rx_ring(struct igb_ring *rxr)
 	 *	srrctl |= E1000_SRRCTL_DESCTYPE_ADV_ONEBUF;
 	 *	srrctl |= E1000_SRRCTL_DROP_EN;
 	 */
+        slot = netmap_reset(na, NR_RX, reg_idx, 0);
 	if (!slot)
 		return 0;	// not in netmap mode
 
@@ -393,8 +406,7 @@ igb_netmap_attach(struct SOFTC_T *adapter)
 	na.nm_txsync = igb_netmap_txsync;
 	na.nm_rxsync = igb_netmap_rxsync;
 	na.num_tx_rings = adapter->num_tx_queues;
-	D("using %d TX and %d RX queues",
-		adapter->num_tx_queues, adapter->num_rx_queues);
-	netmap_attach(&na, adapter->num_rx_queues);
+	na.num_rx_rings = adapter->num_rx_queues;
+	netmap_attach(&na);
 }
 /* end of file */
