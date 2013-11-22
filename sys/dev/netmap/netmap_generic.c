@@ -563,7 +563,7 @@ generic_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
              */
             tx_ret = generic_xmit_frame(ifp, m, addr, len, ring_nr);
             if (unlikely(tx_ret)) {
-                RD(5, "start_xmit failed: err %d [%d,%d,%d,%d]", tx_ret, kring->nr_ntc, j, k, kring->nr_hwavail);
+                RD(5, "start_xmit failed: err %d [%u,%u,%u,%u]", tx_ret, kring->nr_ntc, j, k, kring->nr_hwavail);
                 /*
                  * No room for this mbuf in the device driver.
 		 * Request a notification FOR A PREVIOUS MBUF,
