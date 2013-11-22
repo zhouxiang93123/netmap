@@ -157,12 +157,14 @@ mlx4_netmap_reg(struct netmap_adapter *na, int onoff)
 retry:
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 		/* save if_transmit and replace with our routine */
 		na->if_transmit = (void *)ifp->netdev_ops;
 		ifp->netdev_ops = na->nm_ndo_p;
 	} else { /* reset normal mode */
 		ifp->netdev_ops = (void *)na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 	}
 	if (need_load) {
 		D("loading %s", ifp->if_xname);
@@ -640,6 +642,10 @@ mlx4_netmap_tx_config(struct SOFTC_T *priv, int ring_nr)
 
 	ND(5, "priv %p ring_nr %d", priv, ring_nr);
 
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
+
 /*
  CONFIGURE TX RINGS IN NETMAP MODE
  little if anything to do
@@ -669,6 +675,10 @@ mlx4_netmap_rx_config(struct SOFTC_T *priv, int ring_nr)
         struct mlx4_en_rx_ring *rxr;
 	struct netmap_kring *kring;
         int i, j, possible_frags;
+
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
 
 	/*
 	 * on the receive ring, must set buf addresses into the slots.

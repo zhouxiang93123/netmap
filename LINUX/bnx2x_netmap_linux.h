@@ -141,6 +141,7 @@ if (0) // only load/unload
 else
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 		/* save if_transmit and replace with our routine */
 		na->if_transmit = (void *)ifp->netdev_ops;
 		ifp->netdev_ops = na->nm_ndo_p;
@@ -149,6 +150,7 @@ else
 	} else { /* reset normal mode */
 		ifp->netdev_ops = (void *)na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 	}
 	if (need_load) {
 		D("loading the NIC");
@@ -593,9 +595,13 @@ bnx2x_netmap_config(struct SOFTC_T *bp)
 	int j, ring_nr;
 	int nq;	/* number of queues to use */
 
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
+
 	slot = netmap_reset(na, NR_TX, 0, 0);	// quick test on first ring
 	if (!slot)
-		return 0;	// not in netmap;
+		return 0;	// not in netmap; XXX is this useless (NAF_NATIVE_ON)?
 	nq = na->num_rx_rings;
 	D("# queues: tx %d rx %d act %d %d",
 		bp->dev->num_tx_queues, bp->dev->num_rx_queues,

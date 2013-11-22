@@ -43,15 +43,20 @@ static int
 nfe_netmap_init_buffers(struct nfe_softc *sc)
 {
 	struct netmap_adapter *na = NA(sc->nfe_ifp);
-	struct netmap_slot *slot = netmap_reset(na, NR_TX, 0, 0);
+	struct netmap_slot *slot;
 	int i, l, n, max_avail;
         struct nfe_desc32 *desc32 = NULL;
         struct nfe_desc64 *desc64 = NULL;
 	void *addr;
 	uint64_t paddr;
 
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
+
+        slot = netmap_reset(na, NR_TX, 0, 0);
 	if (!slot)
-		return 0;
+		return 0; // XXX cannot happen
 	// XXX init the tx ring
 	n = NFE_TX_RING_COUNT;
 	for (i = 0; i < n; i++) {
@@ -145,6 +150,7 @@ nfe_netmap_reg(struct netmap_adapter *na, int onoff)
 
 	if (onoff) {
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 
 		na->if_transmit = ifp->if_transmit;
 		ifp->if_transmit = netmap_transmit;
@@ -154,6 +160,7 @@ nfe_netmap_reg(struct netmap_adapter *na, int onoff)
 		/* return to non-netmap mode */
 		ifp->if_transmit = na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 		nfe_init_locked(sc);	/* also enable intr */
 	}
 	return (0);

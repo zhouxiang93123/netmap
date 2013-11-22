@@ -81,11 +81,16 @@ static int
 sfxge_netmap_init_buffers(struct sfxge_softc *sc)
 {
 	struct netmap_adapter *na = NA(sc->ifnet);
-	struct netmap_slot *slot = netmap_reset(na, NR_TX, 0, 0);
+	struct netmap_slot *slot;
 	int i, l, n, max_avail;
 	void *addr;
 	uint64_t paddr;
 
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
+
+        slot = netmap_reset(na, NR_TX, 0, 0);
 	// tx rings, see
 	//	sfxge_tx_qinit()
 	return 0;
@@ -113,6 +118,7 @@ sfxge_netmap_reg(struct netmap_adapter *na, int onoff)
 
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 
 		/* save if_transmit and replace with our routine */
 		na->if_transmit = ifp->if_transmit;
@@ -132,6 +138,7 @@ fail:
 		/* restore if_transmit */
 		ifp->if_transmit = na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 		/* initialize the card, this time in standard mode */
 		sfxge_start(sc);	/* also enables intr */
 	}

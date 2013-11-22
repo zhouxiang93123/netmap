@@ -301,6 +301,9 @@ struct netmap_adapter {
 #define NAF_MEM_OWNER	8	/* the adapter is responsible for the
 				 * deallocation of the memory allocator
 				 */
+#define NAF_NATIVE_ON   16      /* the adapter is native and the attached
+                                 * interface is in netmap mode
+                                 */
 	int refcount; /* number of user-space descriptors using this
 			 interface, which is equal to the number of
 			 struct netmap_if objs in the mapped region. */

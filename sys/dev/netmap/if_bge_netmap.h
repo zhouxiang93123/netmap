@@ -38,6 +38,7 @@ bge_netmap_reg(struct netmap_adapter *na, int onoff)
 
         if (onoff) {
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 
 		/* save if_transmit and restore it */
 		na->if_transmit = ifp->if_transmit;
@@ -55,6 +56,7 @@ fail:
 		/* restore if_transmit */
 		ifp->if_transmit = na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 		bge_init_locked(adapter);	/* also enables intr */
 	}
 	return (error);
@@ -290,11 +292,16 @@ bge_netmap_tx_init(struct bge_softc *sc)
 	struct bge_tx_bd *d = sc->bge_ldata.bge_tx_ring;
 	int i;
 	struct netmap_adapter *na = NA(sc->bge_ifp);
-	struct netmap_slot *slot = netmap_reset(na, NR_TX, 0, 0);
+	struct netmap_slot *slot;
 
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return;
+        }
+
+        slot = netmap_reset(na, NR_TX, 0, 0);
 	/* slot is NULL if we are not in netmap mode */
 	if (!slot)
-		return;
+		return; // XXX useless
 	/* in netmap mode, overwrite addresses and maps */
 	for (i = 0; i < BGE_TX_RING_CNT; i++) {
 		/*
@@ -327,12 +334,17 @@ bge_netmap_rx_init(struct bge_softc *sc)
 {
 	/* slot is NULL if we are not in netmap mode */
 	struct netmap_adapter *na = NA(sc->bge_ifp);
-	struct netmap_slot *slot = netmap_reset(na, NR_RX, 0, 0);
+	struct netmap_slot *slot;
 	struct bge_rx_bd *r = sc->bge_ldata.bge_rx_std_ring;
 	int i;
 
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return;
+        }
+
+        slot = netmap_reset(na, NR_RX, 0, 0);
 	if (!slot)
-		return;
+		return; // XXX cannot happen
 
 	for (i = 0; i < BGE_STD_RX_RING_CNT; i++) {
 		/*

@@ -59,6 +59,7 @@ re_netmap_reg(struct netmap_adapter *na, int onoff)
 
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 		na->if_transmit = (void *)ifp->netdev_ops;
 		ifp->netdev_ops = na->nm_ndo_p;
 
@@ -69,6 +70,7 @@ re_netmap_reg(struct netmap_adapter *na, int onoff)
 	} else {
 fail:
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 		ifp->netdev_ops = (void *)na->if_transmit;
 		error = rtl8169_open(ifp) ? EINVAL : 0;
 	}
@@ -261,12 +263,17 @@ static int
 re_netmap_tx_init(struct SOFTC_T *sc)
 {
 	struct netmap_adapter *na = NA(sc->dev);
-	struct netmap_slot *slot = netmap_reset(na, NR_TX, 0, 0);
+	struct netmap_slot *slot;
 	struct TxDesc *desc = sc->TxDescArray;
 	int i, l;
 	uint64_t paddr;
 
-	/* slot is NULL if we are not in netmap mode */
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
+
+        slot = netmap_reset(na, NR_TX, 0, 0);
+	/* slot is NULL if we are not in netmap mode XXX cannot happen */
 	if (!slot)
 		return 0;
 
@@ -284,14 +291,19 @@ static int
 re_netmap_rx_init(struct SOFTC_T *sc)
 {
 	struct netmap_adapter *na = NA(sc->dev);
-	struct netmap_slot *slot = netmap_reset(na, NR_RX, 0, 0);
+	struct netmap_slot *slot;
 	struct RxDesc *desc = sc->RxDescArray;
 	uint32_t cmdstat;
 	int i, lim, l;
 	uint64_t paddr;
 
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
+
+        slot = netmap_reset(na, NR_RX, 0, 0);
 	if (!slot)
-		return 0;
+		return 0;  /* XXX cannot happen */
 	/*
 	 * userspace knows that hwavail packets were ready before
 	 * the reset, so only indexes < lim are made available for rx.

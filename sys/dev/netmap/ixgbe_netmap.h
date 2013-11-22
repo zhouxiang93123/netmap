@@ -133,6 +133,7 @@ ixgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 	set_crcstrip(&adapter->hw, onoff);
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 
 		/* save if_transmit and replace with our routine */
 		na->if_transmit = ifp->if_transmit;
@@ -152,6 +153,7 @@ fail:
 		/* restore if_transmit */
 		ifp->if_transmit = na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= NAF_NATIVE_ON;
 		/* initialize the card, this time in standard mode */
 		ixgbe_init_locked(adapter);	/* also enables intr */
 	}

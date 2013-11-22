@@ -58,6 +58,7 @@ re_netmap_reg(struct netmap_adapter *na, int onoff)
 
 	if (onoff) {
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 
 		/* save if_transmit to restore it later */
 		na->if_transmit = ifp->if_transmit;
@@ -74,6 +75,7 @@ fail:
 		/* restore if_transmit */
 		ifp->if_transmit = na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 		re_init_locked(adapter);	/* also enables intr */
 	}
 	return (error);
@@ -299,11 +301,16 @@ re_netmap_tx_init(struct rl_softc *sc)
 	struct rl_desc *desc;
 	int i, n;
 	struct netmap_adapter *na = NA(sc->rl_ifp);
-	struct netmap_slot *slot = netmap_reset(na, NR_TX, 0, 0);
+	struct netmap_slot *slot;
 
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return;
+        }
+
+        slot = netmap_reset(na, NR_TX, 0, 0);
 	/* slot is NULL if we are not in netmap mode */
 	if (!slot)
-		return;
+		return;  // XXX cannot happen
 	/* in netmap mode, overwrite addresses and maps */
 	txd = sc->rl_ldata.rl_tx_desc;
 	desc = sc->rl_ldata.rl_tx_list;

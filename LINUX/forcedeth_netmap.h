@@ -90,12 +90,14 @@ forcedeth_netmap_reg(struct netmap_adapter *na, int onoff)
 
 	if (onoff) {
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 		na->if_transmit = (void *)ifp->netdev_ops;
 		ifp->netdev_ops = &hwna->nm_ndo;
 	} else {
 		/* restore if_transmit */
 		ifp->netdev_ops = (void *)na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 	}
 	// second half of nv_change_mtu() -- up
 	if (nv_init_ring(ifp)) {
@@ -302,8 +304,13 @@ forcedeth_netmap_tx_init(struct SOFTC_T *np)
 	struct ring_desc_ex *desc;
 	int i, n;
 	struct netmap_adapter *na = NA(np->dev);
-	struct netmap_slot *slot = netmap_reset(na, NR_TX, 0, 0);
+	struct netmap_slot *slot;
 
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
+
+        slot = netmap_reset(na, NR_TX, 0, 0);
 	/* slot is NULL if we are not in netmap mode */
 	if (!slot)
 		return 0;

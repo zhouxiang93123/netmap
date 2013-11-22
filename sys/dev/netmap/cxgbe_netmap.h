@@ -113,6 +113,7 @@ cxgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 
 	if (onoff) {
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 
 		/* save if_transmit to restore it later */
 		na->if_transmit = ifp->if_transmit;
@@ -128,6 +129,7 @@ fail:
 		/* restore if_transmit */
 		ifp->if_transmit = na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 		ixgbe_init_locked(adapter);	/* also enables intr */
 	}
 #endif

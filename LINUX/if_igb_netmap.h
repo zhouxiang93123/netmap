@@ -79,10 +79,12 @@ igb_netmap_reg(struct netmap_adapter *na, int onoff)
 
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 		na->if_transmit = (void *)ifp->netdev_ops;
 		ifp->netdev_ops = &hwna->nm_ndo;
 	} else {
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 		ifp->netdev_ops = (void *)na->if_transmit;
 	}
 
@@ -309,14 +311,19 @@ igb_netmap_configure_tx_ring(struct SOFTC_T *adapter, int ring_nr)
 {
 	struct ifnet *ifp = adapter->netdev;
 	struct netmap_adapter* na = NA(ifp);
-	struct netmap_slot* slot = netmap_reset(na, NR_TX, ring_nr, 0);
+	struct netmap_slot* slot;
 	struct igb_ring *txr = adapter->tx_ring[ring_nr];
 	int i, si;
 	void *addr;
 	uint64_t paddr;
 
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
+
+        slot = netmap_reset(na, NR_TX, ring_nr, 0);
 	if (!slot)
-		return 0;
+		return 0;  // XXX this should never happen
 	for (i = 0; i < na->num_tx_desc; i++) {
 		union e1000_adv_tx_desc *tx_desc;
 		si = netmap_idx_n2k(&na->tx_rings[ring_nr], i);
@@ -335,8 +342,12 @@ igb_netmap_configure_rx_ring(struct igb_ring *rxr)
 	struct ifnet *ifp = rxr->netdev;
 	struct netmap_adapter* na = NA(ifp);
 	int reg_idx = rxr->reg_idx;
-	struct netmap_slot* slot = netmap_reset(na, NR_RX, reg_idx, 0);
+	struct netmap_slot* slot;
 	u_int i;
+
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
 
 	/*
 	 * XXX watch out, the main driver must not use
@@ -348,6 +359,7 @@ igb_netmap_configure_rx_ring(struct igb_ring *rxr)
 	 *	srrctl |= E1000_SRRCTL_DESCTYPE_ADV_ONEBUF;
 	 *	srrctl |= E1000_SRRCTL_DROP_EN;
 	 */
+        slot = netmap_reset(na, NR_RX, reg_idx, 0);
 	if (!slot)
 		return 0;	// not in netmap mode
 

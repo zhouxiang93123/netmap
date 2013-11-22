@@ -79,6 +79,7 @@ ixgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 
 		/* save if_transmit and replace with our routine */
 		na->if_transmit = (void *)ifp->netdev_ops;
@@ -88,6 +89,7 @@ ixgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 		/* restore if_transmit */
 		ifp->netdev_ops = (void *)na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 	}
 	if (netif_running(adapter->netdev))
 		ixgbe_up(adapter);	/* also enables intr */
@@ -442,11 +444,16 @@ static int
 ixgbe_netmap_configure_tx_ring(struct SOFTC_T *adapter, int ring_nr)
 {
 	struct netmap_adapter *na = NA(adapter->netdev);
-	struct netmap_slot *slot = netmap_reset(na, NR_TX, ring_nr, 0);
+	struct netmap_slot *slot;
 	//int j;
 
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
+
+        slot = netmap_reset(na, NR_TX, ring_nr, 0);
 	if (!slot)
-		return 0;	// not in netmap;
+		return 0;	// not in netmap; XXX cannot happen
 #if 0
 	/*
 	 * on a generic card we should set the address in the slot.
@@ -484,12 +491,18 @@ ixgbe_netmap_configure_rx_ring(struct SOFTC_T *adapter, int ring_nr)
 	 * so RDT = num_rx_desc - 1 means the whole ring is available.
 	 */
 	struct netmap_adapter *na = NA(adapter->netdev);
-	struct netmap_slot *slot = netmap_reset(na, NR_RX, ring_nr, 0);
+	struct netmap_slot *slot;
 	int lim, i;
 	struct ixgbe_ring *ring = adapter->rx_ring[ring_nr];
+
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
+
+        slot = netmap_reset(na, NR_RX, ring_nr, 0);
         /* same as in ixgbe_setup_transmit_ring() */
 	if (!slot)
-		return 0;	// not in netmap;
+		return 0;	// not in netmap; XXX cannot happen
 
 	lim = na->num_rx_desc - 1 - na->rx_rings[ring_nr].nr_hwavail;
 

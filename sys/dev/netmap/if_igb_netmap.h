@@ -58,6 +58,7 @@ igb_netmap_reg(struct netmap_adapter *na, int onoff)
 
 	if (onoff) {
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 
 		na->if_transmit = ifp->if_transmit;
 		ifp->if_transmit = netmap_transmit;
@@ -72,6 +73,7 @@ fail:
 		/* restore if_transmit */
 		ifp->if_transmit = na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 		igb_init_locked(adapter);	/* also enable intr */
 	}
 	return (error);
