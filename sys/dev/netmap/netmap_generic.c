@@ -402,7 +402,7 @@ generic_mbuf_destructor(struct mbuf *m)
     IFRATE(rate_ctx.new.txirq++);
 }
 
-/* Record completed transmissions and update hwavail/avail.
+/* Record completed transmissions and update hwavail.
  *
  * nr_ntc is the oldest tx buffer not yet completed
  * (same as nr_hwavail + nr_hwcur + 1),
@@ -439,7 +439,6 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
     }
     kring->nr_ntc = ntc;
     kring->nr_hwavail += n;
-    kring->ring->avail += n;
     ND("tx completed [%d] -> hwavail %d", n, kring->nr_hwavail);
 
     return n;
@@ -619,12 +618,9 @@ generic_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
             kring->nr_hwreserved += num_slots;
         }
 
-        /* Synchronize the user's view to the kernel view. */
-        ring->avail = kring->nr_hwavail;
-        ring->reserved = kring->nr_hwreserved;
         IFRATE(rate_ctx.new.txpkt += ntx);
 
-        if (!ring->avail) {
+        if (!kring->nr_hwavail) {
             /* No more available slots? Set a notification event
              * on a netmap slot that will be cleaned in the future.
              * No doublecheck is performed, since txsync() will be
@@ -634,6 +630,10 @@ generic_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
         }
         ND("tx #%d, hwavail = %d", n, kring->nr_hwavail);
     }
+
+    /* Synchronize the user's view to the kernel view. */
+    ring->avail = kring->nr_hwavail;
+    ring->reserved = kring->nr_hwreserved;
 
     return 0;
 }
