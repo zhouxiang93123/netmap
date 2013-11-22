@@ -517,7 +517,8 @@ generic_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
     struct ifnet *ifp = na->ifp;
     struct netmap_kring *kring = &na->tx_rings[ring_nr];
     struct netmap_ring *ring = kring->ring;
-    u_int j, k, n = 0, lim = kring->nkr_num_slots - 1;
+    u_int j, k, num_slots = kring->nkr_num_slots;
+    int new, ntx;
 
     IFRATE(rate_ctx.new.txsync++);
 
@@ -526,12 +527,19 @@ generic_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 
     /* Take a copy of ring->cur now, and never read it again. */
     k = ring->cur;
-    if (unlikely(k > lim)) {
+    if (unlikely(k >= num_slots)) {
         return netmap_ring_reinit(kring);
     }
 
     rmb();
     j = kring->nr_hwcur;
+    /* New slot to transmit: everything from hwcur to cur, excluded reserved
+       slots, if any. Reserved slots start from hwcur. */
+    new = k - j - kring->nr_hwreserved;
+    if (new < 0) {
+        new += num_slots;
+    }
+    ntx = 0;
     if (j != k) {
         /* Process new packets to send: j is the current index in the netmap ring. */
         while (j != k) {
@@ -586,14 +594,31 @@ generic_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
                 }
             }
             slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
-            if (unlikely(j++ == lim))
+            if (unlikely(++j == num_slots))
                 j = 0;
-            n++;
+            ntx++;
         }
 
+        /* Update hwcur to the next slot to transmit. */
         kring->nr_hwcur = j;
-        kring->nr_hwavail -= n;
-        IFRATE(rate_ctx.new.txpkt += n);
+
+        /* Here we split 'new' between hwreserved and hwavail, with hwreserved
+           having greater priority. */
+        kring->nr_hwreserved -= new;
+        if (kring->nr_hwreserved < 0) {
+            kring->nr_hwavail += kring->nr_hwreserved;
+            kring->nr_hwreserved = 0;
+        }
+
+        /* Increment hwreserved by the number of new slots that we didn't
+           manage to transmit. */
+        kring->nr_hwreserved += (new - ntx);
+
+        /* Synchronize the user's view to the kernel view. */
+        ring->avail = kring->nr_hwavail;
+        ring->reserved = kring->nr_hwreserved;
+        IFRATE(rate_ctx.new.txpkt += ntx);
+
         if (!ring->avail) {
             /* No more available slots? Set a notification event
              * on a netmap slot that will be cleaned in the future.
