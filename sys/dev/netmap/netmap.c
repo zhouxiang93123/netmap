@@ -3924,7 +3924,7 @@ netmap_bwrap_notify(struct netmap_adapter *na, u_int ring_n, enum txrx tx, int f
 	}
 	kring->nr_hwcur = ring->cur;
 	kring->nr_hwavail = 0;
-	kring->nr_hwreserved = ring->reserved;
+	kring->nr_hwreserved = lim - ring->avail;
 	ND("%s[%d] PST rx(%d, %d, %d, %d) ring(%d, %d, %d) tx(%d, %d)",
 		NM_IFPNAME(na->ifp), ring_n, 
 		kring->nr_hwcur, kring->nr_hwavail, kring->nkr_hwlease, kring->nr_hwreserved,
