@@ -452,16 +452,16 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
  * a notification.
  */
 static inline u_int
-generic_tx_event_middle(struct netmap_kring *kring, u_int j)
+generic_tx_event_middle(struct netmap_kring *kring, u_int hwcur)
 {
     u_int n = kring->nkr_num_slots;
     u_int ntc = kring->nr_ntc;
     u_int e;
 
-    if (j >= ntc) {
-	e = (j + ntc) / 2;
+    if (hwcur >= ntc) {
+	e = (hwcur + ntc) / 2;
     } else { /* wrap around */
-	e = (j + n + ntc) / 2;
+	e = (hwcur + n + ntc) / 2;
 	if (e >= n) {
             e -= n;
         }
@@ -476,16 +476,21 @@ generic_tx_event_middle(struct netmap_kring *kring, u_int j)
 }
 
 /*
- * We have pending packets in the driver between nr_ntc and j.
+ * We have pending packets in the driver between nr_ntc and hwcur.
  * Schedule a notification approximately in the middle of the two.
  * There is a race but this is only called within txsync which does
  * a double check.
  */
 static void
-generic_set_tx_event(struct netmap_kring *kring, u_int j)
+generic_set_tx_event(struct netmap_kring *kring, u_int hwcur)
 {
     struct mbuf *m;
-    u_int e = generic_tx_event_middle(kring, j);
+    u_int e;
+
+    if (kring->nr_ntc == hwcur) {
+        return;
+    }
+    e = generic_tx_event_middle(kring, hwcur);
 
     m = kring->tx_pool[e];
     if (m == NULL) {
