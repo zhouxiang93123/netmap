@@ -16,7 +16,6 @@ QEMU_DIR=/usr/home/luigi/qemu-misc/qemu/x86_64-softmmu/
 [ "$QEMU_PORT" = ""  ] && QEMU_PORT=4444
 NET1=""
 QEMU_OPTS="-m 1024 -smp 2 "
-QEMU_OPTS="$QEMU_OPTS $NET1 $NET2"
 
 VIDEO="-curses -monitor tcp::$QEMU_PORT,server,nowait"
 #QEMU_OPTS="-m 1024 -smp 1 -curses -monitor tcp::4444,server,nowait"
@@ -32,6 +31,10 @@ while [ x"$1" != x ] ; do
 	PARALLEL="-j 4"
 	;;
 
+    -vale)
+	# NET1=" -net nic,model=e1000-paravirt -net netmap,ifname=valeQE1"
+	NET1=" -device e1000-paravirt,netdev=n  -netdev netmap,id=n,ifname=valeQE1"
+	;;
     -targ*|-arch*)
 	arch="--arch $2"
 	PLATFORM=$2
@@ -71,6 +74,8 @@ while [ x"$1" != x ] ; do
     shift
 done
 # cmd image root
+
+QEMU_OPTS="$QEMU_OPTS $NET1 $NET2"
 
 cmd=$1
 pico=$2
