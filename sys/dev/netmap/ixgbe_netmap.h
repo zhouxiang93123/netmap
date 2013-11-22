@@ -115,10 +115,10 @@ set_crcstrip(struct ixgbe_hw *hw, int onoff)
  * Only called on the first register or the last unregister.
  */
 static int
-ixgbe_netmap_reg(struct ifnet *ifp, int onoff)
+ixgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 {
+        struct ifnet *ifp = na->ifp;
 	struct adapter *adapter = ifp->if_softc;
-	struct netmap_adapter *na = NA(ifp);
 	int error = 0;
 
 	if (na == NULL)
@@ -133,6 +133,7 @@ ixgbe_netmap_reg(struct ifnet *ifp, int onoff)
 	set_crcstrip(&adapter->hw, onoff);
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 
 		/* save if_transmit and replace with our routine */
 		na->if_transmit = ifp->if_transmit;
@@ -152,6 +153,7 @@ fail:
 		/* restore if_transmit */
 		ifp->if_transmit = na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= NAF_NATIVE_ON;
 		/* initialize the card, this time in standard mode */
 		ixgbe_init_locked(adapter);	/* also enables intr */
 	}
@@ -188,11 +190,11 @@ fail:
  * buffers irrespective of interrupt mitigation.
  */
 static int
-ixgbe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
+ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct adapter *adapter = ifp->if_softc;
 	struct tx_ring *txr = &adapter->tx_rings[ring_nr];
-	struct netmap_adapter *na = NA(adapter->ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n = 0;
@@ -410,11 +412,11 @@ ring_reset:
  * of whether or not we received an interrupt.
  */
 static int
-ixgbe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
+ixgbe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct adapter *adapter = ifp->if_softc;
 	struct rx_ring *rxr = &adapter->rx_rings[ring_nr];
-	struct netmap_adapter *na = NA(adapter->ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;

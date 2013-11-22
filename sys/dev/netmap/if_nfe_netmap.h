@@ -43,15 +43,20 @@ static int
 nfe_netmap_init_buffers(struct nfe_softc *sc)
 {
 	struct netmap_adapter *na = NA(sc->nfe_ifp);
-	struct netmap_slot *slot = netmap_reset(na, NR_TX, 0, 0);
+	struct netmap_slot *slot;
 	int i, l, n, max_avail;
         struct nfe_desc32 *desc32 = NULL;
         struct nfe_desc64 *desc64 = NULL;
 	void *addr;
 	uint64_t paddr;
 
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
+
+        slot = netmap_reset(na, NR_TX, 0, 0);
 	if (!slot)
-		return 0;
+		return 0; // XXX cannot happen
 	// XXX init the tx ring
 	n = NFE_TX_RING_COUNT;
 	for (i = 0; i < n; i++) {
@@ -132,10 +137,10 @@ nfe_netmap_lock_wrapper(struct ifnet *ifp, int what, u_int queueid)
  * Register/unregister routine
  */
 static int
-nfe_netmap_reg(struct ifnet *ifp, int onoff)
+nfe_netmap_reg(struct netmap_adapter *na, int onoff)
 {
+        struct ifnet *ifp = na->ifp;
 	struct nfe_softc *sc = ifp->if_softc;
-	struct netmap_adapter *na = NA(ifp);
 
 	if (na == NULL)
 		return EINVAL;	/* no netmap support here */
@@ -145,6 +150,7 @@ nfe_netmap_reg(struct ifnet *ifp, int onoff)
 
 	if (onoff) {
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 
 		na->if_transmit = ifp->if_transmit;
 		ifp->if_transmit = netmap_transmit;
@@ -154,6 +160,7 @@ nfe_netmap_reg(struct ifnet *ifp, int onoff)
 		/* return to non-netmap mode */
 		ifp->if_transmit = na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 		nfe_init_locked(sc);	/* also enable intr */
 	}
 	return (0);
@@ -164,10 +171,10 @@ nfe_netmap_reg(struct ifnet *ifp, int onoff)
  * Reconcile kernel and user view of the transmit ring.
  */
 static int
-nfe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
+nfe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct nfe_softc *sc = ifp->if_softc;
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
@@ -279,10 +286,10 @@ nfe_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
  * Reconcile kernel and user view of the receive ring.
  */
 static int
-nfe_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
+nfe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct nfe_softc *sc = ifp->if_softc;
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;

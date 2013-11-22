@@ -110,10 +110,10 @@ mlx4_tx_desc_dump(struct mlx4_en_tx_desc *tx_desc)
  * Only called on the first register or the last unregister.
  */
 static int
-mlx4_netmap_reg(struct ifnet *ifp, int onoff)
+mlx4_netmap_reg(struct netmap_adapter *na, int onoff)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *priv = netdev_priv(ifp);
-	struct netmap_adapter *na = NA(ifp);
 	int error = 0, need_load = 0;
 	struct mlx4_en_dev *mdev = priv->mdev;
 
@@ -157,12 +157,14 @@ mlx4_netmap_reg(struct ifnet *ifp, int onoff)
 retry:
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 		/* save if_transmit and replace with our routine */
 		na->if_transmit = (void *)ifp->netdev_ops;
 		ifp->netdev_ops = na->nm_ndo_p;
 	} else { /* reset normal mode */
 		ifp->netdev_ops = (void *)na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 	}
 	if (need_load) {
 		D("loading %s", ifp->if_xname);
@@ -224,11 +226,11 @@ same for rx_cq and rx_ring.
 
  */
 static int
-mlx4_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
+mlx4_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *priv = netdev_priv(ifp);
 	struct mlx4_en_tx_ring *txr = &priv->tx_ring[ring_nr];
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k = ring->cur, n = 0, lim = kring->nkr_num_slots - 1;
@@ -445,11 +447,11 @@ mlx4_en_update_rx_prod_db() tells the NIC where it can go
  
  */
 static int
-mlx4_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
+mlx4_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *priv = netdev_priv(ifp);
 	struct mlx4_en_rx_ring *rxr = &priv->rx_ring[ring_nr];
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;
@@ -640,6 +642,10 @@ mlx4_netmap_tx_config(struct SOFTC_T *priv, int ring_nr)
 
 	ND(5, "priv %p ring_nr %d", priv, ring_nr);
 
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
+
 /*
  CONFIGURE TX RINGS IN NETMAP MODE
  little if anything to do
@@ -669,6 +675,10 @@ mlx4_netmap_rx_config(struct SOFTC_T *priv, int ring_nr)
         struct mlx4_en_rx_ring *rxr;
 	struct netmap_kring *kring;
         int i, j, possible_frags;
+
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
 
 	/*
 	 * on the receive ring, must set buf addresses into the slots.
@@ -717,11 +727,11 @@ mlx4_netmap_rx_config(struct SOFTC_T *priv, int ring_nr)
 }
 
 static int
-mlx4_netmap_config(struct net_device *dev,
+mlx4_netmap_config(struct netmap_adapter *na,
 	u_int *txr, u_int *txd, u_int *rxr, u_int *rxd)
 {
-	struct SOFTC_T *priv = netdev_priv(dev);
-	// struct netmap_adapter *na = NA(dev);
+        struct net_device *ifp = na->ifp;
+	struct SOFTC_T *priv = netdev_priv(ifp);
 
 	*txr = priv->tx_ring_num;
 	*txd = priv->tx_ring[0].size;

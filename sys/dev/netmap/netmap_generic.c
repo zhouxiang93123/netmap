@@ -116,7 +116,7 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257666 2013-11-05 01:06:22Z lui
 #include <linux/ethtool.h>      /* struct ethtool_ops, get_ringparam */
 #include <linux/hrtimer.h>
 
-#define RATE  /* Enables communication statistics. */
+//#define RATE  /* Enables communication statistics. */
 
 //#define REG_RESET
 
@@ -219,10 +219,11 @@ netmap_generic_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 enum hrtimer_restart
 generic_timer_handler(struct hrtimer *t)
 {
-    struct netmap_adapter *na = container_of(t, struct netmap_adapter, mit_timer);
+    struct netmap_generic_adapter *gna = container_of(t, struct netmap_generic_adapter, mit_timer);
+    struct netmap_adapter *na = (struct netmap_adapter *)gna;
     u_int work_done;
 
-    if (!na->mit_pending) {
+    if (!gna->mit_pending) {
         return HRTIMER_NORESTART;
     }
 
@@ -230,19 +231,20 @@ generic_timer_handler(struct hrtimer *t)
      * Reset the pending work flag, restart the timer and send
      * a notification.
      */
-    na->mit_pending = 0;
+    gna->mit_pending = 0;
     netmap_generic_irq(na->ifp, 0, &work_done);
     IFRATE(rate_ctx.new.rxirq++);
-    netmap_mitigation_restart(na);
+    netmap_mitigation_restart(gna);
 
     return HRTIMER_RESTART;
 }
 #endif /* linux */
 
 /* Enable/disable netmap mode for a generic network interface. */
-int generic_netmap_register(struct ifnet *ifp, int enable)
+int generic_netmap_register(struct netmap_adapter *na, int enable)
 {
-    struct netmap_adapter *na = NA(ifp);
+    struct ifnet *ifp = na->ifp;
+    struct netmap_generic_adapter *gna = (struct netmap_generic_adapter *)na;
     struct mbuf *m;
     int error;
     int i, r;
@@ -267,7 +269,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         }
 
         /* Init the mitigation timer. */
-        netmap_mitigation_init(na);
+        netmap_mitigation_init(gna);
 
 	/*
 	 * Preallocate packet buffers for the tx rings.
@@ -301,7 +303,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         ifp->if_capenable |= IFCAP_NETMAP;
 
         /* Make netmap control the packet steering. */
-        netmap_catch_packet_steering(na, 1);
+        netmap_catch_packet_steering(gna, 1);
 
         rtnl_unlock();
 
@@ -323,7 +325,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
         ifp->if_capenable &= ~IFCAP_NETMAP;
 
         /* Release packet steering control. */
-        netmap_catch_packet_steering(na, 0);
+        netmap_catch_packet_steering(gna, 0);
 
 	/* Do not intercept packets on the rx path. */
         netmap_catch_rx(na, 0);
@@ -336,7 +338,7 @@ int generic_netmap_register(struct ifnet *ifp, int enable)
             mbq_safe_destroy(&na->rx_rings[r].rx_queue);
         }
 
-        netmap_mitigation_cleanup(na);
+        netmap_mitigation_cleanup(gna);
 
         for (r=0; r<na->num_tx_rings; r++) {
             for (i=0; i<na->num_tx_desc; i++) {
@@ -400,7 +402,7 @@ generic_mbuf_destructor(struct mbuf *m)
     IFRATE(rate_ctx.new.txirq++);
 }
 
-/* Record completed transmissions and update hwavail/avail.
+/* Record completed transmissions and update hwavail.
  *
  * nr_ntc is the oldest tx buffer not yet completed
  * (same as nr_hwavail + nr_hwcur + 1),
@@ -437,7 +439,6 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
     }
     kring->nr_ntc = ntc;
     kring->nr_hwavail += n;
-    kring->ring->avail += n;
     ND("tx completed [%d] -> hwavail %d", n, kring->nr_hwavail);
 
     return n;
@@ -450,16 +451,16 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
  * a notification.
  */
 static inline u_int
-generic_tx_event_middle(struct netmap_kring *kring, u_int j)
+generic_tx_event_middle(struct netmap_kring *kring, u_int hwcur)
 {
     u_int n = kring->nkr_num_slots;
     u_int ntc = kring->nr_ntc;
     u_int e;
 
-    if (j >= ntc) {
-	e = (j + ntc) / 2;
+    if (hwcur >= ntc) {
+	e = (hwcur + ntc) / 2;
     } else { /* wrap around */
-	e = (j + n + ntc) / 2;
+	e = (hwcur + n + ntc) / 2;
 	if (e >= n) {
             e -= n;
         }
@@ -474,16 +475,21 @@ generic_tx_event_middle(struct netmap_kring *kring, u_int j)
 }
 
 /*
- * We have pending packets in the driver between nr_ntc and j.
+ * We have pending packets in the driver between nr_ntc and hwcur.
  * Schedule a notification approximately in the middle of the two.
  * There is a race but this is only called within txsync which does
  * a double check.
  */
 static void
-generic_set_tx_event(struct netmap_kring *kring, u_int j)
+generic_set_tx_event(struct netmap_kring *kring, u_int hwcur)
 {
     struct mbuf *m;
-    u_int e = generic_tx_event_middle(kring, j);
+    u_int e;
+
+    if (kring->nr_ntc == hwcur) {
+        return;
+    }
+    e = generic_tx_event_middle(kring, hwcur);
 
     m = kring->tx_pool[e];
     if (m == NULL) {
@@ -510,12 +516,13 @@ generic_set_tx_event(struct netmap_kring *kring, u_int j)
  * since it implements the TX flow control (and takes some locks).
  */
 static int
-generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
+generic_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
-    struct netmap_adapter *na = NA(ifp);
+    struct ifnet *ifp = na->ifp;
     struct netmap_kring *kring = &na->tx_rings[ring_nr];
     struct netmap_ring *ring = kring->ring;
-    u_int j, k, n = 0, lim = kring->nkr_num_slots - 1;
+    u_int j, k, num_slots = kring->nkr_num_slots;
+    int new, ntx;
 
     IFRATE(rate_ctx.new.txsync++);
 
@@ -524,12 +531,20 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 
     /* Take a copy of ring->cur now, and never read it again. */
     k = ring->cur;
-    if (unlikely(k > lim)) {
+    if (unlikely(k >= num_slots)) {
         return netmap_ring_reinit(kring);
     }
 
     rmb();
     j = kring->nr_hwcur;
+    /* The new slot added by the user: everything from hwcur to cur,
+       excluding reserved slots, if any. Reserved slots start from
+       hwcur. */
+    new = k - j - kring->nr_hwreserved;
+    if (new < 0) {
+        new += num_slots;
+    }
+    ntx = 0;
     if (j != k) {
         /* Process new packets to send: j is the current index in the netmap ring. */
         while (j != k) {
@@ -545,8 +560,12 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
             /* Tale a mbuf from the tx pool and copy in the user packet. */
             m = kring->tx_pool[j];
             if (unlikely(!m)) {
-                D("This should never happen");
-                return netmap_ring_reinit(kring);
+                RD(5, "This should never happen");
+                kring->tx_pool[j] = m = netmap_get_mbuf(GENERIC_BUF_SIZE);
+                if (unlikely(m == NULL)) {
+                    D("mbuf allocation failed");
+                    break;
+                }
             }
             /* XXX we should ask notifications when NS_REPORT is set,
              * or roughly every half frame. We can optimize this
@@ -557,7 +576,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
              */
             tx_ret = generic_xmit_frame(ifp, m, addr, len, ring_nr);
             if (unlikely(tx_ret)) {
-                RD(5, "start_xmit failed: err %d [%d,%d,%d,%d]", tx_ret, kring->nr_ntc, j, k, kring->nr_hwavail);
+                RD(5, "start_xmit failed: err %d [%u,%u,%u,%u]", tx_ret, kring->nr_ntc, j, k, kring->nr_hwavail);
                 /*
                  * No room for this mbuf in the device driver.
 		 * Request a notification FOR A PREVIOUS MBUF,
@@ -580,15 +599,28 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
                 }
             }
             slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
-            if (unlikely(j++ == lim))
+            if (unlikely(++j == num_slots))
                 j = 0;
-            n++;
+            ntx++;
         }
 
+        /* Update hwcur to the next slot to transmit. */
         kring->nr_hwcur = j;
-        kring->nr_hwavail -= n;
-        IFRATE(rate_ctx.new.txpkt += n);
-        if (!ring->avail) {
+
+        /* All the new slots become unavailable, even if they have not
+           been transmitted. We take into account non trasmitted slots
+           with hwreserved. */
+        kring->nr_hwavail -= new;
+
+        /* Recompute hwreserved. */
+        kring->nr_hwreserved = k - j;
+        if (kring->nr_hwreserved < 0) {
+            kring->nr_hwreserved += num_slots;
+        }
+
+        IFRATE(rate_ctx.new.txpkt += ntx);
+
+        if (!kring->nr_hwavail) {
             /* No more available slots? Set a notification event
              * on a netmap slot that will be cleaned in the future.
              * No doublecheck is performed, since txsync() will be
@@ -598,6 +630,10 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
         }
         ND("tx #%d, hwavail = %d", n, kring->nr_hwavail);
     }
+
+    /* Synchronize the user's view to the kernel view. */
+    ring->avail = kring->nr_hwavail;
+    ring->reserved = kring->nr_hwreserved;
 
     return 0;
 }
@@ -613,6 +649,7 @@ generic_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 void generic_rx_handler(struct ifnet *ifp, struct mbuf *m)
 {
     struct netmap_adapter *na = NA(ifp);
+    struct netmap_generic_adapter *gna = (struct netmap_generic_adapter *)na;
     u_int work_done;
     u_int rr = 0;
 
@@ -632,13 +669,13 @@ void generic_rx_handler(struct ifnet *ifp, struct mbuf *m)
 	/* same as send combining, filter notification if there is a
 	 * pending timer, otherwise pass it up and start a timer.
          */
-        if (likely(netmap_mitigation_active(na))) {
+        if (likely(netmap_mitigation_active(gna))) {
             /* Record that there is some pending work. */
-            na->mit_pending = 1;
+            gna->mit_pending = 1;
         } else {
             netmap_generic_irq(na->ifp, rr, &work_done);
             IFRATE(rate_ctx.new.rxirq++);
-            netmap_mitigation_start(na);
+            netmap_mitigation_start(gna);
         }
     }
 }
@@ -650,9 +687,8 @@ void generic_rx_handler(struct ifnet *ifp, struct mbuf *m)
  * Access must be protected because the rx handler is asynchronous,
  */
 static int
-generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
+generic_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
-    struct netmap_adapter *na = NA(ifp);
     struct netmap_kring *kring = &na->rx_rings[ring_nr];
     struct netmap_ring *ring = kring->ring;
     u_int j, n, lim = kring->nkr_num_slots - 1;
@@ -727,6 +763,24 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
     return 0;
 }
 
+static void
+generic_netmap_dtor(struct netmap_adapter *na)
+{
+    struct ifnet *ifp = na->ifp;
+    struct netmap_generic_adapter *gna = (struct netmap_generic_adapter*)na;
+    struct netmap_adapter *prev_na = gna->prev;
+
+    if (prev_na != NULL) {
+        D("Released generic NA %p", gna);
+	if_rele(na->ifp);
+        netmap_adapter_put(prev_na);
+    }
+    if (ifp != NULL) {
+        WNA(ifp) = prev_na;
+        D("Restored native NA %p", prev_na);
+        na->ifp = NULL;
+    }
+}
 
 /*
  * generic_netmap_attach() makes it possible to use netmap on
@@ -742,7 +796,8 @@ generic_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
 int
 generic_netmap_attach(struct ifnet *ifp)
 {
-    struct netmap_adapter na;
+    struct netmap_adapter *na;
+    struct netmap_generic_adapter *gna;
     int retval;
     u_int num_tx_desc, num_rx_desc;
 
@@ -751,17 +806,23 @@ generic_netmap_attach(struct ifnet *ifp)
     generic_find_num_desc(ifp, &num_tx_desc, &num_rx_desc);
     ND("Netmap ring size: TX = %d, RX = %d", num_tx_desc, num_rx_desc);
 
-    bzero(&na, sizeof(na));
-    na.ifp = ifp;
-    na.num_tx_desc = num_tx_desc;
-    na.num_rx_desc = num_rx_desc;
-    na.nm_register = &generic_netmap_register;
-    na.nm_txsync = &generic_netmap_txsync;
-    na.nm_rxsync = &generic_netmap_rxsync;
+    gna = malloc(sizeof(*gna), M_DEVBUF, M_NOWAIT | M_ZERO);
+    if (gna == NULL) {
+        D("no memory on attach, give up");
+        return ENOMEM;
+    }
+    na = (struct netmap_adapter *)gna;
+    na->ifp = ifp;
+    na->num_tx_desc = num_tx_desc;
+    na->num_rx_desc = num_rx_desc;
+    na->nm_register = &generic_netmap_register;
+    na->nm_txsync = &generic_netmap_txsync;
+    na->nm_rxsync = &generic_netmap_rxsync;
+    na->nm_dtor = &generic_netmap_dtor;
     /* when using generic, IFCAP_NETMAP is set so we force
      * NAF_SKIP_INTR to use the regular interrupt handler
      */
-    na.na_flags = NAF_SKIP_INTR;
+    na->na_flags = NAF_SKIP_INTR;
 
     ND("[GNA] num_tx_queues(%d), real_num_tx_queues(%d), len(%lu)",
 		ifp->num_tx_queues, ifp->real_num_tx_queues,
@@ -769,9 +830,12 @@ generic_netmap_attach(struct ifnet *ifp)
     ND("[GNA] num_rx_queues(%d), real_num_rx_queues(%d)",
 		ifp->num_rx_queues, ifp->real_num_rx_queues);
 
-    generic_find_num_queues(ifp, &na.num_tx_rings, &na.num_rx_rings);
+    generic_find_num_queues(ifp, &na->num_tx_rings, &na->num_rx_rings);
 
-    retval = netmap_attach(&na, na.num_rx_rings);
+    retval = netmap_attach_common(na, na->num_rx_rings);
+    if (retval) {
+        free(gna, M_DEVBUF);
+    }
 
     return retval;
 }

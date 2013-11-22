@@ -96,10 +96,10 @@ cxgbe_netmap_attach(struct port_info *pi)
  * only called on the first init or the last unregister.
  */
 static int
-cxgbe_netmap_reg(struct ifnet *ifp, int onoff)
+cxgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 {
+        struct ifnet *ifp = na->ifp;
 	struct adapter *adapter = ifp->if_softc;
-	struct netmap_adapter *na = NA(ifp);
 	int error = 0;
 
 	if (!na)
@@ -113,6 +113,7 @@ cxgbe_netmap_reg(struct ifnet *ifp, int onoff)
 
 	if (onoff) {
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 
 		/* save if_transmit to restore it later */
 		na->if_transmit = ifp->if_transmit;
@@ -128,6 +129,7 @@ fail:
 		/* restore if_transmit */
 		ifp->if_transmit = na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 		ixgbe_init_locked(adapter);	/* also enables intr */
 	}
 #endif
@@ -154,12 +156,12 @@ fail:
  * the ring afterwards.
  */
 static int
-cxgbe_netmap_txsync(void *a, u_int ring_nr, int flags)
+cxgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
 #if 0
-	struct adapter *adapter = a;
+        struct ifnet *ifp = na->ifp;
+	struct adapter *adapter = ifp;
 	struct tx_ring *txr = &adapter->tx_rings[ring_nr];
-	struct netmap_adapter *na = NA(adapter->ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	int j, k, n = 0, lim = kring->nkr_num_slots - 1;
@@ -276,10 +278,11 @@ cxgbe_netmap_txsync(void *a, u_int ring_nr, int flags)
  * issuing a dmamap_sync on all slots.
  */
 static int
-cxgbe_netmap_rxsync(void *a, u_int ring_nr, int flags)
+cxgbe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
 #if 0
-	struct adapter *adapter = a;
+        struct ifnet *ifp = na->ifp;
+	struct adapter *adapter = ifp;
 	struct rx_ring *rxr = &adapter->rx_rings[ring_nr];
 	struct netmap_adapter *na = NA(adapter->ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
