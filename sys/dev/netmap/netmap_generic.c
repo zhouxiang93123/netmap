@@ -547,8 +547,12 @@ generic_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
             /* Tale a mbuf from the tx pool and copy in the user packet. */
             m = kring->tx_pool[j];
             if (unlikely(!m)) {
-                D("This should never happen");
-                return netmap_ring_reinit(kring);
+                RD(5, "This should never happen");
+                kring->tx_pool[j] = m = netmap_get_mbuf(GENERIC_BUF_SIZE);
+                if (unlikely(m == NULL)) {
+                    D("mbuf allocation failed");
+                    break;
+                }
             }
             /* XXX we should ask notifications when NS_REPORT is set,
              * or roughly every half frame. We can optimize this
