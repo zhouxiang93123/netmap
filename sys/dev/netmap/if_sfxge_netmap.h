@@ -439,7 +439,8 @@ sfxge_netmap_attach(struct sfxge_softc *sc)
 	na.nm_rxsync = sfxge_netmap_rxsync;
 	na.nm_register = sfxge_netmap_reg;
 	na.num_tx_rings = SFXGE_TXQ_NTYPES + SFXGE_RX_SCALE_MAX;
-	netmap_attach(&na, SFXGE_RX_SCALE_MAX);
+	na.num_rx_rings = SFXGE_RX_SCALE_MAX;
+	netmap_attach(&na);
 }	
 
 /* end of file */

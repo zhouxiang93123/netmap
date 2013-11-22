@@ -544,6 +544,8 @@ ixgbe_netmap_attach(struct SOFTC_T *adapter)
 	na.nm_txsync = ixgbe_netmap_txsync;
 	na.nm_rxsync = ixgbe_netmap_rxsync;
 	na.nm_register = ixgbe_netmap_reg;
-	netmap_attach(&na, adapter->num_tx_queues);
+	na.num_tx_rings = adapter->num_tx_queues;
+	na.num_rx_rings = adapter->num_rx_queues;
+	netmap_attach(&na);
 }
 /* end of file */

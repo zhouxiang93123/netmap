@@ -766,7 +766,7 @@ mlx4_netmap_attach(struct SOFTC_T *priv)
 {
 	struct netmap_adapter na;
 	struct net_device *dev = priv->dev;
-	int rxq, txq, nq;
+	int rxq, txq;
 
 	bzero(&na, sizeof(na));
 
@@ -774,25 +774,21 @@ mlx4_netmap_attach(struct SOFTC_T *priv)
 	rxq = priv->rx_ring_num;
 	txq = priv->tx_ring_num;
 	/* this card has 1k tx queues, so better limit the number */
-	nq = rxq;
-	if (rxq < nq)
-		nq = rxq;
-	if (txq < nq)
-		nq = txq;
-
-	D("hw configured for %d/%d tx/rx rings, use %d", txq, rxq, nq);
+	if (rxq > 16)
+		rxq = 16;
+	if (txq > rxq)
+		txq = rxq;
 	if (txq < 1 && rxq < 1)
 		txq = rxq = 1;
-	/* this card has separate rx/tx locks */
+	na.num_tx_rings = txq;
+	na.num_rx_rings = rxq;
 	na.num_tx_desc = priv->tx_ring[0].size;
 	na.num_rx_desc = priv->rx_ring[0].size;
 	na.nm_txsync = mlx4_netmap_txsync;
 	na.nm_rxsync = mlx4_netmap_rxsync;
 	na.nm_register = mlx4_netmap_reg;
 	na.nm_config = mlx4_netmap_config;
-	netmap_attach(&na, nq);
-	D("%d queues, tx: %d rx %d slots", na.num_rx_rings,
-			na.num_tx_desc, na.num_rx_desc);
+	netmap_attach(&na);
 }
-#endif /* NETMAP_BNX2X_MAIN */
+#endif /* NETMAP_MLX4_MAIN */
 /* end of file */

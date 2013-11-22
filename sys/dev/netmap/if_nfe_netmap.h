@@ -418,6 +418,7 @@ nfe_netmap_attach(struct nfe_softc *sc)
 	na.nm_txsync = nfe_netmap_txsync;
 	na.nm_rxsync = nfe_netmap_rxsync;
 	na.nm_register = nfe_netmap_reg;
+	na.num_tx_rings = na.num_rx_rings = 1;
 	netmap_attach(&na, 1);
 }
 

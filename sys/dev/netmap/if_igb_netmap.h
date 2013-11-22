@@ -316,6 +316,7 @@ igb_netmap_attach(struct adapter *adapter)
 	na.nm_txsync = igb_netmap_txsync;
 	na.nm_rxsync = igb_netmap_rxsync;
 	na.nm_register = igb_netmap_reg;
-	netmap_attach(&na, adapter->num_queues);
+	na.num_tx_rings = na.num_rx_rings = adapter->num_queues;
+	netmap_attach(&na);
 }	
 /* end of file */

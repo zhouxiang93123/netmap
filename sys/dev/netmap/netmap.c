@@ -2652,22 +2652,25 @@ netmap_notify(struct netmap_adapter *na, u_int n_ring, enum txrx tx, int flags)
 }
 
 
+// XXX check handling of failures
 int
-netmap_attach_common(struct netmap_adapter *na, u_int num_queues)
+netmap_attach_common(struct netmap_adapter *na)
 {
 	struct ifnet *ifp = na->ifp;
 
+	if (na->num_tx_rings == 0 || na->num_rx_rings == 0) {
+		D("%s: invalid rings tx %d rx %d",
+			ifp->if_xname, na->num_tx_rings, na->num_rx_rings);
+		return EINVAL;
+	}
 	WNA(ifp) = na;
 	NETMAP_SET_CAPABLE(ifp);
 	if (na->nm_krings_create == NULL) {
 		na->nm_krings_create = netmap_hw_krings_create;
 		na->nm_krings_delete = netmap_krings_delete;
 	}
-	if (na->num_tx_rings == 0)
-		na->num_tx_rings = num_queues;
 	if (na->nm_notify == NULL)
 		na->nm_notify = netmap_notify;
-	na->num_rx_rings = num_queues;
 	na->refcount = na->na_single = na->na_multi = 0;
 	/* Core lock initialized here, others after netmap_if_new. */
 	mtx_init(&na->core_lock, "netmap core lock", MTX_NETWORK_LOCK, MTX_DEF);
@@ -2710,9 +2713,10 @@ netmap_detach_common(struct netmap_adapter *na)
  * setups.
  */
 int
-netmap_attach(struct netmap_adapter *arg, u_int num_queues)
+netmap_attach(struct netmap_adapter *arg)
 {
 	struct netmap_hw_adapter *hwna = NULL;
+	// XXX when is arg == NULL ?
 	struct ifnet *ifp = arg ? arg->ifp : NULL;
 
 	if (arg == NULL || ifp == NULL)
@@ -2721,8 +2725,10 @@ netmap_attach(struct netmap_adapter *arg, u_int num_queues)
 	if (hwna == NULL)
 		goto fail;
 	hwna->up = *arg;
-	if (netmap_attach_common(&hwna->up, num_queues))
+	if (netmap_attach_common(&hwna->up)) {
+		free(hwna, M_DEVBUF);
 		goto fail;
+	}
 	netmap_adapter_get(&hwna->up);
 #ifdef linux
 	if (ifp->netdev_ops) {
@@ -3693,7 +3699,7 @@ bdg_netmap_attach(struct netmap_adapter *arg)
 	na->nm_mem = netmap_mem_private_new(NM_IFPNAME(arg->ifp),
 			na->num_tx_rings, na->num_tx_desc,
 			na->num_rx_rings, na->num_rx_desc);
-	error = netmap_attach_common(na, na->num_tx_rings);
+	error = netmap_attach_common(na);
 	if (error) {
 		free(vpna, M_DEVBUF);
 		return error;
@@ -3840,6 +3846,7 @@ netmap_bwrap_config(struct netmap_adapter *na, u_int *txr, u_int *txd,
 	struct netmap_adapter *hwna = bna->hwna;
 
 	netmap_update_config(hwna);
+	// XXX note they are swapped - is this correct ?
 	*txr = hwna->num_rx_rings;
 	*txd = hwna->num_rx_desc;
 	*rxr = hwna->num_tx_rings;
@@ -3960,6 +3967,7 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 
 	na = &bna->up.up;
 	na->ifp = fake;
+	// XXX note they are swapped
 	na->num_rx_rings = hwna->num_tx_rings;
 	na->num_tx_rings = hwna->num_rx_rings;
 	na->num_tx_desc = hwna->num_rx_desc;
@@ -3995,7 +4003,7 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 		na->num_tx_rings, na->num_tx_desc,
 		na->num_rx_rings, na->num_rx_desc);
 	
-	error = netmap_attach_common(na, na->num_tx_rings);
+	error = netmap_attach_common(na);
 	if (error) {
 		free(bna, M_DEVBUF);
 		return error;

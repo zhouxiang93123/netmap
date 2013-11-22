@@ -832,7 +832,7 @@ generic_netmap_attach(struct ifnet *ifp)
 
     generic_find_num_queues(ifp, &na->num_tx_rings, &na->num_rx_rings);
 
-    retval = netmap_attach_common(na, na->num_rx_rings);
+    retval = netmap_attach_common(na);
     if (retval) {
         free(gna, M_DEVBUF);
     }

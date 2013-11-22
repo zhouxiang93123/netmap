@@ -377,6 +377,7 @@ e1000_netmap_attach(struct SOFTC_T *adapter)
 	na.nm_register = e1000_netmap_reg;
 	na.nm_txsync = e1000_netmap_txsync;
 	na.nm_rxsync = e1000_netmap_rxsync;
-	netmap_attach(&na, 1);
+	na.num_tx_rings = na.num_rx_rings = 1;
+	netmap_attach(&na);
 }
 /* end of file */

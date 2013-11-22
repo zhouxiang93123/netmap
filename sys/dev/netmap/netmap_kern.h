@@ -545,8 +545,8 @@ nm_kr_lease(struct netmap_kring *k, u_int n, int is_rx)
  * netmap_reset() is a helper routine to be called in the driver
  *	when reinitializing a ring.
  */
-int netmap_attach(struct netmap_adapter *, u_int);
-int netmap_attach_common(struct netmap_adapter *, u_int);
+int netmap_attach(struct netmap_adapter *);
+int netmap_attach_common(struct netmap_adapter *);
 void netmap_detach_common(struct netmap_adapter *na);
 void netmap_detach(struct ifnet *);
 int netmap_transmit(struct ifnet *, struct mbuf *);

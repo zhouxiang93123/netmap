@@ -337,7 +337,8 @@ lem_netmap_attach(struct adapter *adapter)
 	na.nm_txsync = lem_netmap_txsync;
 	na.nm_rxsync = lem_netmap_rxsync;
 	na.nm_register = lem_netmap_reg;
-	netmap_attach(&na, 1);
+	na.num_tx_rings = na.num_rx_rings = 1;
+	netmap_attach(&na);
 }
 
 /* end of file */

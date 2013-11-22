@@ -86,8 +86,9 @@ cxgbe_netmap_attach(struct port_info *pi)
 	 * we allocate the buffers on the first register. So we must
 	 * disallow a SIOCSETMTU when if_capenable & IFCAP_NETMAP is set.
 	 */
+	na.num_tx_rings = na->num_rx_rings = pi->ntxq;
 	na.buff_size = NETMAP_BUF_SIZE;
-	netmap_attach(&na, pi->ntxq);
+	netmap_attach(&na);
 }	
 
 

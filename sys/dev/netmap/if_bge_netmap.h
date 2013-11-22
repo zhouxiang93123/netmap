@@ -395,6 +395,7 @@ bge_netmap_attach(struct bge_softc *sc)
 	na.nm_txsync = bge_netmap_txsync;
 	na.nm_rxsync = bge_netmap_rxsync;
 	na.nm_register = bge_netmap_reg;
-	netmap_attach(&na, 1);
+	na.num_tx_rings = na.num_rx_rings = 1;
+	netmap_attach(&na);
 }
 /* end of file */

@@ -679,7 +679,8 @@ bnx2x_netmap_attach(struct SOFTC_T *adapter)
 	 * but we still cosider it. If FCOE is supported, the last hw
 	 * queue is used for it.
  	 */
-	netmap_attach(&na, BNX2X_NUM_ETH_QUEUES(adapter));
+	na.num_tx_rings = na.num_rx_rings = BNX2X_NUM_ETH_QUEUES(adapter);
+	netmap_attach(&na);
 	D("%d queues, tx: %d rx %d slots", na.num_rx_rings,
 			na.num_tx_desc, na.num_rx_desc);
 }

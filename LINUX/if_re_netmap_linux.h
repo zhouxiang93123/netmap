@@ -338,6 +338,7 @@ re_netmap_attach(struct SOFTC_T *sc)
 	na.nm_txsync = re_netmap_txsync;
 	na.nm_rxsync = re_netmap_rxsync;
 	na.nm_register = re_netmap_reg;
-	netmap_attach(&na, 1);
+	na.num_tx_rings = na.num_rx_rings = 1;
+	netmap_attach(&na);
 }
 /* end of file */

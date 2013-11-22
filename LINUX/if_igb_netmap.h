@@ -406,8 +406,7 @@ igb_netmap_attach(struct SOFTC_T *adapter)
 	na.nm_txsync = igb_netmap_txsync;
 	na.nm_rxsync = igb_netmap_rxsync;
 	na.num_tx_rings = adapter->num_tx_queues;
-	D("using %d TX and %d RX queues",
-		adapter->num_tx_queues, adapter->num_rx_queues);
-	netmap_attach(&na, adapter->num_rx_queues);
+	na.num_rx_rings = adapter->num_rx_queues;
+	netmap_attach(&na);
 }
 /* end of file */
