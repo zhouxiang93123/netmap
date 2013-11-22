@@ -116,7 +116,7 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257666 2013-11-05 01:06:22Z lui
 #include <linux/ethtool.h>      /* struct ethtool_ops, get_ringparam */
 #include <linux/hrtimer.h>
 
-#define RATE  /* Enables communication statistics. */
+//#define RATE  /* Enables communication statistics. */
 
 //#define REG_RESET
 
@@ -533,8 +533,9 @@ generic_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 
     rmb();
     j = kring->nr_hwcur;
-    /* New slot to transmit: everything from hwcur to cur, excluded reserved
-       slots, if any. Reserved slots start from hwcur. */
+    /* The new slot added by the user: everything from hwcur to cur,
+       excluding reserved slots, if any. Reserved slots start from
+       hwcur. */
     new = k - j - kring->nr_hwreserved;
     if (new < 0) {
         new += num_slots;
@@ -602,17 +603,16 @@ generic_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
         /* Update hwcur to the next slot to transmit. */
         kring->nr_hwcur = j;
 
-        /* Here we split 'new' between hwreserved and hwavail, with hwreserved
-           having greater priority. */
-        kring->nr_hwreserved -= new;
-        if (kring->nr_hwreserved < 0) {
-            kring->nr_hwavail += kring->nr_hwreserved;
-            kring->nr_hwreserved = 0;
-        }
+        /* All the new slots become unavailable, even if they have not
+           been transmitted. We take into account non trasmitted slots
+           with hwreserved. */
+        kring->nr_hwavail -= new;
 
-        /* Increment hwreserved by the number of new slots that we didn't
-           manage to transmit. */
-        kring->nr_hwreserved += (new - ntx);
+        /* Recompute hwreserved. */
+        kring->nr_hwreserved = k - j;
+        if (kring->nr_hwreserved < 0) {
+            kring->nr_hwreserved += num_slots;
+        }
 
         /* Synchronize the user's view to the kernel view. */
         ring->avail = kring->nr_hwavail;
