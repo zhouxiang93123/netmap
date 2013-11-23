@@ -71,7 +71,7 @@ netmap_catch_rx(struct netmap_adapter *na, int intercept)
             return EINVAL; /* already set */
         }
         gna->save_if_input = ifp->if_input;
-        // ifp->if_input = generic_rx_handler; XXX tmp commented out
+        ifp->if_input = generic_rx_handler;
     } else {
         if (!gna->save_if_input){
             D("cannot restore");
@@ -155,7 +155,7 @@ generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq)
 
 void netmap_mitigation_init(struct netmap_generic_adapter *na)
 {
-    D("called");
+    ND("called");
     na->mit_pending = 0;
 }
 
@@ -163,23 +163,23 @@ extern unsigned int netmap_generic_mit;
 
 void netmap_mitigation_start(struct netmap_generic_adapter *na)
 {
-    D("called");
+    ND("called");
 }
 
 void netmap_mitigation_restart(struct netmap_generic_adapter *na)
 {
-    D("called");
+    ND("called");
 }
 
 int netmap_mitigation_active(struct netmap_generic_adapter *na)
 {
-    D("called");
+    ND("called");
     return 0;
 }
 
 void netmap_mitigation_cleanup(struct netmap_generic_adapter *na)
 {
-    D("called");
+    ND("called");
 }
 
 
