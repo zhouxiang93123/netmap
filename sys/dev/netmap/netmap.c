@@ -3989,6 +3989,7 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 	
 	error = netmap_attach_common(na);
 	if (error) {
+		netmap_adapter_put(hwna);
 		free(bna, M_DEVBUF);
 		return error;
 	}
