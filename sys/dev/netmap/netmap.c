@@ -1058,26 +1058,6 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 }
 
 
-/* we assume netmap adapter exists
- * Called with NMG_LOCK held
- */
-static void
-nm_if_rele(struct ifnet *ifp)
-{
-	NMG_LOCK_ASSERT();
-
-#if 0	// XXX ?
-	/* I can be called not only for get_ifp()-ed references where netmap's
-	 * capability is guaranteed, but also for non-netmap-capable NICs.
-	 */
-	if (!NETMAP_CAPABLE(ifp)) {
-		if_rele(ifp);
-		return;
-	}
-	netmap_adapter_put(NA(ifp));
-#endif
-}
-
 static void
 netmap_bdg_detach_common(struct nm_bridge *b, int hw, int sw)
 {
@@ -1924,7 +1904,7 @@ nm_bdg_attach(struct nmreq *nmr)
 	return 0;
 
 unref_exit:
-	nm_if_rele(na->ifp);
+	netmap_adapter_put(na);
 unlock_exit:
 	NMG_UNLOCK();
 	bzero(npriv, sizeof(*npriv));
