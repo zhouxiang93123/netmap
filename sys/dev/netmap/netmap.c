@@ -269,6 +269,7 @@ int netmap_mmap_unreg = 0; /* allow mmap of unregistered fds */
 #define NETMAP_ADMODE_BEST          0  /* Priority to native netmap adapter. */
 int netmap_admode = NETMAP_ADMODE_BEST;  /* Choose the netmap adapter to use. */
 int netmap_generic_mit = 100*1000;   /* Generic mitigation interval in nanoseconds. */
+int netmap_generic_ringsize = 1024;   /* Generic ringsize. */
 
 SYSCTL_INT(_dev_netmap, OID_AUTO, drop, CTLFLAG_RW, &netmap_drop, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, flags, CTLFLAG_RW, &netmap_flags, 0 , "");
@@ -276,6 +277,7 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, fwd, CTLFLAG_RW, &netmap_fwd, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, mmap_unreg, CTLFLAG_RW, &netmap_mmap_unreg, 0, "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, admode, CTLFLAG_RW, &netmap_admode, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, generic_mit, CTLFLAG_RW, &netmap_generic_mit, 0 , "");
+SYSCTL_INT(_dev_netmap, OID_AUTO, generic_ringsize, CTLFLAG_RW, &netmap_generic_ringsize, 0 , "");
 
 NMG_LOCK_T	netmap_global_lock;
 

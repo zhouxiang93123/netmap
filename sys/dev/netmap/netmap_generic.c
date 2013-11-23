@@ -131,6 +131,7 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257666 2013-11-05 01:06:22Z lui
 
 /* ================== STUFF DEFINED in netmap.c =================== */
 extern int netmap_generic_mit;
+extern int netmap_generic_ringsize;
 
 
 /* ======================== usage stats =========================== */
@@ -390,7 +391,8 @@ free_mbufs:
 static void
 generic_mbuf_destructor(struct mbuf *m)
 {
-    ND("Tx irq (%p) queue %d", m, MBUF_TXQ(m));
+    if (netmap_verbose)
+	    D("Tx irq (%p) queue %d", m, MBUF_TXQ(m));
     netmap_generic_irq(MBUF_IFP(m), MBUF_TXQ(m), NULL);
 #ifdef __FreeBSD__
     m->m_ext.ext_type = EXT_PACKET;
@@ -801,7 +803,7 @@ generic_netmap_attach(struct ifnet *ifp)
     int retval;
     u_int num_tx_desc, num_rx_desc;
 
-    num_tx_desc = num_rx_desc = 256; /* starting point */
+    num_tx_desc = num_rx_desc = netmap_generic_ringsize; /* starting point */
 
     generic_find_num_desc(ifp, &num_tx_desc, &num_rx_desc);
     ND("Netmap ring size: TX = %d, RX = %d", num_tx_desc, num_rx_desc);
