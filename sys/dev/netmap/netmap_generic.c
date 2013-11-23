@@ -24,7 +24,7 @@
  */
 
 /*
- * This module implemnts netmap support on top of standard,
+ * This module implements netmap support on top of standard,
  * unmodified device drivers.
  *
  * A NIOCREGIF request is handled here if the device does not
@@ -39,7 +39,7 @@
  *	so we use it as an interrupt notification to wake up
  *	processes blocked on a poll().
  *
- *	For each receive rings, we allocate one "struct mbq"
+ *	For each receive ring we allocate one "struct mbq"
  *	(an mbuf tailq plus a spinlock). We intercept packets
  *	(through if_input)
  *	on the receive path and put them in the mbq from which
@@ -48,12 +48,13 @@
  * TX:
  *	in the generic_txsync() routine, netmap buffers are copied
  *	(or linked, in a future) to the preallocated mbufs
- *	and pushed to the transmit queue. A few of these mbufs
+ *	and pushed to the transmit queue. Some of these mbufs
  *	(those with NS_REPORT, or otherwise every half ring)
  *	have the refcount=1, others have refcount=2.
  *	When the destructor is invoked, we take that as
  *	a notification that all mbufs up to that one in
- *	the specific ring have been completed.
+ *	the specific ring have been completed, and generate
+ *	the equivalent of a transmit interrupt.
  *
  * RX:
  *
@@ -524,11 +525,12 @@ generic_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
     struct netmap_kring *kring = &na->tx_rings[ring_nr];
     struct netmap_ring *ring = kring->ring;
     u_int j, k, num_slots = kring->nkr_num_slots;
-    int new, ntx;
+    int new_slots, ntx;
 
     IFRATE(rate_ctx.new.txsync++);
 
     // TODO: handle the case of mbuf allocation failure
+    /* first, reclaim completed buffers */
     generic_netmap_tx_clean(kring);
 
     /* Take a copy of ring->cur now, and never read it again. */
@@ -539,16 +541,20 @@ generic_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 
     rmb();
     j = kring->nr_hwcur;
-    /* The new slot added by the user: everything from hwcur to cur,
-       excluding reserved slots, if any. Reserved slots start from
-       hwcur. */
-    new = k - j - kring->nr_hwreserved;
-    if (new < 0) {
-        new += num_slots;
+    /*
+    * 'new_slots' counts how many new slots have been added:
+     * everything from hwcur to cur, excluding reserved ones, if any.
+     * Reserved slots start from hwcur. XXX used for what ?
+     */
+    new_slots = k - j - kring->nr_hwreserved;
+    if (new_slots < 0) {
+        new_slots += num_slots;
     }
     ntx = 0;
     if (j != k) {
-        /* Process new packets to send: j is the current index in the netmap ring. */
+        /* Process new packets to send:
+	 * j is the current index in the netmap ring.
+	 */
         while (j != k) {
             struct netmap_slot *slot = &ring->slot[j]; /* Current slot in the netmap ring */
             void *addr = NMB(slot);
@@ -578,7 +584,8 @@ generic_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
              */
             tx_ret = generic_xmit_frame(ifp, m, addr, len, ring_nr);
             if (unlikely(tx_ret)) {
-                RD(5, "start_xmit failed: err %d [%u,%u,%u,%u]", tx_ret, kring->nr_ntc, j, k, kring->nr_hwavail);
+                RD(5, "start_xmit failed: err %d [%u,%u,%u,%u]",
+			tx_ret, kring->nr_ntc, j, k, kring->nr_hwavail);
                 /*
                  * No room for this mbuf in the device driver.
 		 * Request a notification FOR A PREVIOUS MBUF,
@@ -609,12 +616,12 @@ generic_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
         /* Update hwcur to the next slot to transmit. */
         kring->nr_hwcur = j;
 
-        /* All the new slots become unavailable, even if they have not
-           been transmitted. We take into account non trasmitted slots
-           with hwreserved. */
-        kring->nr_hwavail -= new;
-
-        /* Recompute hwreserved. */
+        /*
+	 * Report all new slots as unavailable, even those not sent.
+         * We account for them with with hwreserved, so that
+	 * nr_hwreserved =:= cur - nr_hwcur
+	 */
+        kring->nr_hwavail -= new_slots;
         kring->nr_hwreserved = k - j;
         if (kring->nr_hwreserved < 0) {
             kring->nr_hwreserved += num_slots;
@@ -653,7 +660,7 @@ void generic_rx_handler(struct ifnet *ifp, struct mbuf *m)
     struct netmap_adapter *na = NA(ifp);
     struct netmap_generic_adapter *gna = (struct netmap_generic_adapter *)na;
     u_int work_done;
-    u_int rr = 0;
+    u_int rr = 0; // receive ring number
 
     ND("called");
     /* limit the size of the queue */
@@ -706,8 +713,10 @@ generic_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
         struct mbuf *m;
 
         n = 0;
-        j = kring->nr_ntc;
-        /* The k index in the netmap ring prevents ntc from bumping into hwcur. */
+        j = kring->nr_ntc; /* first empty slot in the receive ring */
+        /* extract buffers from the rx queue, stop at most one
+	 * slot before nr_hwcur (index k)
+	 */
         k = (kring->nr_hwcur) ? kring->nr_hwcur-1 : lim;
         while (j != k) {
 	    int len;
@@ -716,6 +725,11 @@ generic_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
             if (addr == netmap_buffer_base) { /* Bad buffer */
                 return netmap_ring_reinit(kring);
             }
+	    /*
+	     * Call the locked version of the function.
+	     *  XXX Ideally we could grab a batch of mbufs at once,
+	     * by changing rx_queue into a ring.
+	     */
             m = mbq_safe_dequeue(&kring->rx_queue);
             if (!m)
                 break;
@@ -736,6 +750,7 @@ generic_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
         kring->nr_kflags &= ~NKR_PENDINTR;
     }
 
+    // XXX should we invert the order ?
     /* Skip past packets that userspace has released */
     j = kring->nr_hwcur;
     k = ring->cur;

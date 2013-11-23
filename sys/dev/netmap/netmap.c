@@ -3152,6 +3152,7 @@ netmap_common_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 int
 netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 {
+	// XXX could we check NAF_NATIVE_ON ?
 	if (!(ifp->if_capenable & IFCAP_NETMAP))
 		return 0;
 
