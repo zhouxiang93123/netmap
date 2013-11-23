@@ -154,6 +154,9 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z gle
 
 #define prefetch(x)	__builtin_prefetch(x)
 
+/* reduce conditional code */
+#define init_waitqueue_head(x)	// only needed in linux
+
 /* XXX is this already defined somewhere? */
 #define nm_swap(a, b)			\
 	do {				\
@@ -865,9 +868,7 @@ netmap_krings_create(struct netmap_adapter *na, u_int ntx, u_int nrx, u_int tail
 		 */
 		kring->nr_hwavail = ndesc - 1;
 		mtx_init(&kring->q_lock, "nm_txq_lock", NULL, MTX_DEF);
-#ifdef linux
 		init_waitqueue_head(&kring->si);
-#endif
 	}
 
 	ndesc = na->num_rx_desc;
@@ -877,14 +878,10 @@ netmap_krings_create(struct netmap_adapter *na, u_int ntx, u_int nrx, u_int tail
 		kring->na = na;
 		kring->nkr_num_slots = ndesc;
 		mtx_init(&kring->q_lock, "nm_rxq_lock", NULL, MTX_DEF);
-#ifdef linux
 		init_waitqueue_head(&kring->si);
-#endif
 	}
-#ifdef linux
 	init_waitqueue_head(&na->tx_si);
 	init_waitqueue_head(&na->rx_si);
-#endif
 
 	na->tailroom = na->rx_rings + nrx;
 
@@ -1069,7 +1066,7 @@ nm_if_rele(struct ifnet *ifp)
 {
 	NMG_LOCK_ASSERT();
 
-#if 0
+#if 0	// XXX ?
 	/* I can be called not only for get_ifp()-ed references where netmap's
 	 * capability is guaranteed, but also for non-netmap-capable NICs.
 	 */
@@ -2732,6 +2729,7 @@ netmap_attach(struct netmap_adapter *arg)
 		goto fail;
 	}
 	netmap_adapter_get(&hwna->up);
+
 #ifdef linux
 	if (ifp->netdev_ops) {
             /* prepare a clone of the netdev ops */
@@ -2743,6 +2741,7 @@ netmap_attach(struct netmap_adapter *arg)
 	}
 	hwna->nm_ndo.ndo_start_xmit = linux_netmap_start_xmit;
 #endif /* linux */
+
 	D("success for %s", NM_IFPNAME(ifp));
 	return 0;
 

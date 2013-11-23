@@ -361,11 +361,12 @@ struct netmap_adapter {
 #define NAF_FORCE_READ    1
 #define NAF_FORCE_RECLAIM 2
 	/* return configuration information */
-	int (*nm_config)(struct netmap_adapter *, u_int *txr, u_int *txd,
-					u_int *rxr, u_int *rxd);
+	int (*nm_config)(struct netmap_adapter *,
+		u_int *txr, u_int *txd, u_int *rxr, u_int *rxd);
 	int (*nm_krings_create)(struct netmap_adapter *);
 	void (*nm_krings_delete)(struct netmap_adapter *);
-	int (*nm_notify)(struct netmap_adapter *, u_int ring, enum txrx, int flags);
+	int (*nm_notify)(struct netmap_adapter *,
+		u_int ring, enum txrx, int flags);
 #define NAF_GLOBAL_NOTIFY 4
 
 	/* standard refcount to control the lifetime of the adapter
@@ -429,7 +430,8 @@ struct netmap_bwrap_adapter {	/* hw bound to a bridge ? */
 	struct netmap_adapter *hwna;
 
 	/* backup of the hwna notify callback */
-	int (*save_notify)(struct netmap_adapter *, u_int ring, enum txrx, int flags);
+	int (*save_notify)(struct netmap_adapter *,
+			u_int ring, enum txrx, int flags);
 	/* When we attach a physical interface to the bridge, we
 	 * allow the controlling process to terminate, so we need
 	 * a place to store the netmap_priv_d data structure.
@@ -563,19 +565,22 @@ u_int nm_bound_var(u_int *v, u_int dflt, u_int lo, u_int hi, const char *msg);
  * NM_BDG_MAXPORTS for broadcast, NM_BDG_MAXPORTS+1 for unknown.
  * XXX in practice "unknown" might be handled same as broadcast.
  */
-typedef u_int (*bdg_lookup_fn_t)(char *buf, u_int len, uint8_t *ring_nr,
-		struct netmap_vp_adapter *);
+typedef u_int (*bdg_lookup_fn_t)(char *buf, u_int len,
+		uint8_t *ring_nr, struct netmap_vp_adapter *);
 int netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func);
-u_int netmap_bdg_learning(char *, u_int, uint8_t *, struct netmap_vp_adapter *);
-#define	NM_NAME			"vale"	/* prefix for the bridge port name */
-#define	NM_BDG_MAXPORTS		254	/* up to 32 for bitmap, 254 ok otherwise */
+u_int netmap_bdg_learning(char *, u_int, uint8_t *,
+		struct netmap_vp_adapter *);
+
+#define	NM_NAME			"vale"	/* prefix for bridge port name */
+#define	NM_BDG_MAXPORTS		254	/* up to 254 */
 #define	NM_BDG_BROADCAST	NM_BDG_MAXPORTS
 #define	NM_BDG_NOPORT		(NM_BDG_MAXPORTS+1)
 
 /* Various prototypes */
 int netmap_poll(struct cdev *dev, int events, struct thread *td);
+
 int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m, void *addr, u_int len, u_int ring_nr);
-int generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx);
+int generic_find_num_desc(struct ifnet *ifp, u_int *tx, u_int *rx);
 void generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq);
 int netmap_init(void);
 void netmap_fini(void);
@@ -589,27 +594,36 @@ void netmap_catch_packet_steering(struct netmap_generic_adapter *na, int enable)
 /* netmap_adapter creation/destruction */
 #define NM_IFPNAME(ifp) ((ifp) ? (ifp)->if_xname : "zombie")
 #define NM_DEBUG_PUTGET 1
+
 #ifdef NM_DEBUG_PUTGET
+
 #define NM_DBG(f) __##f
+
 void __netmap_adapter_get(struct netmap_adapter *na);
-#define netmap_adapter_get(na) 							\
-	do {									\
-		struct netmap_adapter *__na = na;				\
+
+#define netmap_adapter_get(na) 				\
+	do {						\
+		struct netmap_adapter *__na = na;	\
 		D("getting %p:%s (%d)", __na, NM_IFPNAME(__na->ifp), __na->na_refcount);	\
-		__netmap_adapter_get(__na);					\
+		__netmap_adapter_get(__na);		\
 	} while (0)
+
 int __netmap_adapter_put(struct netmap_adapter *na);
-#define netmap_adapter_put(na)							\
-	do {									\
-		struct netmap_adapter *__na = na;				\
+
+#define netmap_adapter_put(na)				\
+	do {						\
+		struct netmap_adapter *__na = na;	\
 		D("putting %p:%s (%d)", __na, NM_IFPNAME(__na->ifp), __na->na_refcount);	\
-		__netmap_adapter_put(__na);					\
+		__netmap_adapter_put(__na);		\
 	} while (0)
-#else
+
+#else /* !NM_DEBUG_PUTGET */
+
 #define NM_DBG(f) f
 void netmap_adapter_get(struct netmap_adapter *na);
 int netmap_adapter_put(struct netmap_adapter *na);
-#endif
+
+#endif /* !NM_DEBUG_PUTGET */
 
 
 /* netmap_mitigation API */
@@ -858,9 +872,8 @@ struct netmap_priv_d {
 	uint16_t	        np_txpoll;
 
 	struct netmap_mem_d     *np_mref;	/* use with NMG_LOCK held */
-#ifdef __FreeBSD__
+	/* np_refcount is only used on FreeBSD */
 	int		        np_refcount;	/* use with NMG_LOCK held */
-#endif /* __FreeBSD__ */
 };
 
 
