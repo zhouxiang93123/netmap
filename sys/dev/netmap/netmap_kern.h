@@ -424,10 +424,48 @@ struct netmap_generic_adapter {	/* non-native device */
         int mit_pending;
 };
 
-struct netmap_bwrap_adapter {	/* hw bound to a bridge ? */
+/* bridge wrapper for non VALE ports. It is used to connect real devices to the bridge.
+ *
+ * The real device must already have its own netmap adapter (hwna).  The
+ * bridge wrapper and the hwna adapter share the same set of netmap rings and
+ * buffers, but they have two separate sets of krings descriptors, with tx/rx
+ * meanings swapped:
+ *
+ *                                  netmap
+ *           bwrap     krings       rings      krings      hwna
+ *         +------+   +------+     +-----+    +------+   +------+
+ *         |tx_rings->|      |\   /|     |----|      |<-tx_rings|
+ *         |      |   +------+ \ / +-----+    +------+   |      |
+ *         |      |             X                        |      |
+ *         |      |            / \                       |      |
+ *         |      |   +------+/   \+-----+    +------+   |      |
+ *         |rx_rings->|      |     |     |----|      |<-rx_rings|
+ *         |      |   +------+     +-----+    +------+   |      |
+ *         +------+                                      +------+
+ *
+ * - packets coming from the bridge go to the brwap rx rings, which are also the
+ *   hwna tx rings.  The bwrap notify callback will then complete the hwna tx
+ *   (see netmap_bwrap_notify).
+ * - packets coming from the outside go to the hwna rx rings, which are also the
+ *   bwrap tx rings.  The (overwritten) hwna notify method will then complete
+ *   the bridge tx (see netmap_bwrap_intr_notify).
+ *
+ *   The bridge wrapper may optionally connect the hwna 'host' rings to the
+ *   bridge. This is done by using a second port in the bridge and connecting it
+ *   to the 'host' netmap_vp_adapter contained in the netmap_bwrap_adapter.
+ *   The brwap host adapter cross-links the hwna host rings in the same way as shown above.
+ *
+ * - packets coming from the bridge and directed to host stack are handled by the
+ *   bwrap host notify callback (see netmap_bwrap_host_notify)
+ * - packets coming from the host stack are still handled by the overwritten
+ *   hwna notify callback (netmap_bwrap_intr_notify), but are diverted to the
+ *   host adapter depending on the ring number.
+ *
+ */
+struct netmap_bwrap_adapter {	
 	struct netmap_vp_adapter up;
-	struct netmap_vp_adapter host;
-	struct netmap_adapter *hwna;
+	struct netmap_vp_adapter host;  /* for host rings */
+	struct netmap_adapter *hwna;	/* the underlying device */
 
 	/* backup of the hwna notify callback */
 	int (*save_notify)(struct netmap_adapter *,

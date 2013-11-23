@@ -3702,6 +3702,10 @@ netmap_bwrap_dtor(struct netmap_adapter *na)
  * Note, no user process can access this NIC so we can ignore
  * the info in the 'ring'.
  */
+/* callback that overwrites the hwna notify callback.
+ * Packets come from the outside or from the host stack and are put on an hwna rx ring.
+ * The bridge wrapper then sends the packets through the bridge. 
+ */
 static int
 netmap_bwrap_intr_notify(struct netmap_adapter *na, u_int ring_nr, enum txrx tx, int flags)
 {
@@ -3819,8 +3823,9 @@ netmap_bwrap_config(struct netmap_adapter *na, u_int *txr, u_int *txd,
 		(struct netmap_bwrap_adapter *)na;
 	struct netmap_adapter *hwna = bna->hwna;
 
+	/* forward the request */
 	netmap_update_config(hwna);
-	// XXX note they are swapped - is this correct ?
+	/* swap the results */
 	*txr = hwna->num_rx_rings;
 	*txd = hwna->num_rx_desc;
 	*rxr = hwna->num_tx_rings;
@@ -3869,6 +3874,7 @@ netmap_bwrap_krings_delete(struct netmap_adapter *na)
 	netmap_vp_krings_delete(na);
 }
 
+/* notify method for the bridge-->hwna direction */
 static int
 netmap_bwrap_notify(struct netmap_adapter *na, u_int ring_n, enum txrx tx, int flags)
 {
@@ -3925,6 +3931,7 @@ netmap_bwrap_host_notify(struct netmap_adapter *na, u_int ring_n, enum txrx tx, 
 	return netmap_bwrap_notify(port_na, port_na->num_rx_rings, NR_RX, flags);
 }
 
+/* attach a bridge wrapper to the 'real' device */
 static int
 netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 {
@@ -3941,7 +3948,10 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 
 	na = &bna->up.up;
 	na->ifp = fake;
-	// XXX note they are swapped
+	/* fill the ring data for the bwrap adapter with rx/tx meanings
+         * swapped.  The real cross-linking will be done during register,
+         * when all the krings will have been created.
+         */
 	na->num_rx_rings = hwna->num_tx_rings;
 	na->num_tx_rings = hwna->num_rx_rings;
 	na->num_tx_desc = hwna->num_rx_desc;
