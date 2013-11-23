@@ -544,7 +544,8 @@ generic_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
     /*
     * 'new_slots' counts how many new slots have been added:
      * everything from hwcur to cur, excluding reserved ones, if any.
-     * Reserved slots start from hwcur. XXX used for what ?
+     * nr_hwreserved start from hwcur and counts how many slots were
+     * not sent to the NIC from the previous round.
      */
     new_slots = k - j - kring->nr_hwreserved;
     if (new_slots < 0) {

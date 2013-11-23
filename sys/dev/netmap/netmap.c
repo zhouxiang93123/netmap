@@ -626,7 +626,7 @@ nma_is_bwrap(struct netmap_adapter *na)
  */
 #define NETMAP_OWNED_BY_KERN(na)	(na->na_private)
 #define NETMAP_OWNED_BY_ANY(na) \
-	(NETMAP_OWNED_BY_KERN(na) || (na->refcount > 0))
+	(NETMAP_OWNED_BY_KERN(na) || (na->active_fds > 0))
 
 /*
  * NA(ifp)->bdg_port	port index
@@ -811,7 +811,7 @@ netmap_update_config(struct netmap_adapter *na)
 	if (na->num_tx_rings == txr && na->num_tx_desc == txd &&
 	    na->num_rx_rings == rxr && na->num_rx_desc == rxd)
 		return 0; /* nothing changed */
-	if (netmap_verbose || na->refcount > 0) {
+	if (netmap_verbose || na->active_fds > 0) {
 		D("stored config %s: txring %d x %d, rxring %d x %d",
 			NM_IFPNAME(ifp),
 			na->num_tx_rings, na->num_tx_desc,
@@ -819,7 +819,7 @@ netmap_update_config(struct netmap_adapter *na)
 		D("new config %s: txring %d x %d, rxring %d x %d",
 			NM_IFPNAME(ifp), txr, txd, rxr, rxd);
 	}
-	if (na->refcount == 0) {
+	if (na->active_fds == 0) {
 		D("configuration changed (but fine)");
 		na->num_tx_rings = txr;
 		na->num_tx_desc = txd;
@@ -906,7 +906,7 @@ netmap_if_new(const char *ifname, struct netmap_adapter *na)
 		return NULL;
 	}
 
-	if (na->refcount)
+	if (na->active_fds)
 		goto final;
 
 	if (na->nm_krings_create(na))
@@ -925,7 +925,7 @@ final:
 
 cleanup:
 
-	if (na->refcount == 0) {
+	if (na->active_fds == 0) {
 		netmap_mem_rings_delete(na);
 		na->nm_krings_delete(na);
 	}
@@ -1011,8 +1011,8 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 	struct ifnet *ifp = na->ifp;
 
 	NMG_LOCK_ASSERT();
-	na->refcount--;
-	if (na->refcount <= 0) {	/* last instance */
+	na->active_fds--;
+	if (na->active_fds <= 0) {	/* last instance */
 
 		if (netmap_verbose)
 			D("deleting last instance for %s", NM_IFPNAME(ifp));
@@ -1816,7 +1816,7 @@ netmap_do_regif(struct netmap_priv_d *priv, struct netmap_adapter *na,
 		error = ENOMEM;
 		goto out;
 	}
-	na->refcount++;
+	na->active_fds++;
 	if (ifp->if_capenable & IFCAP_NETMAP) {
 		/* was already set */
 	} else {
@@ -1879,7 +1879,7 @@ nm_bdg_attach(struct nmreq *nmr)
 		goto unref_exit;
 	}
 
-	if (na->refcount > 0) { /* already registered */
+	if (na->active_fds > 0) { /* already registered */
 		error = EBUSY;
 		goto unref_exit;
 	}
@@ -1926,7 +1926,7 @@ nm_bdg_detach(struct nmreq *nmr)
 	}
 	bna = (struct netmap_bwrap_adapter *)na;
 
-	if (na->refcount == 0) { /* not registered */
+	if (na->active_fds == 0) { /* not registered */
 		error = EINVAL;
 		goto unref_exit;
 	}
@@ -2642,7 +2642,7 @@ netmap_attach_common(struct netmap_adapter *na)
 	}
 	if (na->nm_notify == NULL)
 		na->nm_notify = netmap_notify;
-	na->refcount = na->na_single = na->na_multi = 0;
+	na->active_fds = na->na_single = na->na_multi = 0;
 	/* Core lock initialized here, others after netmap_if_new. */
 	mtx_init(&na->core_lock, "netmap core lock", MTX_NETWORK_LOCK, MTX_DEF);
 	if (na->nm_mem == NULL)

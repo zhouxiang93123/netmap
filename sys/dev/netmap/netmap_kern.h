@@ -308,17 +308,9 @@ struct netmap_adapter {
 #define NAF_NATIVE_ON   16      /* the adapter is native and the attached
                                  * interface is in netmap mode
                                  */
-	int refcount; /* number of user-space descriptors using this
+	int active_fds; /* number of user-space descriptors using this
 			 interface, which is equal to the number of
 			 struct netmap_if objs in the mapped region. */
-	/*
-	 * The selwakeup in the interrupt thread can use per-ring
-	 * and/or global wait queues. We track how many clients
-	 * of each type we have so we can optimize the drivers,
-	 * and especially avoid huge contention on the locks.
-	 */
-	int na_single;	/* threads attached to a single hw queue */
-	int na_multi;	/* threads attached to multiple hw queues */
 
 	u_int num_rx_rings; /* number of adapter receive rings */
 	u_int num_tx_rings; /* number of adapter transmit rings */
@@ -347,9 +339,6 @@ struct netmap_adapter {
 	 * the generic netmap functions.
 	 */
 	struct ifnet *ifp; /* adapter is ifp->if_softc */
-
-	// XXX core_lock is unused ?
-	NM_LOCK_T core_lock;	/* used if no device lock available */
 
 	/* private cleanup */
 	void (*nm_dtor)(struct netmap_adapter *);
