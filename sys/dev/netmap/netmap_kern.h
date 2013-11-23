@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2011-2013 Matteo Landi, Luigi Rizzo. All rights reserved.
+ * Copyright (C) 2013 Universita` di Pisa. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -276,9 +277,12 @@ nm_next(uint32_t i, uint32_t lim)
 enum txrx { NR_RX = 0, NR_TX = 1 };
 
 /*
- * This struct extends the 'struct adapter' (or
- * equivalent) device descriptor. It contains all fields needed to
- * support netmap operation.
+ * The "struct netmap_adapter" extends the "struct adapter"
+ * (or equivalent) device descriptor.
+ * It contains all base fields needed to support netmap operation.
+ * There are in fact different types of netmap adapters
+ * (native, generic, VALE switch...) so a netmap_adapter is
+ * just the first field in the derived type.
  */
 struct netmap_adapter {
 	/*
@@ -344,6 +348,7 @@ struct netmap_adapter {
 	 */
 	struct ifnet *ifp; /* adapter is ifp->if_softc */
 
+	// XXX core_lock is unused ?
 	NM_LOCK_T core_lock;	/* used if no device lock available */
 
 	/* private cleanup */
@@ -371,13 +376,16 @@ struct netmap_adapter {
 	/* memory allocator */
  	struct netmap_mem_d *nm_mem;
 
-	/* used internally. If non-null, the interface cannot be binded
+	/* used internally. If non-null, the interface cannot be bound
          * from userspace
          */
 	void *na_private;
 };
 
-struct netmap_vp_adapter {
+/*
+ * derived netmap adapters for various types of ports
+ */
+struct netmap_vp_adapter {	/* VALE software port */
 	struct netmap_adapter up;
 
 	/*
@@ -391,15 +399,13 @@ struct netmap_vp_adapter {
 	int retry;
 };
 
-struct netmap_hw_adapter {
+struct netmap_hw_adapter {	/* physical device */
 	struct netmap_adapter up;
 
-#ifdef linux
-	struct net_device_ops nm_ndo;
-#endif /* linux */
+	struct net_device_ops nm_ndo;	// XXX linux only
 };
 
-struct netmap_generic_adapter {
+struct netmap_generic_adapter {	/* non-native device */
 	struct netmap_hw_adapter up;
 
         /* Pointer to a previously used netmap adapter. */
@@ -417,7 +423,7 @@ struct netmap_generic_adapter {
         int mit_pending;
 };
 
-struct netmap_bwrap_adapter {
+struct netmap_bwrap_adapter {	/* hw bound to a bridge ? */
 	struct netmap_vp_adapter up;
 	struct netmap_vp_adapter host;
 	struct netmap_adapter *hwna;
@@ -519,24 +525,6 @@ nm_kr_lease(struct netmap_kring *k, u_int n, int is_rx)
 	}
 	return lease_idx;
 }
-
-
-/*
- * XXX NETMAP_DELETING() is unused
- *
- * The combination of "enable" (ifp->if_capenable & IFCAP_NETMAP)
- * and refcount gives the status of the interface, namely:
- *
- *	enable	refcount	Status
- *
- *	FALSE	0		normal operation
- *	FALSE	!= 0		-- (impossible)
- *	TRUE	1		netmap mode
- *	TRUE	0		being deleted.
- */
-
-#define NETMAP_DELETING(_na)  (  ((_na)->refcount == 0) &&	\
-	( (_na)->ifp->if_capenable & IFCAP_NETMAP) )
 
 
 /*
