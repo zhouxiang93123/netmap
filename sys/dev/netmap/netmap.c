@@ -255,18 +255,26 @@ int netmap_txsync_retry = 2;
 SYSCTL_INT(_dev_netmap, OID_AUTO, txsync_retry, CTLFLAG_RW,
     &netmap_txsync_retry, 0 , "Number of txsync loops in bridge's flush.");
 
-int netmap_drop = 0;	/* debugging */
 int netmap_flags = 0;	/* debug flags */
 int netmap_fwd = 0;	/* force transparent mode */
 int netmap_mmap_unreg = 0; /* allow mmap of unregistered fds */
+
+/*
+ * netmap_admode selects the netmap mode to use.
+ * Invalid values are reset to NETMAP_ADMODE_BEST
+ */
+enum { NETMAP_ADMODE_BEST = 0,	/* use native, fallback to generic */
+	NETMAP_ADMODE_NATIVE,	/* either native or none */
+	NETMAP_ADMODE_GENERIC,	/* force generic */
+	NETMAP_ADMODE_LAST };
 #define NETMAP_ADMODE_NATIVE        1  /* Force native netmap adapter. */
 #define NETMAP_ADMODE_GENERIC       2  /* Force generic netmap adapter. */
 #define NETMAP_ADMODE_BEST          0  /* Priority to native netmap adapter. */
-int netmap_admode = NETMAP_ADMODE_BEST;  /* Choose the netmap adapter to use. */
+static int netmap_admode = NETMAP_ADMODE_BEST;
+
 int netmap_generic_mit = 100*1000;   /* Generic mitigation interval in nanoseconds. */
 int netmap_generic_ringsize = 1024;   /* Generic ringsize. */
 
-SYSCTL_INT(_dev_netmap, OID_AUTO, drop, CTLFLAG_RW, &netmap_drop, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, flags, CTLFLAG_RW, &netmap_flags, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, fwd, CTLFLAG_RW, &netmap_fwd, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, mmap_unreg, CTLFLAG_RW, &netmap_mmap_unreg, 0, "");
@@ -279,6 +287,7 @@ NMG_LOCK_T	netmap_global_lock;
 /*
  * protect against multiple threads using the same ring.
  * also check that the ring has not been stopped.
+ * We only care for 0 or !=0 as a return code.
  */
 #define NM_KR_BUSY	1
 #define NM_KR_STOPPED	2
@@ -398,7 +407,7 @@ const char *
 nm_dump_buf(char *p, int len, int lim, char *dst)
 {
 	static char _dst[8192];
-        int i, j, i0;
+	int i, j, i0;
 	static char hex[] ="0123456789abcdef";
 	char *o;	/* output position */
 
@@ -1133,7 +1142,7 @@ netmap_adapter_vp_dtor(struct netmap_adapter *na)
 static int
 netmap_dtor_locked(struct netmap_priv_d *priv)
 {
-        struct netmap_adapter *na = priv->np_na;
+	struct netmap_adapter *na = priv->np_na;
 	
 #ifdef __FreeBSD__
 	/*
@@ -1144,9 +1153,9 @@ netmap_dtor_locked(struct netmap_priv_d *priv)
 		return 0;
 	}
 #endif /* __FreeBSD__ */
-        if (!na) {
-            return 1; //XXX is it correct?
-        }
+	if (!na) {
+	    return 1; //XXX is it correct?
+	}
 	netmap_do_unregif(priv, priv->np_nifp);
 	priv->np_nifp = NULL;
 	netmap_drop_memory_locked(priv);
@@ -1208,7 +1217,7 @@ netmap_send_up(struct ifnet *dst, struct mbq *q)
 			D("sending up pkt %p size %d", m, MBUF_LEN(m));
 		NM_SEND_UP(dst, m);
 	}
-        mbq_destroy(q);
+	mbq_destroy(q);
 }
 
 
@@ -1251,7 +1260,7 @@ netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
 
 		if (m == NULL)
 			break;
-                mbq_enqueue(q, m);
+		mbq_enqueue(q, m);
 	}
 }
 
@@ -1353,7 +1362,7 @@ netmap_txsync_to_host(struct netmap_adapter *na)
 	 * In case of no buffers we give up. At the end of the loop,
 	 * the queue is drained in all cases.
 	 */
-        mbq_init(&q);
+	mbq_init(&q);
 	netmap_grab_packets(kring, &q, 1);
 	kring->nr_hwcur = k;
 	kring->nr_hwavail = ring->avail = lim;
@@ -1405,7 +1414,7 @@ netmap_rxsync_from_host(struct netmap_adapter *na, struct thread *td, void *pwai
 			ring->reserved = resvd = 0; // XXX panic...
 		}
 		k = (k >= resvd) ? k - resvd : k + lim - resvd;
-        }
+	}
 	if (j != k) {
 		n = k >= j ? k - j : k + lim - j;
 		kring->nr_hwavail -= n;
@@ -1422,43 +1431,58 @@ unlock_out:
 }
 
 
+/*
+ * Return the na associated with the interface. We have 3 options
+ * according to the following truth table:
+ *
+ *                         native_support
+ * dev.netmap.admode       YES     NO
+ *----------------------------------------
+ * NETMAP_ADMODE_BEST      NATIVE  GENERIC
+ * NETMAP_ADMODE_NATIVE    NATIVE  --
+ * NETMAP_ADMODE_GENERIC   GENERIC GENERIC
+ */
+
 int
 get_hw_na(struct ifnet *ifp, struct netmap_adapter **na)
 {
 	/* generic support */
 	int i = netmap_admode;	/* Take a snapshot. */
 
-	*na = NULL;
-        if ((!NETMAP_CAPABLE(ifp) && (i == NETMAP_ADMODE_BEST ||
-                                       i == NETMAP_ADMODE_GENERIC))
-            || (NETMAP_CAPABLE(ifp) && !nma_is_generic(NA(ifp)) &&
-                                        i == NETMAP_ADMODE_GENERIC)) {
-        	struct netmap_adapter *prev_na;
+	/* reset in case of invalid value */
+	if (i < NETMAP_ADMODE_BEST || i >= NETMAP_ADMODE_LAST)
+		i = netmap_admode = NETMAP_ADMODE_BEST;
+
+	if (NETMAP_CAPABLE(ifp) && i != NETMAP_ADMODE_GENERIC) {
+		*na = NA(ifp);
+	} else if (i == NETMAP_ADMODE_NATIVE) {
+		*na = NULL;
+	} else {
+		struct netmap_adapter *prev_na;
 		struct netmap_generic_adapter *gna;
 		int error;
 
-                prev_na = NA(ifp);  /* Previously used netmap adapter (can be NULL). */
-                /* We create a generic netmap adapter (which doesn't require
-                   driver support), when the interface is not netmap capable (and we are
-                   not forbidden to use the generic adapter), or when
-                   we explicitely want to use the generic adapter. */
+		*na = NULL;
+		prev_na = NA(ifp);  /* Previously used netmap adapter (can be NULL). */
+		/* save previous na, and try to create a generic
+		 * if the device was not already in use
+		 */
 		if (prev_na && NETMAP_OWNED_BY_ANY(prev_na)) {
 			return EBUSY;
 		}
-                error = generic_netmap_attach(ifp);
-                if (error) {
+		error = generic_netmap_attach(ifp);
+		if (error) {
 			return error;
                 }
-                gna = (struct netmap_generic_adapter*)NA(ifp);
-                gna->prev = prev_na; /* Store the previously used netmap_adapter. */
+		gna = (struct netmap_generic_adapter*)NA(ifp);
+		gna->prev = prev_na; /* save old na */
 		if (prev_na != NULL) {
 			ifunit_ref(ifp->if_xname);
+			// XXX add a refcount ?
 			netmap_adapter_get(prev_na);
 		}
-                D("Created generic NA %p (prev %p)", gna, gna->prev);
-        }
-	if (NETMAP_CAPABLE(ifp))
-		*na = NA(ifp);
+		D("Created generic NA %p (prev %p)", gna, gna->prev);
+	}
 	return 0;
 }
 
@@ -1489,7 +1513,7 @@ get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 	const char *name = nmr->nr_name;
 	struct netmap_adapter *ret;
 	struct netmap_vp_adapter *vpna;
-        struct ifnet *ifp;
+	struct ifnet *ifp;
 	struct nm_bridge *b;
 	int i, j, cand = -1, cand2 = -1;
 	int needed;
@@ -1654,7 +1678,7 @@ no_bridge_port:
 	ifp = ifunit_ref(name);
 	if (ifp == NULL) {
 	        return ENXIO;
-        }
+	}
 
 	error = get_hw_na(ifp, &ret);
 	if (error)
@@ -1670,12 +1694,12 @@ no_bridge_port:
 		*na = ret;
 		netmap_adapter_get(ret);
 	}
-        /* Not NETMAP capable and we require a native adapter. */
+	/* Not NETMAP capable and we require a native adapter. */
 
 out:
-        if_rele(ifp);
+	if_rele(ifp);
 
-        return error;
+	return error;
 }
 
 
@@ -1788,7 +1812,7 @@ static struct netmap_if *
 netmap_do_regif(struct netmap_priv_d *priv, struct netmap_adapter *na,
 	uint16_t ringid, int *err)
 {
-        struct ifnet *ifp = na->ifp;
+	struct ifnet *ifp = na->ifp;
 	struct netmap_if *nifp = NULL;
 	int error, need_mem = 0;
 
@@ -2202,7 +2226,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			error = get_na(nmr, &na, 1 /* create */); /* keep reference */
 			if (error)
 				break;
-                        ifp = na->ifp;
+			ifp = na->ifp;
 			if (NETMAP_OWNED_BY_KERN(na)) {
 				netmap_adapter_put(na);
 				error = EBUSY;
@@ -2250,7 +2274,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		}
 		rmb(); /* make sure following reads are not from cache */
 
-                na = priv->np_na;      /* we have a reference */
+		na = priv->np_na;      /* we have a reference */
 
 		if (na == NULL) {
 			D("Internal error: nifp != NULL && na == NULL");
@@ -2258,7 +2282,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			break;
 		}
 
-                ifp = na->ifp;
+		ifp = na->ifp;
 		if (ifp == NULL) {
 			RD(1, "the ifp is gone");
 			error = ENXIO;
@@ -2324,7 +2348,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			NMG_UNLOCK();
 			break;
 		}
-                ifp = na->ifp;
+		ifp = na->ifp;
 		so.so_vnet = ifp->if_vnet;
 		// so->so_proto not null.
 		error = ifioctl(&so, cmd, data, td);
@@ -2371,10 +2395,15 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	struct mbq q;
 	void *pwait = dev;	/* linux compatibility */
 
-		int retry_tx = 1;
+	/*
+	 * In order to avoid nested locks, we need to "double check"
+	 * txsync and rxsync if we decide to do a selrecord().
+	 * retry_tx (and retry_rx, later) prevent looping forever.
+	 */
+	int retry_tx = 1;
 
 	(void)pwait;
-        mbq_init(&q);
+	mbq_init(&q);
 
 	if (devfs_get_cdevpriv((void **)&priv) != 0 || priv == NULL)
 		return POLLERR;
@@ -2385,8 +2414,8 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	}
 	rmb(); /* make sure following reads are not from cache */
 
-        na = priv->np_na;
-        ifp = na->ifp;
+	na = priv->np_na;
+	ifp = na->ifp;
 	// check for deleted
 	if (ifp == NULL) {
 		RD(1, "the ifp is gone");
@@ -2422,7 +2451,11 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 		return (revents);
 	}
 
-	/* if we are in transparent mode, check also the host rx ring */
+	/*
+	 * If we are in transparent mode, check also the host rx ring
+	 * XXX Transparent mode at the moment requires to bind all
+ 	 * rings to a single file descriptor.
+	 */
 	kring = &na->rx_rings[lim_rx];
 	if ( (priv->np_qlast == NETMAP_HW_RING) // XXX check_all
 			&& want_rx
@@ -2434,8 +2467,8 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	}
 
 	/*
-	 * check_all is set if the card has more than one queue AND
-	 * the client is polling all of them. If true, we sleep on
+	 * check_all_{tx|rx} are set if the card has more than one queue AND
+	 * the file descriptor is bound to all of them. If so, we sleep on
 	 * the "global" selinfo, otherwise we sleep on individual selinfo
 	 * (FreeBSD only allows two selinfo's per file descriptor).
 	 * The interrupt routine in the driver wake one or the other
@@ -2454,8 +2487,8 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	}
 
 	/*
-	 * We start with a lock free round which is good if we have
-	 * data available. If this fails, then lock and call the sync
+	 * We start with a lock free round which is cheap if we have
+	 * slots available. If this fails, then lock and call the sync
 	 * routines.
 	 */
 	for (i = priv->np_qfirst; want_rx && i < lim_rx; i++) {
@@ -2477,6 +2510,8 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	 * If we to push packets out (priv->np_txpoll) or want_tx is
 	 * still set, we do need to run the txsync calls (on all rings,
 	 * to avoid that the tx rings stall).
+	 * XXX should also check cur != hwcur on the tx rings.
+	 * Fortunately, normal tx mode has np_txpoll set.
 	 */
 	if (priv->np_txpoll || want_tx) {
 		/* If we really want to be woken up (want_tx),
@@ -2497,7 +2532,8 @@ flush_tx:
 				continue;
 			/* make sure only one user thread is doing this */
 			if (nm_kr_tryget(kring)) {
-				ND("ring %p busy is %d", kring, (int)kring->nr_busy);
+				ND("ring %p busy is %d",
+				    kring, (int)kring->nr_busy);
 				revents |= POLLERR;
 				goto out;
 			}
@@ -2587,8 +2623,8 @@ do_retry_rx:
 		goto flush_tx;
 	}
 
-        if (q.head)
-	        netmap_send_up(na->ifp, &q);
+	if (q.head)
+		netmap_send_up(na->ifp, &q);
 
 out:
 
@@ -2700,7 +2736,7 @@ netmap_attach(struct netmap_adapter *arg)
 
 #ifdef linux
 	if (ifp->netdev_ops) {
-            /* prepare a clone of the netdev ops */
+		/* prepare a clone of the netdev ops */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 28)
 		hwna->nm_ndo.ndo_start_xmit = ifp->netdev_ops;
 #else
@@ -2722,9 +2758,9 @@ fail:
 void
 NM_DBG(netmap_adapter_get)(struct netmap_adapter *na)
 {
-        if (!na) {
-            return;
-        }
+	if (!na) {
+		return;
+	}
 
 	refcount_acquire(&na->na_refcount);
 }
@@ -2762,8 +2798,8 @@ netmap_vp_krings_create(struct netmap_adapter *na)
 	uint32_t *leases;
 
 	/* XXX vps do not need host rings,
-         * but we crash if we don't have one
-         */
+	 * but we crash if we don't have one
+	 */
 	ntx = na->num_tx_rings + 1;
 	nrx = na->num_rx_rings + 1;
 
@@ -3069,14 +3105,14 @@ nm_bdg_preflush(struct netmap_vp_adapter *na, u_int ring_nr,
 int
 netmap_common_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 {
-        struct netmap_adapter *na = NA(ifp);
-        struct netmap_kring *kring;
+	struct netmap_adapter *na = NA(ifp);
+	struct netmap_kring *kring;
 
 	q &= NETMAP_RING_MASK;
 
 	if (netmap_verbose) {
 	        RD(5, "received %s queue %d", work_done ? "RX" : "TX" , q);
-        }
+	}
 
 	if (work_done) { /* RX path */
 		if (q >= na->num_rx_rings)
@@ -3127,7 +3163,7 @@ netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 		return 0;
 	}
 
-        return netmap_common_irq(ifp, q, work_done);
+	return netmap_common_irq(ifp, q, work_done);
 }
 
 
@@ -3181,7 +3217,7 @@ bdg_netmap_reg(struct netmap_adapter *na, int onoff)
 {
 	struct netmap_vp_adapter *vpna =
 		(struct netmap_vp_adapter*)na;
-        struct ifnet *ifp = na->ifp;
+	struct ifnet *ifp = na->ifp;
 
 	/* the interface is already attached to the bridge,
 	 * so we only need to toggle IFCAP_NETMAP.
@@ -3624,22 +3660,22 @@ bdg_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		if (n < 0)
 			n += kring->nkr_num_slots;
 		ND("userspace releases %d packets", n);
-                for (n = 0; likely(j != k); n++) {
-                        struct netmap_slot *slot = &ring->slot[j];
-                        void *addr = BDG_NMB(na->nm_mem, slot);
+		for (n = 0; likely(j != k); n++) {
+			struct netmap_slot *slot = &ring->slot[j];
+			void *addr = BDG_NMB(na->nm_mem, slot);
 
-                        if (addr == netmap_buffer_base) { /* bad buf */
+			if (addr == netmap_buffer_base) { /* bad buf */
 				D("bad buffer index %d, ignore ?",
 					slot->buf_idx);
-                        }
+			}
 			slot->flags &= ~NS_BUF_CHANGED;
-                        j = nm_next(j, lim);
-                }
-                kring->nr_hwavail -= n;
-                kring->nr_hwcur = k;
-        }
-        /* tell userspace that there are new packets */
-        ring->avail = kring->nr_hwavail - resvd;
+			j = nm_next(j, lim);
+		}
+		kring->nr_hwavail -= n;
+		kring->nr_hwcur = k;
+	}
+	/* tell userspace that there are new packets */
+	ring->avail = kring->nr_hwavail - resvd;
 	n = 0;
 done:
 	mtx_unlock(&kring->q_lock);
@@ -3944,9 +3980,9 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 	na = &bna->up.up;
 	na->ifp = fake;
 	/* fill the ring data for the bwrap adapter with rx/tx meanings
-         * swapped.  The real cross-linking will be done during register,
-         * when all the krings will have been created.
-         */
+	 * swapped. The real cross-linking will be done during register,
+	 * when all the krings will have been created.
+	 */
 	na->num_rx_rings = hwna->num_tx_rings;
 	na->num_tx_rings = hwna->num_rx_rings;
 	na->num_tx_desc = hwna->num_rx_desc;
