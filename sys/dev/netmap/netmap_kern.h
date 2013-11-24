@@ -679,6 +679,9 @@ enum {                                  /* verbose flags */
 	NM_VERB_NIC_TXSYNC = 0x2000,
 };
 
+extern int netmap_generic_mit;
+extern int netmap_generic_ringsize;
+
 /*
  * NA returns a pointer to the struct netmap adapter from the ifp,
  * WNA is used to write it.

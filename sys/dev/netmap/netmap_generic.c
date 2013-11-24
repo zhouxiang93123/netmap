@@ -130,10 +130,6 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257666 2013-11-05 01:06:22Z lui
 #include <dev/netmap/netmap_mem2.h>
 
 
-/* ================== STUFF DEFINED in netmap.c =================== */
-extern int netmap_generic_mit;
-extern int netmap_generic_ringsize;
-
 
 /* ======================== usage stats =========================== */
 

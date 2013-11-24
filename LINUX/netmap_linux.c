@@ -49,7 +49,6 @@ void netmap_mitigation_init(struct netmap_generic_adapter *gna)
     gna->mit_pending = 0;
 }
 
-extern unsigned int netmap_generic_mit;
 
 void netmap_mitigation_start(struct netmap_generic_adapter *gna)
 {
