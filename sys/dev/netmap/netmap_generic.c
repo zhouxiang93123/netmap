@@ -67,7 +67,7 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257666 2013-11-05 01:06:22Z lui
 #include <sys/types.h>
 #include <sys/errno.h>
 #include <sys/malloc.h>
-#include <sys/lock.h>   /* PROT_EXEC */ // XXX also lock.h
+#include <sys/lock.h>   /* PROT_EXEC */
 #include <sys/rwlock.h>
 #include <sys/socket.h> /* sockaddrs */
 #include <sys/selinfo.h>
@@ -190,11 +190,9 @@ static struct rate_context rate_ctx;
 #define GENERIC_BUF_SIZE        netmap_buf_size    /* Size of the mbufs in the Tx pool. */
 
 /*
- * We cannot use netmap_rx_irq because the generic adapter has
- * NAF_SKIP_INTR set. We might call directly netmap_common_irq()
- * (but need to check this XXX)
  * Wrapper used by the generic adapter layer to notify
- * the poller threads.
+ * the poller threads. Differently from netmap_rx_irq(), we check
+ * only IFCAP_NETMAP instead of NAF_NATIVE_ON to enable the irq.
  */
 static int
 netmap_generic_irq(struct ifnet *ifp, u_int q, u_int *work_done)
