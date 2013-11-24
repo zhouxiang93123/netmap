@@ -53,6 +53,8 @@ extern NMG_LOCK_T	netmap_global_lock;
 
 #define NM_ATOMIC_T	volatile int
 
+MALLOC_DECLARE(M_NETMAP);
+
 // XXX linux struct, not used in FreeBSD
 struct net_device_ops {
 };
@@ -606,17 +608,13 @@ u_int netmap_bdg_learning(char *, u_int, uint8_t *,
 /* Various prototypes */
 int netmap_poll(struct cdev *dev, int events, struct thread *td);
 
-int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m, void *addr, u_int len, u_int ring_nr);
-int generic_find_num_desc(struct ifnet *ifp, u_int *tx, u_int *rx);
-void generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq);
+
 int netmap_init(void);
 void netmap_fini(void);
 int netmap_get_memory(struct netmap_priv_d* p);
 void netmap_dtor(void *data);
+
 int netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td);
-int netmap_catch_rx(struct netmap_adapter *na, int intercept);
-void generic_rx_handler(struct ifnet *ifp, struct mbuf *m);;
-void netmap_catch_packet_steering(struct netmap_generic_adapter *na, int enable);
 
 /* netmap_adapter creation/destruction */
 #define NM_IFPNAME(ifp) ((ifp) ? (ifp)->if_xname : "zombie")
@@ -653,13 +651,6 @@ int netmap_adapter_put(struct netmap_adapter *na);
 #endif /* !NM_DEBUG_PUTGET */
 
 
-/* netmap_mitigation API */
-void netmap_mitigation_init(struct netmap_generic_adapter *na);
-void netmap_mitigation_start(struct netmap_generic_adapter *na);
-void netmap_mitigation_restart(struct netmap_generic_adapter *na);
-int netmap_mitigation_active(struct netmap_generic_adapter *na);
-void netmap_mitigation_cleanup(struct netmap_generic_adapter *na);
-enum hrtimer_restart generic_timer_handler(struct hrtimer *t);
 
 extern u_int netmap_buf_size;
 #define NETMAP_BUF_SIZE	netmap_buf_size	// XXX remove
@@ -723,6 +714,7 @@ extern int netmap_generic_ringsize;
 #endif	/* linux */
 
 #ifdef __FreeBSD__
+
 /* Callback invoked by the dma machinery after a successfull dmamap_load */
 static void netmap_dmamap_cb(__unused void *arg,
     __unused bus_dma_segment_t * segs, __unused int nseg, __unused int error)
@@ -750,6 +742,7 @@ netmap_reload_map(bus_dma_tag_t tag, bus_dmamap_t map, void *buf)
 		    netmap_dmamap_cb, NULL, BUS_DMA_NOWAIT);
 	}
 }
+
 #else /* linux */
 
 /*
@@ -862,10 +855,6 @@ int netmap_rx_irq(struct ifnet *, u_int, u_int *);
 #define netmap_tx_irq(_n, _q) netmap_rx_irq(_n, _q, NULL)
 int netmap_common_irq(struct ifnet *, u_int, u_int *work_done);
 
-#ifdef __FreeBSD__
-MALLOC_DECLARE(M_NETMAP);
-#endif /* __FreeBSD__ */
-
 
 void netmap_disable_all_rings(struct ifnet *);
 void netmap_enable_all_rings(struct ifnet *);
@@ -914,5 +903,24 @@ struct netmap_priv_d {
 int generic_netmap_register(struct netmap_adapter *na, int enable);
 int generic_netmap_attach(struct ifnet *ifp);
 
+int netmap_catch_rx(struct netmap_adapter *na, int intercept);
+void generic_rx_handler(struct ifnet *ifp, struct mbuf *m);;
+void netmap_catch_packet_steering(struct netmap_generic_adapter *na, int enable);
+int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m, void *addr, u_int len, u_int ring_nr);
+int generic_find_num_desc(struct ifnet *ifp, u_int *tx, u_int *rx);
+void generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq);
+
+/*
+ * netmap_mitigation API. This is used by the generic adapter
+ * to reduce the number of interrupt requests/selwakeup
+ * to clients on incoming packets.
+ */
+void netmap_mitigation_init(struct netmap_generic_adapter *na);
+void netmap_mitigation_start(struct netmap_generic_adapter *na);
+void netmap_mitigation_restart(struct netmap_generic_adapter *na);
+int netmap_mitigation_active(struct netmap_generic_adapter *na);
+void netmap_mitigation_cleanup(struct netmap_generic_adapter *na);
+
+enum hrtimer_restart generic_timer_handler(struct hrtimer *t);
 
 #endif /* _NET_NETMAP_KERN_H_ */
