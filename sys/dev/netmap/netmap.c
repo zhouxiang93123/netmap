@@ -1387,7 +1387,6 @@ netmap_rxsync_from_host(struct netmap_adapter *na, struct thread *td, void *pwai
 	if (kring->nkr_stopped) /* check a first time without lock */
 		return;
 
-	/* XXX as an optimization we could reuse na->core_lock */
 	mtx_lock(&kring->q_lock);
 
 	if (kring->nkr_stopped)  /* check again with lock held */
@@ -2642,9 +2641,8 @@ netmap_attach_common(struct netmap_adapter *na)
 	}
 	if (na->nm_notify == NULL)
 		na->nm_notify = netmap_notify;
-	na->active_fds = na->na_single = na->na_multi = 0;
-	/* Core lock initialized here, others after netmap_if_new. */
-	mtx_init(&na->core_lock, "netmap core lock", MTX_NETWORK_LOCK, MTX_DEF);
+	na->active_fds = 0;
+
 	if (na->nm_mem == NULL)
 		na->nm_mem = &nm_mem;
 	return 0;
@@ -2655,8 +2653,6 @@ netmap_detach_common(struct netmap_adapter *na)
 {
 	if (na->ifp)
 		WNA(na->ifp) = NULL; /* XXX do we need this? */
-
-	mtx_destroy(&na->core_lock);
 
 	if (na->tx_rings) { /* XXX should not happen */
 		D("freeing leftover tx_rings");
@@ -2870,7 +2866,6 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	}
 	/* protect against other instances of netmap_transmit,
 	 * and userspace invocations of rxsync().
-	 * XXX could reuse core_lock
 	 */
 	// XXX [Linux] there can be no other instances of netmap_transmit
 	// on this same ring, but we still need this lock to protect
