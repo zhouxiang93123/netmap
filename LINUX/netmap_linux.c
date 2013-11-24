@@ -42,6 +42,44 @@ int netmap_hw_krings_create(struct netmap_adapter *);
 
 /* ========================== LINUX-SPECIFIC ROUTINES ================== */
 
+/*
+ * The generic driver calls netmap once per received packet.
+ * This is inefficient so we implement a mitigation mechanism,
+ * as follows:
+ * - the first packet on an idle receiver triggers a notification
+ *   and starts a timer;
+ * - subsequent incoming packets do not cause a notification
+ *   until the timer expires;
+ * - when the timer expires and there are pending packets,
+ *   a notification is sent up and the timer is restarted.
+ */
+enum hrtimer_restart
+generic_timer_handler(struct hrtimer *t)
+{
+    struct netmap_generic_adapter *gna =
+	container_of(t, struct netmap_generic_adapter, mit_timer);
+    struct netmap_adapter *na = (struct netmap_adapter *)gna;
+    u_int work_done;
+
+    if (!gna->mit_pending) {
+        return HRTIMER_NORESTART;
+    }
+
+    /* Some work arrived while the timer was counting down:
+     * Reset the pending work flag, restart the timer and send
+     * a notification.
+     */
+    gna->mit_pending = 0;
+    /* below is a variation of netmap_generic_irq */
+    if (na->ifp->if_capenable & IFCAP_NETMAP)
+        netmap_common_irq(na->ifp, 0, &work_done);
+    // IFRATE(rate_ctx.new.rxirq++);
+    netmap_mitigation_restart(gna);
+
+    return HRTIMER_RESTART;
+}
+
+
 void netmap_mitigation_init(struct netmap_generic_adapter *gna)
 {
     hrtimer_init(&gna->mit_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
