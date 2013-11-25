@@ -592,6 +592,7 @@ int netmap_ring_reinit(struct netmap_kring *);
 
 u_int nm_bound_var(u_int *v, u_int dflt, u_int lo, u_int hi, const char *msg);
 
+#ifdef WITH_VALE
 /*
  * The following bridge-related interfaces are used by other kernel modules
  * In the version that only supports unicast or broadcast, the lookup
@@ -605,10 +606,13 @@ int netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func);
 u_int netmap_bdg_learning(char *, u_int, uint8_t *,
 		struct netmap_vp_adapter *);
 
-#define	NM_NAME			"vale"	/* prefix for bridge port name */
 #define	NM_BDG_MAXPORTS		254	/* up to 254 */
 #define	NM_BDG_BROADCAST	NM_BDG_MAXPORTS
 #define	NM_BDG_NOPORT		(NM_BDG_MAXPORTS+1)
+#endif /* WITH_VALE */
+
+/* NM_NAME is always reserved */
+#define	NM_NAME			"vale"	/* prefix for bridge port name */
 
 /* Various prototypes */
 int netmap_poll(struct cdev *dev, int events, struct thread *td);

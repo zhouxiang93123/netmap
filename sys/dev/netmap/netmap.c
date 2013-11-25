@@ -157,7 +157,7 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z gle
 /* reduce conditional code */
 #define init_waitqueue_head(x)	// only needed in linux
 
-//#define WITH_VALE
+#define WITH_VALE
 #ifdef WITH_VALE
 
 #define BDG_RWLOCK_T		struct rwlock // struct rwlock
