@@ -494,11 +494,12 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, bridge_batch, CTLFLAG_RW, &bridge_batch, 0 , "
 
 /* The bridge references the buffers using the device specific look up table */
 static inline void *
-BDG_NMB(struct netmap_mem_d *nmd, struct netmap_slot *slot)
+BDG_NMB(struct netmap_adapter *na, struct netmap_slot *slot)
 {
-	struct lut_entry *lut = nmd->pools[NETMAP_BUF_POOL].lut;
+	struct lut_entry *lut = na->na_lut;
 	uint32_t i = slot->buf_idx;
-	return (unlikely(i >= nmd->pools[NETMAP_BUF_POOL].objtotal)) ?  lut[0].vaddr : lut[i].vaddr;
+	return (unlikely(i >= na->na_lut_objtotal)) ?
+		lut[0].vaddr : lut[i].vaddr;
 }
 
 static int bdg_netmap_attach(struct netmap_adapter *);
@@ -1244,7 +1245,7 @@ netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
 	u_int lim = kring->nkr_num_slots - 1;
 	struct mbuf *m;
 	u_int k = kring->ring->cur, n = kring->ring->reserved;
-	struct netmap_mem_d *nmd = kring->na->nm_mem;
+	struct netmap_adapter *na = kring->na;
 
 	/* compute the final position, ring->cur - ring->reserved */
 	if (n > 0) {
@@ -1258,13 +1259,13 @@ netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
 		n = nm_next(n, lim);
 		if ((slot->flags & NS_FORWARD) == 0 && !force)
 			continue;
-		if (slot->len < 14 || slot->len > NETMAP_BDG_BUF_SIZE(nmd)) {
+		if (slot->len < 14 || slot->len > NETMAP_BDG_BUF_SIZE(na->nm_mem)) {
 			D("bad pkt at %d len %d", n, slot->len);
 			continue;
 		}
 		slot->flags &= ~NS_FORWARD; // XXX needed ?
 		/* XXX adapt to the case of a multisegment packet */
-		m = m_devget(BDG_NMB(nmd, slot), slot->len, 0, kring->na->ifp, NULL);
+		m = m_devget(BDG_NMB(na, slot), slot->len, 0, na->ifp, NULL);
 
 		if (m == NULL)
 			break;
@@ -2937,7 +2938,7 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 		/* compute the insert position */
 		i = nm_kr_rxpos(kring);
 		slot = &kring->ring->slot[i];
-		m_copydata(m, 0, (int)len, BDG_NMB(na->nm_mem, slot));
+		m_copydata(m, 0, (int)len, BDG_NMB(na, slot));
 		slot->len = len;
 		slot->flags = kring->nkr_slot_flags;
 		kring->nr_hwavail++;
@@ -3075,7 +3076,7 @@ nm_bdg_preflush(struct netmap_vp_adapter *na, u_int ring_nr,
 		/* this slot goes into a list so initialize the link field */
 		ft[ft_i].ft_next = NM_FT_NULL;
 		buf = ft[ft_i].ft_buf = (slot->flags & NS_INDIRECT) ?
-			(void *)(uintptr_t)slot->ptr : BDG_NMB(na->up.nm_mem, slot);
+			(void *)(uintptr_t)slot->ptr : BDG_NMB(&na->up, slot);
 		prefetch(buf);
 		++ft_i;
 		if (slot->flags & NS_MOREFRAG) {
@@ -3501,7 +3502,7 @@ retry:
 			    size_t len = (ft_p->ft_len + 63) & ~63;
 
 			    slot = &ring->slot[j];
-			    dst = BDG_NMB(dst_na->up.nm_mem, slot);
+			    dst = BDG_NMB(&dst_na->up, slot);
 			    /* round to a multiple of 64 */
 
 			    ND("send %d %d bytes at %s:%d",
@@ -3685,7 +3686,7 @@ bdg_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		ND("userspace releases %d packets", n);
 		for (n = 0; likely(j != k); n++) {
 			struct netmap_slot *slot = &ring->slot[j];
-			void *addr = BDG_NMB(na->nm_mem, slot);
+			void *addr = BDG_NMB(na, slot);
 
 			if (addr == netmap_buffer_base) { /* bad buf */
 				D("bad buffer index %d, ignore ?",
