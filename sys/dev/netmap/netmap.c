@@ -474,6 +474,14 @@ nm_dump_buf(char *p, int len, int lim, char *dst)
 #define NM_FT_NULL		NM_BDG_BATCH_MAX
 #define	NM_BRIDGES		8	/* number of bridges */
 
+/* grab references from the nmd into the na */
+static void
+netmap_set_nmd(struct netmap_adapter *na, struct netmap_mem_d *nmd)
+{
+	na->nm_mem = nmd;
+	na->na_lut = nmd->pools[NETMAP_BUF_POOL].lut;
+	na->na_lut_objtotal = nmd->pools[NETMAP_BUF_POOL].objtotal;
+}
 
 /*
  * bridge_batch is set via sysctl to the max batch size to be
@@ -2695,6 +2703,7 @@ netmap_attach_common(struct netmap_adapter *na)
 
 	if (na->nm_mem == NULL)
 		na->nm_mem = &nm_mem;
+	netmap_set_nmd(na, na->nm_mem);
 	return 0;
 }
 
@@ -3718,6 +3727,7 @@ bdg_netmap_attach(struct netmap_adapter *arg)
 	na->nm_mem = netmap_mem_private_new(NM_IFPNAME(arg->ifp),
 			na->num_tx_rings, na->num_tx_desc,
 			na->num_rx_rings, na->num_rx_desc);
+	/* other nmd fields are set in the common routine */
 	error = netmap_attach_common(na);
 	if (error) {
 		free(vpna, M_DEVBUF);
@@ -4022,7 +4032,7 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 	na->nm_krings_create = netmap_bwrap_krings_create;
 	na->nm_krings_delete = netmap_bwrap_krings_delete;
 	na->nm_notify = netmap_bwrap_notify;
-	na->nm_mem = hwna->nm_mem;
+	netmap_set_nmd(na, hwna->nm_mem);
 	na->na_private = na; /* prevent NIOCREGIF */
 	bna->up.retry = 1; /* XXX maybe this should depend on the hwna */
 
@@ -4039,7 +4049,7 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 	// hostna->nm_txsync = netmap_bwrap_host_txsync;
 	// hostna->nm_rxsync = netmap_bwrap_host_rxsync;
 	hostna->nm_notify = netmap_bwrap_host_notify;
-	hostna->nm_mem = na->nm_mem;
+	netmap_set_nmd(hostna, na->nm_mem);
 	hostna->na_private = bna;
 
 	D("%s<->%s txr %d txd %d rxr %d rxd %d", fake->if_xname, real->if_xname,

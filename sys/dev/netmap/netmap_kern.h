@@ -365,8 +365,13 @@ struct netmap_adapter {
          */
 	int na_refcount;
 
-	/* memory allocator */
+	/* memory allocator (opaque)
+	 * We also cache a pointer to the lut_entry for translating
+	 * buffer addresses, and the total number of buffers.
+	 */
  	struct netmap_mem_d *nm_mem;
+	struct lut_entry *na_lut;
+	uint32_t na_lut_objtotal;	/* max buffer index */
 
 	/* used internally. If non-null, the interface cannot be bound
          * from userspace
