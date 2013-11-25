@@ -3736,11 +3736,24 @@ netmap_bwrap_dtor(struct netmap_adapter *na)
 {
 	struct netmap_bwrap_adapter *bna = (struct netmap_bwrap_adapter*)na;
 	struct netmap_adapter *hwna = bna->hwna;
+	struct nm_bridge *b = bna->up.na_bdg,
+		*bh = bna->host.na_bdg;
+	struct ifnet *ifp = na->ifp;
+
 	ND("na %p", na);
 
-	netmap_adapter_vp_dtor(na);
+	if (b) {
+		netmap_bdg_detach_common(b, bna->up.bdg_port,
+			(bh ? bna->host.bdg_port : -1));
+	}
+
 	hwna->na_private = NULL;
 	netmap_adapter_put(hwna);
+
+	bzero(ifp, sizeof(*ifp));
+	free(ifp, M_DEVBUF);
+	na->ifp = NULL;
+
 }
 
 /*
