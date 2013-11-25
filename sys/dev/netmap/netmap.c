@@ -1435,6 +1435,8 @@ unlock_out:
  * Return the na associated with the interface. We have 3 options
  * according to the following truth table:
  *
+ * XXX correct truth table
+ *
  *                         native_support
  * dev.netmap.admode       YES     NO
  *----------------------------------------
@@ -1443,17 +1445,23 @@ unlock_out:
  * NETMAP_ADMODE_GENERIC   GENERIC GENERIC
  */
 
+// XXX maybe we can just return struct netmap_adapter value
 int
 get_hw_na(struct ifnet *ifp, struct netmap_adapter **na)
 {
 	/* generic support */
 	int i = netmap_admode;	/* Take a snapshot. */
-        int error = 0;
+	int error = 0;
+	struct netmap_adapter *prev_na;
+	struct netmap_generic_adapter *gna;
+
+	*na = NULL; /* default */
 
 	/* reset in case of invalid value */
 	if (i < NETMAP_ADMODE_BEST || i >= NETMAP_ADMODE_LAST)
 		i = netmap_admode = NETMAP_ADMODE_BEST;
 
+	// XXX NA(ifp)->active_fds>0 instead if nma_is_generic ?
 	if (NETMAP_CAPABLE(ifp) && (i != NETMAP_ADMODE_GENERIC || nma_is_generic(NA(ifp)))) {
                 /* We enter here when:
                  *   - ifp has a native adapter attached and we don't want to force netmap to
@@ -1461,50 +1469,37 @@ get_hw_na(struct ifnet *ifp, struct netmap_adapter **na)
                  *   - ifp has a generic adapter attached.
                  */
 		*na = NA(ifp);
-	} else if (i != NETMAP_ADMODE_NATIVE) {
-                /* We enter here when we don't want to force netmap to use a native netmap
-                 * adapter, and one of the following holds:
-                 *   - ifp has not a native adapter attached, or
-                 *   - ifp has a native adapter attached and we want to force netmap to use
-                 *     a generic netmap adapter instead.
-                 *
-                 * In both cases we have to create a generic netmap adapter.
-                 */
-		struct netmap_adapter *prev_na;
-		struct netmap_generic_adapter *gna;
-		int error;
-
-		prev_na = NA(ifp);  /* Previously used netmap adapter (can be NULL). */
-		/* save previous na, and try to create a generic
-		 * if the device was not already in use
-		 */
-		if (prev_na && NETMAP_OWNED_BY_ANY(prev_na)) {
-D("enter EBUSY %d", prev_na->active_fds);
-			return EBUSY;
-		}
-		error = generic_netmap_attach(ifp);
-		if (error) {
-			return error;
-                }
-                *na = NA(ifp);
-		gna = (struct netmap_generic_adapter*)NA(ifp);
-		gna->prev = prev_na; /* save old na */
-		if (prev_na != NULL) {
-			ifunit_ref(ifp->if_xname);
-			// XXX add a refcount ?
-			netmap_adapter_get(prev_na);
-		}
-		D("Created generic NA %p (prev %p)", gna, gna->prev);
-	} else {
-                /* We enter here when ifp has not a netmap adapter attached and we want
-                 * to force a native netmap adapter. In these case is not possible to
-                 * satisfy the request.
-                 */
-		*na = NULL;
-                error = EINVAL;
+		return 0;
 	}
 
-	return error;
+	if (i == NETMAP_ADMODE_NATIVE)
+		return EINVAL;
+
+	/* all other cases, create a generic adapter */
+
+	/* save previous na, and try to create a generic
+	 * if the device was not already in use
+	 */
+	prev_na = NA(ifp);
+	if (prev_na && NETMAP_OWNED_BY_ANY(prev_na)) {
+		D("enter EBUSY %d", prev_na->active_fds);
+		return EBUSY;
+	}
+	error = generic_netmap_attach(ifp);
+	if (error)
+		return error;
+
+	*na = NA(ifp);
+	gna = (struct netmap_generic_adapter*)NA(ifp);
+	gna->prev = prev_na; /* save old na */
+	if (prev_na != NULL) {
+		ifunit_ref(ifp->if_xname);
+		// XXX add a refcount ?
+		netmap_adapter_get(prev_na);
+	}
+	D("Created generic NA %p (prev %p)", gna, gna->prev);
+
+	return 0;
 }
 
 
