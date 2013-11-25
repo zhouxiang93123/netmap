@@ -1448,6 +1448,7 @@ get_hw_na(struct ifnet *ifp, struct netmap_adapter **na)
 {
 	/* generic support */
 	int i = netmap_admode;	/* Take a snapshot. */
+        int error = 0;
 
 	/* reset in case of invalid value */
 	if (i < NETMAP_ADMODE_BEST || i >= NETMAP_ADMODE_LAST)
@@ -1500,8 +1501,10 @@ D("enter EBUSY %d", prev_na->active_fds);
                  * satisfy the request.
                  */
 		*na = NULL;
+                error = EINVAL;
 	}
-	return 0;
+
+	return error;
 }
 
 
@@ -1641,7 +1644,7 @@ get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 		struct ifnet *fake_ifp;
 
 		error = get_hw_na(ifp, &ret);
-		if (error || na == NULL)
+		if (error || ret == NULL)
 			goto out;
 
 		/* make sure the NIC is not already in use */
@@ -1712,8 +1715,6 @@ no_bridge_port:
 		*na = ret;
 		netmap_adapter_get(ret);
 	}
-	/* Not NETMAP capable and we require a native adapter. */
-
 out:
 	if_rele(ifp);
 
