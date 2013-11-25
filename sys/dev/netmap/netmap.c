@@ -4015,6 +4015,7 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 	na->nm_krings_delete = netmap_bwrap_krings_delete;
 	na->nm_notify = netmap_bwrap_notify;
 	na->nm_mem = hwna->nm_mem;
+	na->na_private = na; /* prevent NIOCREGIF */
 	bna->up.retry = 1; /* XXX maybe this should depend on the hwna */
 
 	bna->hwna = hwna;
