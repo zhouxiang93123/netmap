@@ -1455,14 +1455,11 @@ get_hw_na(struct ifnet *ifp, struct netmap_adapter **na)
 
 	if (NETMAP_CAPABLE(ifp) && i != NETMAP_ADMODE_GENERIC) {
 		*na = NA(ifp);
-	} else if (i == NETMAP_ADMODE_NATIVE) {
-		*na = NULL;
-	} else {
+	} else if (i != NETMAP_ADMODE_NATIVE) {
 		struct netmap_adapter *prev_na;
 		struct netmap_generic_adapter *gna;
 		int error;
 
-		*na = NULL;
 		prev_na = NA(ifp);  /* Previously used netmap adapter (can be NULL). */
 		/* save previous na, and try to create a generic
 		 * if the device was not already in use
@@ -1474,6 +1471,7 @@ get_hw_na(struct ifnet *ifp, struct netmap_adapter **na)
 		if (error) {
 			return error;
                 }
+                *na = NA(ifp);
 		gna = (struct netmap_generic_adapter*)NA(ifp);
 		gna->prev = prev_na; /* save old na */
 		if (prev_na != NULL) {
@@ -1482,6 +1480,9 @@ get_hw_na(struct ifnet *ifp, struct netmap_adapter **na)
 			netmap_adapter_get(prev_na);
 		}
 		D("Created generic NA %p (prev %p)", gna, gna->prev);
+	} else {
+                /* ifp is not netmap-capable and we require a native adapter. */
+		*na = NULL;
 	}
 	return 0;
 }
