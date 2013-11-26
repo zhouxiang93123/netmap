@@ -973,29 +973,29 @@ netmap_get_hw_na(struct ifnet *ifp, struct netmap_adapter **na)
 		i = netmap_admode = NETMAP_ADMODE_BEST;
 
 	if (NETMAP_CAPABLE(ifp)) {
+		/* If an adapter already exists, but is
+		 * attached to a vale port, we report that the
+		 * port is busy.
+		 */
 		if (NETMAP_OWNED_BY_KERN(NA(ifp)))
-			/* If an adapter already exists, but is
-			 * attached to a vale port, we report that the
-			 * port is busy.
-			 */
 			return EBUSY;
 
+		/* If an adapter already exists, return it if
+		 * there are active file descriptors or if
+		 * netmap is not forced to use generic
+		 * adapters.
+		 */
 		if (NA(ifp)->active_fds > 0 ||
 				i != NETMAP_ADMODE_GENERIC) {
-			/* If an adapter already exists, return it if
-			 * there are active file descriptors or if
-			 * netmap is not forced to use generic
-			 * adapters.
-			 */
 			*na = NA(ifp);
 			return 0;
 		}
 	}
 
+	/* If there isn't native support and netmap is not allowed
+	 * to use generic adapters, we cannot satisfy the request.
+	 */
 	if (!NETMAP_CAPABLE(ifp) && i == NETMAP_ADMODE_NATIVE)
-		/* no native support and netmap is not allowed to
-		 * use generic adapters
-		 */
 		return EINVAL;
 		
 	/* Otherwise, create a generic adapter and return it,
