@@ -933,21 +933,30 @@ unlock_out:
 }
 
 
-/*
- * Return the na associated with the interface. We have 3 options
- * according to the following truth table:
+/* Get a netmap adapter for the port.
  *
- * XXX correct truth table
+ * If it is possible to satisfy the request, return 0
+ * with *na containing the netmap adapter found.
+ * Otherwise return an error code, with *na containing NULL.
  *
- *                         native_support
- * dev.netmap.admode       YES     NO
- *----------------------------------------
- * NETMAP_ADMODE_BEST      NATIVE  GENERIC
- * NETMAP_ADMODE_NATIVE    NATIVE  --
- * NETMAP_ADMODE_GENERIC   GENERIC GENERIC
+ * When the port is attached to a bridge, we always return
+ * EBUSY.
+ * Otherwise, if the port is already bound to a file descriptor,
+ * then we unconditionally return the existing adapter into *na.
+ * In all the other cases, we return (into *na) either native,
+ * generic or NULL, according to the following table:
+ *
+ *					native_support
+ * active_fds   dev.netmap.admode         YES     NO
+ * -------------------------------------------------------
+ *    >0              *                 NA(ifp) NA(ifp)
+ *
+ *     0        NETMAP_ADMODE_BEST      NATIVE  GENERIC
+ *     0        NETMAP_ADMODE_NATIVE    NATIVE   NULL
+ *     0        NETMAP_ADMODE_GENERIC   GENERIC GENERIC
+ *
  */
 
-// XXX maybe we can just return struct netmap_adapter value
 int
 netmap_get_hw_na(struct ifnet *ifp, struct netmap_adapter **na)
 {
@@ -963,30 +972,47 @@ netmap_get_hw_na(struct ifnet *ifp, struct netmap_adapter **na)
 	if (i < NETMAP_ADMODE_BEST || i >= NETMAP_ADMODE_LAST)
 		i = netmap_admode = NETMAP_ADMODE_BEST;
 
-	// XXX NA(ifp)->active_fds>0 instead if nma_is_generic ?
-	if (NETMAP_CAPABLE(ifp) && (i != NETMAP_ADMODE_GENERIC || nma_is_generic(NA(ifp)))) {
-                /* We enter here when:
-                 *   - ifp has a native adapter attached and we don't want to force netmap to
-                 *     use a generic netmap adapter, or
-                 *   - ifp has a generic adapter attached.
-                 */
-		*na = NA(ifp);
-		return 0;
+	if (NETMAP_CAPABLE(ifp)) {
+		if (NETMAP_OWNED_BY_KERN(NA(ifp)))
+			/* If an adapter already exists, but is
+			 * attached to a vale port, we report that the
+			 * port is busy.
+			 */
+			return EBUSY;
+
+		if (NA(ifp)->active_fds > 0 ||
+				i != NETMAP_ADMODE_GENERIC) {
+			/* If an adapter already exists, return it if
+			 * there are active file descriptors or if
+			 * netmap is not forced to use generic
+			 * adapters.
+			 */
+			*na = NA(ifp);
+			return 0;
+		}
 	}
 
-	if (i == NETMAP_ADMODE_NATIVE)
+	if (!NETMAP_CAPABLE(ifp) && i == NETMAP_ADMODE_NATIVE)
+		/* no native support and netmap is not allowed to
+		 * use generic adapters
+		 */
 		return EINVAL;
-
-	/* all other cases, create a generic adapter */
-
-	/* save previous na, and try to create a generic
-	 * if the device was not already in use
-	 */
+		
+	/* Otherwise, create a generic adapter and return it,
+         * saving the previously used netmap adapter, if any.
+	 *
+	 * Note that here 'prev_na', if not NULL, MUST be a
+	 * native adapter, and CANNOT be a generic one. This is
+	 * true because generic adapters are created on demand, and
+	 * destroyed when not used anymore. Therefore, if the adapter
+	 * currently attached to an interface 'ifp' is generic, it
+	 * must be that
+	 * (NA(ifp)->active_fds > 0 || NETMAP_OWNED_BY_KERN(NA(ifp))).
+	 * Consequently, if NA(ifp) is generic, we will enter one of
+	 * the branches above. This ensures that we never override
+	 * a generic adapter with another generic adapter.
+         */
 	prev_na = NA(ifp);
-	if (prev_na && NETMAP_OWNED_BY_ANY(prev_na)) {
-		D("enter EBUSY %d", prev_na->active_fds);
-		return EBUSY;
-	}
 	error = generic_netmap_attach(ifp);
 	if (error)
 		return error;
