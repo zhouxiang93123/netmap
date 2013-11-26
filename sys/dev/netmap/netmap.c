@@ -157,6 +157,9 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z gle
 /* reduce conditional code */
 #define init_waitqueue_head(x)	// only needed in linux
 
+//#define WITH_VALE
+#ifdef WITH_VALE
+
 #define BDG_RWLOCK_T		struct rwlock // struct rwlock
 
 #define	BDG_RWINIT(b)		\
@@ -168,6 +171,7 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z gle
 #define BDG_RUNLOCK(b)		rw_runlock(&(b)->bdg_lock)
 #define BDG_RWDESTROY(b)	rw_destroy(&(b)->bdg_lock)
 
+#endif /* WITH_VALE */
 
 /* netmap global lock.
  * normally called within the user thread (upon a system call)
@@ -444,6 +448,23 @@ nm_dump_buf(char *p, int len, int lim, char *dst)
 	return dst;
 }
 
+static __inline int
+nma_is_generic(struct netmap_adapter *na)
+{
+	return na->nm_register == generic_netmap_register;
+}
+
+/*
+ * If the NIC is owned by the kernel
+ * (i.e., bridge), neither another bridge nor user can use it;
+ * if the NIC is owned by a user, only users can share it.
+ * Evaluation must be done under NMG_LOCK().
+ */
+#define NETMAP_OWNED_BY_KERN(na)	(na->na_private)
+#define NETMAP_OWNED_BY_ANY(na) \
+	(NETMAP_OWNED_BY_KERN(na) || (na->active_fds > 0))
+
+#ifdef WITH_VALE
 
 /*
  * system parameters (most of them in netmap_kern.h)
@@ -474,18 +495,6 @@ nm_dump_buf(char *p, int len, int lim, char *dst)
 #define NM_FT_NULL		NM_BDG_BATCH_MAX
 #define	NM_BRIDGES		8	/* number of bridges */
 
-/* grab references from the nmd into the na */
-static void
-netmap_set_nmd(struct netmap_adapter *na, struct netmap_mem_d *nmd)
-{
-	na->nm_mem = nmd;
-	na->na_lut = nmd ? nmd->pools[NETMAP_BUF_POOL].lut : NULL;
-	if (nmd == NULL || na->na_lut == NULL) {
-		D("ouch, nmd %p lut %p");
-		panic("netmap_set_nmd");
-	}
-	na->na_lut_objtotal = nmd->pools[NETMAP_BUF_POOL].objtotal;
-}
 
 /*
  * bridge_batch is set via sysctl to the max batch size to be
@@ -604,17 +613,13 @@ nma_is_vp(struct netmap_adapter *na)
 	return na->nm_register == bdg_netmap_reg;
 }
 
+
 static __inline int
 nma_is_host(struct netmap_adapter *na)
 {
 	return na->nm_register == NULL;
 }
 
-static __inline int
-nma_is_generic(struct netmap_adapter *na)
-{
-	return na->nm_register == generic_netmap_register;
-}
 
 static __inline int
 nma_is_hw(struct netmap_adapter *na)
@@ -629,20 +634,6 @@ nma_is_bwrap(struct netmap_adapter *na)
 	return na->nm_register == netmap_bwrap_register;
 }
 
-
-/*
- * If the NIC is owned by the kernel
- * (i.e., bridge), neither another bridge nor user can use it;
- * if the NIC is owned by a user, only users can share it.
- * Evaluation must be done under NMG_LOCK().
- */
-#define NETMAP_OWNED_BY_KERN(na)	(na->na_private)
-#define NETMAP_OWNED_BY_ANY(na) \
-	(NETMAP_OWNED_BY_KERN(na) || (na->active_fds > 0))
-
-/*
- * NA(ifp)->bdg_port	port index
- */
 
 
 /*
@@ -673,6 +664,7 @@ pkt_copy(void *_src, void *_dst, int l)
                 *dst++ = *src++;
         }
 }
+
 
 
 /*
@@ -797,6 +789,8 @@ nm_alloc_bdgfwd(struct netmap_adapter *na)
 	}
 	return 0;
 }
+
+#endif /* WITH_VALE */
 
 
 /*
@@ -1062,6 +1056,8 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 }
 
 
+#ifdef WITH_VALE
+
 static void
 netmap_bdg_detach_common(struct nm_bridge *b, int hw, int sw)
 {
@@ -1138,6 +1134,7 @@ netmap_adapter_vp_dtor(struct netmap_adapter *na)
 	free(ifp, M_DEVBUF);
 	na->ifp = NULL;
 }
+#endif /* WITH_VALE */
 
 /*
  * returns 1 if this is the last instance and we can free priv
@@ -1530,13 +1527,15 @@ static int
 get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 {
 	const char *name = nmr->nr_name;
-	struct netmap_adapter *ret;
-	struct netmap_vp_adapter *vpna;
 	struct ifnet *ifp;
+	int error = 0;
+	struct netmap_adapter *ret;
+#ifdef WITH_VALE
+	struct netmap_vp_adapter *vpna;
 	struct nm_bridge *b;
 	int i, j, cand = -1, cand2 = -1;
 	int needed;
-	int error = 0;
+#endif /* WITH_VALE */
 
 	*na = NULL;     /* default return value */
 
@@ -1546,6 +1545,9 @@ get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 		goto no_bridge_port;  /* no VALE prefix */
 	}
 
+#ifndef WITH_VALE
+	return ENXIO;	/* XXX no bridge support */
+#else /* WITH_VALE */
 	b = nm_find_bridge(name, create);
 	if (b == NULL) {
 		D("no bridges available for '%s'", name);
@@ -1692,6 +1694,7 @@ get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 	*na = ret;
 	netmap_adapter_get(ret);
 	return 0;
+#endif /* WITH_VALE */
 
 no_bridge_port:
 	ifp = ifunit_ref(name);
@@ -1887,10 +1890,13 @@ out:
 		 */
 		wmb(); /* make sure previous writes are visible to all CPUs */
 		priv->np_nifp = nifp;
-		netmap_set_nmd(na, na->nm_mem);
+		na->na_lut = na->nm_mem->pools[NETMAP_BUF_POOL].lut;
+		na->na_lut_objtotal = na->nm_mem->pools[NETMAP_BUF_POOL].objtotal;
 	}
 	return nifp;
 }
+
+#ifdef WITH_VALE
 
 /* Process NETMAP_BDG_ATTACH and NETMAP_BDG_DETACH */
 static int
@@ -2112,6 +2118,8 @@ netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func)
 	return error;
 }
 
+#endif /* WITH_VALE */
+
 
 /*
  * ioctl(2) support for the "netmap" device.
@@ -2177,7 +2185,11 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			break;
 		}
 		if (nmr->nr_cmd == NETMAP_BDG_LIST) {
+#ifdef WITH_VALE
 			error = netmap_bdg_ctl(nmr, NULL);
+#else /* !WITH_VALE */
+			error = EINVAL;
+#endif /* !WITH_VALE */
 			break;
 		}
 
@@ -2223,7 +2235,11 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		/* possibly attach/detach NIC and VALE switch */
 		i = nmr->nr_cmd;
 		if (i == NETMAP_BDG_ATTACH || i == NETMAP_BDG_DETACH) {
+#ifdef WITH_VALE
 			error = netmap_bdg_ctl(nmr, NULL);
+#else /* !WITH_VALE */
+			error = EINVAL;
+#endif /* !WITH_VALE */
 			break;
 		} else if (i != 0) {
 			D("nr_cmd must be 0 not %d", i);
@@ -2652,9 +2668,6 @@ out:
 /*------- driver support routines ------*/
 
 static int netmap_hw_krings_create(struct netmap_adapter *);
-static int netmap_vp_krings_create(struct netmap_adapter *);
-static int netmap_bwrap_krings_create(struct netmap_adapter *);
-static void netmap_bwrap_krings_delete(struct netmap_adapter *);
 
 static int
 netmap_notify(struct netmap_adapter *na, u_int n_ring, enum txrx tx, int flags)
@@ -2808,6 +2821,12 @@ netmap_hw_krings_create(struct netmap_adapter *na)
 		na->num_tx_rings + 1, na->num_rx_rings + 1, 0);
 }
 
+#ifdef WITH_VALE
+
+// static int netmap_vp_krings_create(struct netmap_adapter *);
+// static int netmap_bwrap_krings_create(struct netmap_adapter *);
+// static void netmap_bwrap_krings_delete(struct netmap_adapter *);
+
 static int
 netmap_vp_krings_create(struct netmap_adapter *na)
 {
@@ -2852,6 +2871,7 @@ netmap_vp_krings_delete(struct netmap_adapter *na)
 	nm_free_bdgfwd(na);
 	netmap_krings_delete(na);
 }
+#endif /* WITH_VALE */
 
 
 /*
@@ -2875,9 +2895,11 @@ netmap_detach(struct ifnet *ifp)
 }
 
 
+#ifdef WITH_VALE
 static int
 nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n,
 	struct netmap_vp_adapter *na, u_int ring_nr);
+#endif /* WITH_VALE */
 
 
 /*
@@ -3030,6 +3052,8 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
 }
 
 
+#ifdef WITH_VALE
+
 /*
  * Grab packets from a kring, move them into the ft structure
  * associated to the tx (input) port. Max one instance per port,
@@ -3095,6 +3119,8 @@ nm_bdg_preflush(struct netmap_vp_adapter *na, u_int ring_nr,
 	BDG_RUNLOCK(b);
 	return j;
 }
+
+#endif /* WITH_VALE */
 
 
 /*
@@ -3184,6 +3210,8 @@ netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 	return netmap_common_irq(ifp, q, work_done);
 }
 
+
+#ifdef WITH_VALE
 
 /*
  *---- support for virtual bridge -----
@@ -4060,6 +4088,7 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 	return 0;
 }
 
+#endif /* WITH_VALE */
 
 static struct cdev *netmap_dev; /* /dev/netmap character device. */
 
@@ -4088,9 +4117,12 @@ netmap_init(void)
 	netmap_dev = make_dev(&netmap_cdevsw, 0, UID_ROOT, GID_WHEEL, 0660,
 			      "netmap");
 
+	i = 0; // XXX
+#ifdef WITH_VALE
 	bzero(nm_bridges, sizeof(struct nm_bridge) * NM_BRIDGES); /* safety */
 	for (i = 0; i < NM_BRIDGES; i++)
 		BDG_RWINIT(&nm_bridges[i]);
+#endif /* WITH_VALE */
 	return (error);
 }
 
