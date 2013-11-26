@@ -479,7 +479,11 @@ static void
 netmap_set_nmd(struct netmap_adapter *na, struct netmap_mem_d *nmd)
 {
 	na->nm_mem = nmd;
-	na->na_lut = nmd->pools[NETMAP_BUF_POOL].lut;
+	na->na_lut = nmd ? nmd->pools[NETMAP_BUF_POOL].lut : NULL;
+	if (nmd == NULL || na->na_lut == NULL) {
+		D("ouch, nmd %p lut %p");
+		panic("netmap_set_nmd");
+	}
 	na->na_lut_objtotal = nmd->pools[NETMAP_BUF_POOL].objtotal;
 }
 
@@ -1893,6 +1897,7 @@ out:
 		 */
 		wmb(); /* make sure previous writes are visible to all CPUs */
 		priv->np_nifp = nifp;
+		netmap_set_nmd(na, na->nm_mem);
 	}
 	return nifp;
 }
@@ -2704,7 +2709,6 @@ netmap_attach_common(struct netmap_adapter *na)
 
 	if (na->nm_mem == NULL)
 		na->nm_mem = &nm_mem;
-	netmap_set_nmd(na, na->nm_mem);
 	return 0;
 }
 
@@ -4033,7 +4037,7 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 	na->nm_krings_create = netmap_bwrap_krings_create;
 	na->nm_krings_delete = netmap_bwrap_krings_delete;
 	na->nm_notify = netmap_bwrap_notify;
-	netmap_set_nmd(na, hwna->nm_mem);
+	na->nm_mem = hwna->nm_mem;
 	na->na_private = na; /* prevent NIOCREGIF */
 	bna->up.retry = 1; /* XXX maybe this should depend on the hwna */
 
@@ -4050,7 +4054,7 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 	// hostna->nm_txsync = netmap_bwrap_host_txsync;
 	// hostna->nm_rxsync = netmap_bwrap_host_rxsync;
 	hostna->nm_notify = netmap_bwrap_host_notify;
-	netmap_set_nmd(hostna, na->nm_mem);
+	hostna->nm_mem = na->nm_mem;
 	hostna->na_private = bna;
 
 	D("%s<->%s txr %d txd %d rxr %d rxd %d", fake->if_xname, real->if_xname,
