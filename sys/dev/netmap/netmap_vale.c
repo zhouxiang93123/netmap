@@ -1637,15 +1637,14 @@ netmap_bwrap_intr_notify(struct netmap_adapter *na, u_int ring_nr, enum txrx tx,
 	if (!(ifp->if_capenable & IFCAP_NETMAP))
 		return 0;
 
-	if (tx == NR_TX) {
-		kring = &na->tx_rings[ring_nr];
+	if (flags & NAF_DISABLE_NOTIFY) {
 		bkring = &vpna->up.rx_rings[ring_nr];
-		if (kring->nkr_stopped)
-			netmap_disable_ring(bkring);
-		else
-			bkring->nkr_stopped = 0;
+		netmap_disable_ring(bkring);
 		return 0;
 	}
+
+	if (tx == NR_TX)
+		return 0;
 
 	kring = &na->rx_rings[ring_nr];
 	ring = kring->ring;

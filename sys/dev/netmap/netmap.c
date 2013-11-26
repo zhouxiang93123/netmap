@@ -272,12 +272,12 @@ void netmap_disable_all_rings(struct ifnet *ifp)
 
 	for (i = 0; i < na->num_tx_rings + 1; i++) {
 		netmap_disable_ring(na->tx_rings + i);
-		na->nm_notify(na, i, NR_TX, 
+		na->nm_notify(na, i, NR_TX, NAF_DISABLE_NOTIFY |
 			(i == na->num_tx_rings ? NAF_GLOBAL_NOTIFY: 0));
 	}
 	for (i = 0; i < na->num_rx_rings + 1; i++) {
 		netmap_disable_ring(na->rx_rings + i);
-		na->nm_notify(na, i, NR_RX, 
+		na->nm_notify(na, i, NR_RX, NAF_DISABLE_NOTIFY |
 			(i == na->num_rx_rings ? NAF_GLOBAL_NOTIFY: 0));
 	}
 }
