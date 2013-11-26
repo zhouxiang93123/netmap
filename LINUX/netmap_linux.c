@@ -34,33 +34,70 @@
 
 /* =========================== MITIGATION SUPPORT ============================= */
 
-void netmap_mitigation_init(struct netmap_adapter *na)
+/*
+ * The generic driver calls netmap once per received packet.
+ * This is inefficient so we implement a mitigation mechanism,
+ * as follows:
+ * - the first packet on an idle receiver triggers a notification
+ *   and starts a timer;
+ * - subsequent incoming packets do not cause a notification
+ *   until the timer expires;
+ * - when the timer expires and there are pending packets,
+ *   a notification is sent up and the timer is restarted.
+ */
+enum hrtimer_restart
+generic_timer_handler(struct hrtimer *t)
 {
-    hrtimer_init(&na->mit_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-    na->mit_timer.function = &generic_timer_handler;
-    na->mit_pending = 0;
+    struct netmap_generic_adapter *gna =
+	container_of(t, struct netmap_generic_adapter, mit_timer);
+    struct netmap_adapter *na = (struct netmap_adapter *)gna;
+    u_int work_done;
+
+    if (!gna->mit_pending) {
+        return HRTIMER_NORESTART;
+    }
+
+    /* Some work arrived while the timer was counting down:
+     * Reset the pending work flag, restart the timer and send
+     * a notification.
+     */
+    gna->mit_pending = 0;
+    /* below is a variation of netmap_generic_irq */
+    if (na->ifp->if_capenable & IFCAP_NETMAP)
+        netmap_common_irq(na->ifp, 0, &work_done);
+    // IFRATE(rate_ctx.new.rxirq++);
+    netmap_mitigation_restart(gna);
+
+    return HRTIMER_RESTART;
 }
 
-extern unsigned int netmap_generic_mit;
 
-void netmap_mitigation_start(struct netmap_adapter *na)
+void netmap_mitigation_init(struct netmap_generic_adapter *gna)
 {
-    hrtimer_start(&na->mit_timer, ktime_set(0, netmap_generic_mit), HRTIMER_MODE_REL);
+    hrtimer_init(&gna->mit_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+    gna->mit_timer.function = &generic_timer_handler;
+    gna->mit_pending = 0;
 }
 
-void netmap_mitigation_restart(struct netmap_adapter *na)
+
+void netmap_mitigation_start(struct netmap_generic_adapter *gna)
 {
-    hrtimer_forward_now(&na->mit_timer, ktime_set(0, netmap_generic_mit));
+    hrtimer_start(&gna->mit_timer, ktime_set(0, netmap_generic_mit), HRTIMER_MODE_REL);
 }
 
-int netmap_mitigation_active(struct netmap_adapter *na)
+void netmap_mitigation_restart(struct netmap_generic_adapter *gna)
 {
-    return hrtimer_active(&na->mit_timer);
+    hrtimer_forward_now(&gna->mit_timer, ktime_set(0, netmap_generic_mit));
 }
 
-void netmap_mitigation_cleanup(struct netmap_adapter *na)
+int netmap_mitigation_active(struct netmap_generic_adapter *gna)
 {
-    hrtimer_cancel(&na->mit_timer);
+    return hrtimer_active(&gna->mit_timer);
+}
+
+void netmap_mitigation_cleanup(struct netmap_generic_adapter *gna)
+{
+    hrtimer_cancel(&gna->mit_timer);
 }
 
 
@@ -104,8 +141,9 @@ static u16 generic_ndo_select_queue(struct ifnet *ifp, struct mbuf *m)
 }
 
 /* Must be called under rtnl. */
-void netmap_catch_packet_steering(struct netmap_adapter *na, int enable)
+void netmap_catch_packet_steering(struct netmap_generic_adapter *gna, int enable)
 {
+    struct netmap_adapter *na = &gna->up.up;
     struct ifnet *ifp = na->ifp;
 
     if (enable) {
@@ -116,9 +154,9 @@ void netmap_catch_packet_steering(struct netmap_adapter *na, int enable)
          * and make the driver use it.
          */
         na->if_transmit = (void *)ifp->netdev_ops;
-        *na->generic_ndo_p = *ifp->netdev_ops;  /* Copy */
-        na->generic_ndo_p->ndo_select_queue = &generic_ndo_select_queue;
-        ifp->netdev_ops = na->generic_ndo_p;
+        gna->generic_ndo = *ifp->netdev_ops;  /* Copy */
+        gna->generic_ndo.ndo_select_queue = &generic_ndo_select_queue;
+        ifp->netdev_ops = &gna->generic_ndo;
     } else {
 	/* Restore the original netdev_ops. */
         ifp->netdev_ops = (void *)na->if_transmit;
@@ -181,27 +219,14 @@ generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq)
 }
 
 
-
 /* =========================== SOCKET SUPPORT ============================ */
-
-// TODO move this to netmap_kern.h
-#include <dev/netmap/netmap_mem2.h>
-/* The bridge references the buffers using the device specific look up table */
-static inline void *
-BDG_NMB(struct netmap_mem_d *nmd, struct netmap_slot *slot)
-{
-	struct lut_entry *lut = nmd->pools[NETMAP_BUF_POOL].lut;
-	uint32_t i = slot->buf_idx;
-	return (unlikely(i >= nmd->pools[NETMAP_BUF_POOL].objtotal)) ?  lut[0].vaddr : lut[i].vaddr;
-}
 
 static int netmap_socket_sendmsg(struct kiocb *iocb, struct socket *sock,
                                  struct msghdr *m, size_t total_len)
 {
     struct netmap_socket *np_sock = container_of(sock, struct netmap_socket, sock);
     struct netmap_priv_d *priv = np_sock->priv;
-    struct ifnet *ifp = priv->np_ifp;
-    struct netmap_adapter *na;
+    struct netmap_adapter *na = priv->np_na;
     struct netmap_ring *ring;
     unsigned i, last;
     unsigned avail;
@@ -213,16 +238,10 @@ static int netmap_socket_sendmsg(struct kiocb *iocb, struct socket *sock,
 
     ND("message_len %d, %p", (int)total_len, np_sock);
 
-    if (unlikely(ifp == NULL || !NETMAP_CAPABLE(ifp))) {
-        if (ifp == NULL) {
-            RD(5, "NULL ifp");
-        } else {
-            RD(5, "Not netmap capable");
-        }
+    if (unlikely(na == NULL)) {
+        RD(5, "Null netmap adapter");
         return total_len;
     }
-
-    na = NA(ifp);
 
     /* Grab the netmap ring normally used from userspace. */
     ring = na->tx_rings[0].ring;
@@ -261,7 +280,7 @@ static int netmap_socket_sendmsg(struct kiocb *iocb, struct socket *sock,
                 return 0;
             }
 
-            dst = BDG_NMB(na->nm_mem, &ring->slot[i]);
+            dst = BDG_NMB(na, &ring->slot[i]);
 
             ring->slot[i].len = nm_frag_size;
             ring->slot[i].flags = slot_flags;
@@ -284,7 +303,7 @@ static int netmap_socket_sendmsg(struct kiocb *iocb, struct socket *sock,
     ring->cur = i;
     ring->avail = avail;
 
-    na->nm_txsync(ifp, 0, 0);
+    na->nm_txsync(na, 0, 0);
     ND("B) cur=%d avail=%d, hwcur=%d, hwavail=%d\n", i, avail, na->tx_rings[0].nr_hwcur,
                                                                na->tx_rings[0].nr_hwavail);
 
@@ -368,46 +387,15 @@ void netmap_sock_teardown(struct netmap_priv_d *priv)
 
 /* ========================= FILE OPERATIONS SUPPORT =========================== */
 
-static struct device_driver *
-linux_netmap_find_driver(struct device *dev)
-{
-	struct device_driver *dd;
-
-	while ( (dd = dev->driver) == NULL ) {
-		if ( (dev = dev->parent) == NULL )
-			return NULL;
-	}
-	return dd;
-}
-
 struct net_device *
 ifunit_ref(const char *name)
 {
-	struct net_device *ifp = dev_get_by_name(&init_net, name);
-	struct device_driver *dd;
-
-	if (ifp == NULL)
-		return NULL;
-
-	if ( (dd = linux_netmap_find_driver(&ifp->dev)) == NULL )
-		goto error;
-
-	if (!try_module_get(dd->owner))
-		goto error;
-
-	return ifp;
-error:
-	dev_put(ifp);
-	return NULL;
+	return dev_get_by_name(&init_net, name);
 }
 
 void if_rele(struct net_device *ifp)
 {
-	struct device_driver *dd;
-	dd = linux_netmap_find_driver(&ifp->dev);
 	dev_put(ifp);
-	if (dd)
-		module_put(dd->owner);
 }
 
 
@@ -427,9 +415,9 @@ linux_netmap_poll(struct file * file, struct poll_table_struct *pwait)
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,28)
 	int events = POLLIN | POLLOUT; /* XXX maybe... */
 #elif LINUX_VERSION_CODE < KERNEL_VERSION(3,4,0)
-	int events = pwait ? pwait->key : POLLIN | POLLOUT;
+	int events = pwait ? pwait->key : POLLIN | POLLOUT | POLLERR;
 #else /* in 3.4.0 field 'key' was renamed to '_key' */
-	int events = pwait ? pwait->_key : POLLIN | POLLOUT;
+	int events = pwait ? pwait->_key : POLLIN | POLLOUT | POLLERR;
 #endif
 	return netmap_poll((void *)pwait, events, (void *)file);
 }
@@ -610,10 +598,13 @@ EXPORT_SYMBOL(netmap_reset);		/* ring init routines */
 EXPORT_SYMBOL(netmap_buf_size);
 EXPORT_SYMBOL(netmap_rx_irq);	        /* default irq handler */
 EXPORT_SYMBOL(netmap_no_pendintr);	/* XXX mitigation - should go away */
+#ifdef WITH_VALE
 EXPORT_SYMBOL(netmap_bdg_ctl);		/* bridge configuration routine */
 EXPORT_SYMBOL(netmap_bdg_learning);	/* the default lookup function */
+#endif /* WITH_VALE */
 EXPORT_SYMBOL(netmap_disable_all_rings);
 EXPORT_SYMBOL(netmap_enable_all_rings);
+EXPORT_SYMBOL(netmap_krings_create);
 
 
 MODULE_AUTHOR("http://info.iet.unipi.it/~luigi/netmap/");

@@ -42,10 +42,11 @@
  * Register/unregister, similar to e1000_reinit_safe()
  */
 static int
-e1000_netmap_reg(struct ifnet *ifp, int onoff)
+e1000_netmap_reg(struct netmap_adapter *na, int onoff)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
-	struct netmap_adapter *na = NA(ifp);
+	struct netmap_hw_adapter *hwna = (struct netmap_hw_adapter*)na;
 	int error = 0;
 
 	if (na == NULL)
@@ -61,10 +62,12 @@ e1000_netmap_reg(struct ifnet *ifp, int onoff)
 
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 		na->if_transmit = (void *)ifp->netdev_ops;
-		ifp->netdev_ops = na->nm_ndo_p;
+		ifp->netdev_ops = &hwna->nm_ndo;
 	} else {
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 		ifp->netdev_ops = (void *)na->if_transmit;
 	}
 
@@ -85,20 +88,18 @@ e1000_netmap_reg(struct ifnet *ifp, int onoff)
  * Reconcile kernel and user view of the transmit ring.
  */
 static int
-e1000_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
+e1000_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct e1000_tx_ring* txr = &adapter->tx_ring[ring_nr];
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
+	int d;
 
 	/* generate an interrupt approximately every half ring */
 	int report_frequency = kring->nkr_num_slots >> 1;
-
-	if (!netif_carrier_ok(ifp))
-		return 0;
 
 	/* take a copy of ring->cur now, and never read it again */
 	k = ring->cur;
@@ -111,6 +112,20 @@ e1000_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 	 * netmap ring, l is the corresponding index in the NIC ring.
 	 */
 	j = kring->nr_hwcur;
+	d = k - j - kring->nr_hwreserved;
+	if (d < 0)
+		d += kring->nkr_num_slots;
+	if (d > kring->nr_hwavail) {
+		ND("=== j %d k %d d %d hwavail %d", j, k, d, kring->nr_hwavail);
+		return netmap_ring_reinit(kring);
+	}
+	if (!netif_carrier_ok(ifp)) {
+		kring->nr_hwreserved += d;
+		kring->nr_hwavail -= d;
+		ring->reserved = kring->nr_hwreserved;
+		ring->avail = kring->nr_hwavail;
+		return 0;
+	}
 	if (j != k) {	/* we have new packets to send */
 		l = netmap_idx_k2n(kring, j);
 		for (n = 0; j != k; n++) {
@@ -142,7 +157,11 @@ e1000_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 			l = (l == lim) ? 0 : l + 1;
 		}
 		kring->nr_hwcur = k; /* the saved ring->cur */
-		kring->nr_hwavail -= n;
+		kring->nr_hwreserved -= n;
+		if (kring->nr_hwreserved < 0) {
+			kring->nr_hwavail += kring->nr_hwreserved;
+			kring->nr_hwreserved = 0;
+		}
 
 		wmb(); /* synchronize writes to the NIC ring */
 
@@ -171,6 +190,7 @@ e1000_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
 	}
 	/* update avail to what the kernel knows */
 	ring->avail = kring->nr_hwavail;
+	ring->reserved = kring->nr_hwreserved;
 
 	return 0;
 }
@@ -180,10 +200,10 @@ e1000_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
  * Reconcile kernel and user view of the receive ring.
  */
 static int
-e1000_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
+e1000_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
-	struct netmap_adapter *na = NA(ifp);
 	struct e1000_rx_ring *rxr = &adapter->rx_ring[ring_nr];
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
@@ -290,8 +310,9 @@ static int e1000_netmap_init_buffers(struct SOFTC_T *adapter)
 	unsigned int i, r, si;
 	uint64_t paddr;
 
-	if (!na || !(na->ifp->if_capenable & IFCAP_NETMAP))
+	if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
 		return 0;
+        }
 	adapter->alloc_rx_buf = e1000_no_rx_alloc;
 	for (r = 0; r < na->num_rx_rings; r++) {
 		struct e1000_rx_ring *rxr;
@@ -348,6 +369,7 @@ e1000_netmap_attach(struct SOFTC_T *adapter)
 	na.nm_register = e1000_netmap_reg;
 	na.nm_txsync = e1000_netmap_txsync;
 	na.nm_rxsync = e1000_netmap_rxsync;
-	netmap_attach(&na, 1);
+	na.num_tx_rings = na.num_rx_rings = 1;
+	netmap_attach(&na);
 }
 /* end of file */

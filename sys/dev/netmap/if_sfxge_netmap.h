@@ -81,11 +81,16 @@ static int
 sfxge_netmap_init_buffers(struct sfxge_softc *sc)
 {
 	struct netmap_adapter *na = NA(sc->ifnet);
-	struct netmap_slot *slot = netmap_reset(na, NR_TX, 0, 0);
+	struct netmap_slot *slot;
 	int i, l, n, max_avail;
 	void *addr;
 	uint64_t paddr;
 
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return 0;
+        }
+
+        slot = netmap_reset(na, NR_TX, 0, 0);
 	// tx rings, see
 	//	sfxge_tx_qinit()
 	return 0;
@@ -97,10 +102,10 @@ sfxge_netmap_init_buffers(struct sfxge_softc *sc)
  * Only called on the first register or the last unregister.
  */
 static int
-sfxge_netmap_reg(struct ifnet *ifp, int onoff)
+sfxge_netmap_reg(struct netmap_adapter *na, int onoff)
 {
+        struct ifnet *ifp = na->ifp;
 	struct sfxge_softc *sc = ifp->if_softc;
-	struct netmap_adapter *na = NA(ifp);
 	int error = 0;
 
 	if (na == NULL)
@@ -113,6 +118,7 @@ sfxge_netmap_reg(struct ifnet *ifp, int onoff)
 
 	if (onoff) { /* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 
 		/* save if_transmit and replace with our routine */
 		na->if_transmit = ifp->if_transmit;
@@ -132,6 +138,7 @@ fail:
 		/* restore if_transmit */
 		ifp->if_transmit = na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 		/* initialize the card, this time in standard mode */
 		sfxge_start(sc);	/* also enables intr */
 	}
@@ -143,12 +150,12 @@ fail:
  * Reconcile kernel and user view of the transmit ring.
  */
 static int
-sfxge_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
+sfxge_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct sfxge_softc *sc = ifp->if_softc;
 	struct sfxge_txq *txr = sc->txq[ring_nr];
 
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k = ring->cur, l, n = 0, lim = kring->nkr_num_slots - 1;
@@ -287,12 +294,12 @@ ring_reset:
  *
  */
 static int
-sfxge_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
+sfxge_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct sfxge_softc *sc = ifp->if_softc;
 	struct sfxge_rxq *rxq = sc->rxq[ring_nr];
 	struct sfxge_evq *evq = sc->evq[ring_nr];
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;
@@ -432,7 +439,8 @@ sfxge_netmap_attach(struct sfxge_softc *sc)
 	na.nm_rxsync = sfxge_netmap_rxsync;
 	na.nm_register = sfxge_netmap_reg;
 	na.num_tx_rings = SFXGE_TXQ_NTYPES + SFXGE_RX_SCALE_MAX;
-	netmap_attach(&na, SFXGE_RX_SCALE_MAX);
+	na.num_rx_rings = SFXGE_RX_SCALE_MAX;
+	netmap_attach(&na);
 }	
 
 /* end of file */

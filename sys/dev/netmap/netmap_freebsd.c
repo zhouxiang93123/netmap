@@ -62,25 +62,26 @@
 int
 netmap_catch_rx(struct netmap_adapter *na, int intercept)
 {
-    struct ifnet *ifp = na->ifp;
+	struct netmap_generic_adapter *gna = (struct netmap_generic_adapter *)na;
+	struct ifnet *ifp = na->ifp;
 
-    if (intercept) {
-        if (na->save_if_input) {
-            D("cannot intercept again");
-            return EINVAL; /* already set */
-        }
-        na->save_if_input = ifp->if_input;
-        // ifp->if_input = generic_rx_handler; XXX tmp commented out
-    } else {
-        if (!na->save_if_input){
-            D("cannot restore");
-            return EINVAL;  /* not saved */
-        }
-        ifp->if_input = na->save_if_input;
-        na->save_if_input = NULL;
-    }
+	if (intercept) {
+		if (gna->save_if_input) {
+			D("cannot intercept again");
+			return EINVAL; /* already set */
+		}
+		gna->save_if_input = ifp->if_input;
+		ifp->if_input = generic_rx_handler;
+	} else {
+		if (!gna->save_if_input){
+			D("cannot restore");
+			return EINVAL;  /* not saved */
+		}
+		ifp->if_input = gna->save_if_input;
+		gna->save_if_input = NULL;
+	}
 
-    return 0;
+	return 0;
 }
 
 /*
@@ -91,11 +92,11 @@ netmap_catch_rx(struct netmap_adapter *na, int intercept)
  * XXX see if FreeBSD has such a mechanism
  */
 void
-netmap_catch_packet_steering(struct netmap_adapter *na, int enable)
+netmap_catch_packet_steering(struct netmap_generic_adapter *na, int enable)
 {
-    if (enable) {
-    } else {
-    }
+	if (enable) {
+	} else {
+	}
 }
 
 /* Transmit routine used by generic_netmap_txsync(). Returns 0 on success
@@ -117,20 +118,20 @@ int
 generic_xmit_frame(struct ifnet *ifp, struct mbuf *m,
 	void *addr, u_int len, u_int ring_nr)
 {
-    int ret;
+	int ret;
 
-    m->m_len = m->m_pkthdr.len = 0;
+	m->m_len = m->m_pkthdr.len = 0;
 
-    // copy data to the mbuf
-    m_copyback(m, 0, len, addr);
+	// copy data to the mbuf
+	m_copyback(m, 0, len, addr);
 
-    // inc refcount. We are alone, so we can skip the atomic
-    atomic_fetchadd_int(m->m_ext.ref_cnt, 1);
-    m->m_flags |= M_FLOWID;
-    m->m_pkthdr.flowid = ring_nr;
-    m->m_pkthdr.rcvif = ifp; /* used for tx notification */
-    ret = ifp->if_transmit(ifp, m);
-    return ret;
+	// inc refcount. We are alone, so we can skip the atomic
+	atomic_fetchadd_int(m->m_ext.ref_cnt, 1);
+	m->m_flags |= M_FLOWID;
+	m->m_pkthdr.flowid = ring_nr;
+	m->m_pkthdr.rcvif = ifp; /* used for tx notification */
+	ret = ifp->if_transmit(ifp, m);
+	return ret;
 }
 
 /*
@@ -140,45 +141,44 @@ generic_xmit_frame(struct ifnet *ifp, struct mbuf *m,
 int
 generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx)
 {
-    D("called");
-    return 0;
+	D("called");
+	return 0;
 }
 
 void
 generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq)
 {
-    D("called");
-    *txq = 1;
-    *rxq = 1;
+	D("called");
+	*txq = 1;
+	*rxq = 1;
 }
 
-void netmap_mitigation_init(struct netmap_adapter *na)
+void netmap_mitigation_init(struct netmap_generic_adapter *na)
 {
-    D("called");
-    na->mit_pending = 0;
+	ND("called");
+	na->mit_pending = 0;
 }
 
-extern unsigned int netmap_generic_mit;
 
-void netmap_mitigation_start(struct netmap_adapter *na)
+void netmap_mitigation_start(struct netmap_generic_adapter *na)
 {
-    D("called");
+	ND("called");
 }
 
-void netmap_mitigation_restart(struct netmap_adapter *na)
+void netmap_mitigation_restart(struct netmap_generic_adapter *na)
 {
-    D("called");
+	ND("called");
 }
 
-int netmap_mitigation_active(struct netmap_adapter *na)
+int netmap_mitigation_active(struct netmap_generic_adapter *na)
 {
-    D("called");
-    return 0;
+	ND("called");
+	return 0;
 }
 
-void netmap_mitigation_cleanup(struct netmap_adapter *na)
+void netmap_mitigation_cleanup(struct netmap_generic_adapter *na)
 {
-    D("called");
+	ND("called");
 }
 
 int netmap_sock_setup(struct netmap_priv_d *priv)

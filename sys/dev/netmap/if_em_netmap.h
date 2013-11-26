@@ -88,10 +88,10 @@ em_netmap_unblock_tasks(struct adapter *adapter)
  * Register/unregister routine
  */
 static int
-em_netmap_reg(struct ifnet *ifp, int onoff)
+em_netmap_reg(struct netmap_adapter *na, int onoff)
 {
+        struct ifnet *ifp = na->ifp;
 	struct adapter *adapter = ifp->if_softc;
-	struct netmap_adapter *na = NA(ifp);
 	int error = 0;
 
 	if (na == NULL)
@@ -106,6 +106,7 @@ em_netmap_reg(struct ifnet *ifp, int onoff)
 
 	if (onoff) {
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 
 		na->if_transmit = ifp->if_transmit;
 		ifp->if_transmit = netmap_transmit;
@@ -120,6 +121,7 @@ fail:
 		/* return to non-netmap mode */
 		ifp->if_transmit = na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 		em_init_locked(adapter);	/* also enable intr */
 	}
 	em_netmap_unblock_tasks(adapter);
@@ -131,11 +133,11 @@ fail:
  * Reconcile kernel and user view of the transmit ring.
  */
 static int
-em_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
+em_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct adapter *adapter = ifp->if_softc;
 	struct tx_ring *txr = &adapter->tx_rings[ring_nr];
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
@@ -227,11 +229,11 @@ em_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
  * Reconcile kernel and user view of the receive ring.
  */
 static int
-em_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
+em_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct adapter *adapter = ifp->if_softc;
 	struct rx_ring *rxr = &adapter->rx_rings[ring_nr];
-	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;
@@ -342,7 +344,8 @@ em_netmap_attach(struct adapter *adapter)
 	na.nm_txsync = em_netmap_txsync;
 	na.nm_rxsync = em_netmap_rxsync;
 	na.nm_register = em_netmap_reg;
-	netmap_attach(&na, adapter->num_queues);
+	na.num_tx_rings = na.num_rx_rings = adapter->num_queues;
+	netmap_attach(&na);
 }
 
 /* end of file */

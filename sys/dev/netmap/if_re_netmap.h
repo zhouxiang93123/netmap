@@ -43,10 +43,10 @@
  * only called on the first register or the last unregister.
  */
 static int
-re_netmap_reg(struct ifnet *ifp, int onoff)
+re_netmap_reg(struct netmap_adapter *na, int onoff)
 {
+        struct ifnet *ifp = na->ifp;
 	struct rl_softc *adapter = ifp->if_softc;
-	struct netmap_adapter *na = NA(ifp);
 	int error = 0;
 
 	if (na == NULL)
@@ -58,6 +58,7 @@ re_netmap_reg(struct ifnet *ifp, int onoff)
 
 	if (onoff) {
 		ifp->if_capenable |= IFCAP_NETMAP;
+                na->na_flags |= NAF_NATIVE_ON;
 
 		/* save if_transmit to restore it later */
 		na->if_transmit = ifp->if_transmit;
@@ -74,6 +75,7 @@ fail:
 		/* restore if_transmit */
 		ifp->if_transmit = na->if_transmit;
 		ifp->if_capenable &= ~IFCAP_NETMAP;
+                na->na_flags &= ~NAF_NATIVE_ON;
 		re_init_locked(adapter);	/* also enables intr */
 	}
 	return (error);
@@ -84,11 +86,11 @@ fail:
  * Reconcile kernel and user view of the transmit ring.
  */
 static int
-re_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
+re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct rl_softc *sc = ifp->if_softc;
 	struct rl_txdesc *txd = sc->rl_ldata.rl_tx_desc;
-	struct netmap_adapter *na = NA(sc->rl_ifp);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	int j, k, l, n, lim = kring->nkr_num_slots - 1;
@@ -176,11 +178,11 @@ re_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int flags)
  * Reconcile kernel and user view of the receive ring.
  */
 static int
-re_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int flags)
+re_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+        struct ifnet *ifp = na->ifp;
 	struct rl_softc *sc = ifp->if_softc;
 	struct rl_rxdesc *rxd = sc->rl_ldata.rl_rx_desc;
-	struct netmap_adapter *na = NA(sc->rl_ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	int j, l, n, lim = kring->nkr_num_slots - 1;
@@ -299,11 +301,16 @@ re_netmap_tx_init(struct rl_softc *sc)
 	struct rl_desc *desc;
 	int i, n;
 	struct netmap_adapter *na = NA(sc->rl_ifp);
-	struct netmap_slot *slot = netmap_reset(na, NR_TX, 0, 0);
+	struct netmap_slot *slot;
 
+        if (!na || !(na->na_flags & NAF_NATIVE_ON)) {
+            return;
+        }
+
+        slot = netmap_reset(na, NR_TX, 0, 0);
 	/* slot is NULL if we are not in netmap mode */
 	if (!slot)
-		return;
+		return;  // XXX cannot happen
 	/* in netmap mode, overwrite addresses and maps */
 	txd = sc->rl_ldata.rl_tx_desc;
 	desc = sc->rl_ldata.rl_tx_list;
@@ -377,6 +384,7 @@ re_netmap_attach(struct rl_softc *sc)
 	na.nm_txsync = re_netmap_txsync;
 	na.nm_rxsync = re_netmap_rxsync;
 	na.nm_register = re_netmap_reg;
-	netmap_attach(&na, 1);
+	na.num_tx_rings = na.num_rx_rings = 1;
+	netmap_attach(&na);
 }
 /* end of file */
