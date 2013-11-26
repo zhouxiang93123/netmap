@@ -29,17 +29,6 @@
 #include <dev/netmap/netmap_kern.h>
 #include <dev/netmap/netmap_mem2.h>
 
-
-/* ====================== STUFF DEFINED in netmap.c ===================== */
-int netmap_get_memory(struct netmap_priv_d* p);
-void netmap_dtor(void *data);
-int netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td);
-int netmap_poll(struct cdev *dev, int events, struct thread *td);
-int netmap_init(void);
-void netmap_fini(void);
-int netmap_krings_create(struct netmap_adapter *);
-int netmap_hw_krings_create(struct netmap_adapter *);
-
 /* ========================== LINUX-SPECIFIC ROUTINES ================== */
 
 /*

@@ -34,6 +34,8 @@
 #ifndef _NET_NETMAP_KERN_H_
 #define _NET_NETMAP_KERN_H_
 
+#define WITH_VALE
+
 #if defined(__FreeBSD__)
 
 #define likely(x)	__builtin_expect((long)!!(x), 1L)
@@ -42,7 +44,6 @@
 #define	NM_LOCK_T	struct mtx
 #define	NMG_LOCK_T	struct mtx
 
-extern NMG_LOCK_T	netmap_global_lock;
 #define NMG_LOCK()	mtx_lock(&netmap_global_lock)
 #define NMG_UNLOCK()	mtx_unlock(&netmap_global_lock)
 
@@ -70,6 +71,14 @@ struct hrtimer {
 #define	NM_SEND_UP(ifp, m)	netif_rx(m)
 
 #define NM_ATOMIC_T	volatile long unsigned int
+
+// XXX a mtx would suffice here too 20130404 gl
+#define NMG_LOCK_T		struct semaphore
+#define NMG_LOCK_INIT()		sema_init(&netmap_global_lock, 1)
+#define NMG_LOCK_DESTROY()	
+#define NMG_LOCK()		down(&netmap_global_lock)
+#define NMG_UNLOCK()		up(&netmap_global_lock)
+#define NMG_LOCK_ASSERT()	//	XXX to be completed
 
 #ifndef DEV_NETMAP
 #define DEV_NETMAP
@@ -133,6 +142,8 @@ struct netmap_priv_d;
 const char *nm_dump_buf(char *p, int len, int lim, char *dst);
 
 #include "netmap_mbq.h"
+
+extern NMG_LOCK_T	netmap_global_lock;
 
 /*
  * private, kernel view of a ring. Keeps track of the status of
@@ -564,6 +575,38 @@ nm_kr_lease(struct netmap_kring *k, u_int n, int is_rx)
 
 
 /*
+ * protect against multiple threads using the same ring.
+ * also check that the ring has not been stopped.
+ * We only care for 0 or !=0 as a return code.
+ */
+#define NM_KR_BUSY	1
+#define NM_KR_STOPPED	2
+
+static __inline void nm_kr_put(struct netmap_kring *kr)
+{
+	NM_ATOMIC_CLEAR(&kr->nr_busy);
+}
+
+static __inline int nm_kr_tryget(struct netmap_kring *kr)
+{
+	/* check a first time without taking the lock 
+	 * to avoid starvation for nm_kr_get()
+	 */
+	if (unlikely(kr->nkr_stopped)) {
+		ND("ring %p stopped (%d)", kr, kr->nkr_stopped);
+		return NM_KR_STOPPED;
+	}
+	if (unlikely(NM_ATOMIC_TEST_AND_SET(&kr->nr_busy)))
+		return NM_KR_BUSY;
+	/* check a second time with lock held */
+	if (unlikely(kr->nkr_stopped)) {
+		ND("ring %p stopped (%d)", kr, kr->nkr_stopped);
+		nm_kr_put(kr);
+		return NM_KR_STOPPED;
+	}
+	return 0;
+}
+/*
  * The following are support routines used by individual drivers to
  * support netmap operation.
  *
@@ -589,10 +632,22 @@ int netmap_transmit(struct ifnet *, struct mbuf *);
 struct netmap_slot *netmap_reset(struct netmap_adapter *na,
 	enum txrx tx, u_int n, u_int new_cur);
 int netmap_ring_reinit(struct netmap_kring *);
+int netmap_update_config(struct netmap_adapter *na);
+int netmap_krings_create(struct netmap_adapter *na, u_int ntx, u_int nrx, u_int tailroom);
+void netmap_krings_delete(struct netmap_adapter *na);
+
+struct netmap_if *
+netmap_do_regif(struct netmap_priv_d *priv, struct netmap_adapter *na,
+        uint16_t ringid, int *err);
+
 
 u_int nm_bound_var(u_int *v, u_int dflt, u_int lo, u_int hi, const char *msg);
+int get_na(struct nmreq *nmr, struct netmap_adapter **na, int create);
+int get_hw_na(struct ifnet *ifp, struct netmap_adapter **na);
 
 #ifdef WITH_VALE
+void netmap_init_bridges(void);
+int get_bdg_na(struct nmreq *nmr, struct netmap_adapter **na, int create);
 /*
  * The following bridge-related interfaces are used by other kernel modules
  * In the version that only supports unicast or broadcast, the lookup
@@ -622,6 +677,7 @@ int netmap_init(void);
 void netmap_fini(void);
 int netmap_get_memory(struct netmap_priv_d* p);
 void netmap_dtor(void *data);
+int netmap_dtor_locked(struct netmap_priv_d *priv);
 
 int netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td);
 
@@ -679,6 +735,7 @@ enum {                                  /* verbose flags */
 	NM_VERB_NIC_TXSYNC = 0x2000,
 };
 
+extern int netmap_txsync_retry;
 extern int netmap_generic_mit;
 extern int netmap_generic_ringsize;
 
@@ -875,8 +932,10 @@ int netmap_rx_irq(struct ifnet *, u_int, u_int *);
 int netmap_common_irq(struct ifnet *, u_int, u_int *work_done);
 
 
+void netmap_txsync_to_host(struct netmap_adapter *na);
 void netmap_disable_all_rings(struct ifnet *);
 void netmap_enable_all_rings(struct ifnet *);
+void nm_disable_ring(struct netmap_kring *kr);
 
 
 /* Structure associated to each thread which registered an interface.
@@ -914,6 +973,16 @@ struct netmap_priv_d {
 	int		        np_refcount;	/* use with NMG_LOCK held */
 };
 
+/*
+ * If the NIC is owned by the kernel
+ * (i.e., bridge), neither another bridge nor user can use it;
+ * if the NIC is owned by a user, only users can share it.
+ * Evaluation must be done under NMG_LOCK().
+ */
+#define NETMAP_OWNED_BY_KERN(na)	(na->na_private)
+#define NETMAP_OWNED_BY_ANY(na) \
+	(NETMAP_OWNED_BY_KERN(na) || (na->active_fds > 0))
+
 
 /*
  * generic netmap emulation for devices that do not have
@@ -928,6 +997,12 @@ void netmap_catch_packet_steering(struct netmap_generic_adapter *na, int enable)
 int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m, void *addr, u_int len, u_int ring_nr);
 int generic_find_num_desc(struct ifnet *ifp, u_int *tx, u_int *rx);
 void generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq);
+
+static __inline int
+nma_is_generic(struct netmap_adapter *na)
+{
+	return na->nm_register == generic_netmap_register;
+}
 
 /*
  * netmap_mitigation API. This is used by the generic adapter
