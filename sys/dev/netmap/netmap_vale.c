@@ -79,7 +79,7 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z gle
 #include <sys/endian.h>
 #include <sys/refcount.h>
 
-#define prefetch(x)	__builtin_prefetch(x)
+// #define prefetch(x)	__builtin_prefetch(x)
 
 
 #define BDG_RWLOCK_T		struct rwlock // struct rwlock
@@ -94,42 +94,9 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z gle
 #define BDG_RWDESTROY(b)	rw_destroy(&(b)->bdg_lock)
 
 
-/* netmap global lock.
- * normally called within the user thread (upon a system call)
- * or when a file descriptor or process is terminated
- * (last close or last munmap)
- */
-
-#if 0 // temporarily defined in netmap_kern.h
-#define NMG_LOCK_T		struct mtx
-#define NMG_LOCK()		mtx_lock(&netmap_global_lock)
-#define NMG_UNLOCK()		mtx_unlock(&netmap_global_lock)
-#endif
-
-#define NMG_LOCK_INIT()		mtx_init(&netmap_global_lock, "netmap global lock", NULL, MTX_DEF)
-#define NMG_LOCK_DESTROY()	mtx_destroy(&netmap_global_lock)
-#define NMG_LOCK_ASSERT()	mtx_assert(&netmap_global_lock, MA_OWNED)
-
-
-/* atomic operations */
-#include <machine/atomic.h>
-#define NM_ATOMIC_TEST_AND_SET(p)	(!atomic_cmpset_acq_int((p), 0, 1))
-#define NM_ATOMIC_CLEAR(p)		atomic_store_rel_int((p), 0)
-
-extern struct cdevsw netmap_cdevsw;
-
 #elif defined(linux)
 
 #include "bsd_glue.h"
-
-// XXX a mtx would suffice here too 20130404 gl
-#define NMG_LOCK_T		struct semaphore
-#define NMG_LOCK_INIT()		sema_init(&netmap_global_lock, 1)
-#define NMG_LOCK_DESTROY()	
-#define NMG_LOCK()		down(&netmap_global_lock)
-#define NMG_UNLOCK()		up(&netmap_global_lock)
-#define NMG_LOCK_ASSERT()	//	XXX to be completed
-
 
 #elif defined(__APPLE__)
 

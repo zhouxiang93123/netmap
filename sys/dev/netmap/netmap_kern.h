@@ -43,9 +43,12 @@
 
 #define	NM_LOCK_T	struct mtx
 #define	NMG_LOCK_T	struct mtx
-
+#define NMG_LOCK_INIT()	mtx_init(&netmap_global_lock, \
+				"netmap global lock", NULL, MTX_DEF)
+#define NMG_LOCK_DESTROY()	mtx_destroy(&netmap_global_lock)
 #define NMG_LOCK()	mtx_lock(&netmap_global_lock)
 #define NMG_UNLOCK()	mtx_unlock(&netmap_global_lock)
+#define NMG_LOCK_ASSERT()	mtx_assert(&netmap_global_lock, MA_OWNED)
 
 #define	NM_SELINFO_T	struct selinfo
 #define	MBUF_LEN(m)	((m)->m_pkthdr.len)
@@ -57,6 +60,8 @@
 #include <machine/atomic.h>
 #define NM_ATOMIC_TEST_AND_SET(p)       (!atomic_cmpset_acq_int((p), 0, 1))
 #define NM_ATOMIC_CLEAR(p)              atomic_store_rel_int((p), 0)
+
+#define prefetch(x)     __builtin_prefetch(x)
 
 MALLOC_DECLARE(M_NETMAP);
 
