@@ -52,7 +52,11 @@
 #define	MBUF_IFP(m)	((m)->m_pkthdr.rcvif)
 #define	NM_SEND_UP(ifp, m)	((ifp)->if_input)(ifp, m)
 
-#define NM_ATOMIC_T	volatile int
+#define NM_ATOMIC_T	volatile int	// XXX ?
+/* atomic operations */
+#include <machine/atomic.h>
+#define NM_ATOMIC_TEST_AND_SET(p)       (!atomic_cmpset_acq_int((p), 0, 1))
+#define NM_ATOMIC_CLEAR(p)              atomic_store_rel_int((p), 0)
 
 MALLOC_DECLARE(M_NETMAP);
 

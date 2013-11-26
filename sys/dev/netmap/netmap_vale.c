@@ -188,6 +188,7 @@ extern struct cdevsw netmap_cdevsw;
  * last packet in the block may overflow the size.
  */
 int bridge_batch = NM_BDG_BATCH; /* bridge batch size */
+SYSCTL_DECL(_dev_netmap);
 SYSCTL_INT(_dev_netmap, OID_AUTO, bridge_batch, CTLFLAG_RW, &bridge_batch, 0 , "");
 
 

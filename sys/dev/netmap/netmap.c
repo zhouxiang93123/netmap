@@ -175,11 +175,6 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z gle
 #define NMG_LOCK_ASSERT()	mtx_assert(&netmap_global_lock, MA_OWNED)
 
 
-/* atomic operations */
-#include <machine/atomic.h>
-#define NM_ATOMIC_TEST_AND_SET(p)	(!atomic_cmpset_acq_int((p), 0, 1))
-#define NM_ATOMIC_CLEAR(p)		atomic_store_rel_int((p), 0)
-
 extern struct cdevsw netmap_cdevsw;
 
 #elif defined(linux)
