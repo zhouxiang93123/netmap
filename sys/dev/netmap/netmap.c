@@ -268,7 +268,7 @@ static void nm_kr_get(struct netmap_kring *kr)
 		tsleep(kr, 0, "NM_KR_GET", 4);
 }
 
-void nm_disable_ring(struct netmap_kring *kr)
+void netmap_disable_ring(struct netmap_kring *kr)
 {
 	kr->nkr_stopped = 1;
 	nm_kr_get(kr);
@@ -288,12 +288,12 @@ void netmap_disable_all_rings(struct ifnet *ifp)
 	na = NA(ifp);
 
 	for (i = 0; i < na->num_tx_rings + 1; i++) {
-		nm_disable_ring(na->tx_rings + i);
+		netmap_disable_ring(na->tx_rings + i);
 		na->nm_notify(na, i, NR_TX, 
 			(i == na->num_tx_rings ? NAF_GLOBAL_NOTIFY: 0));
 	}
 	for (i = 0; i < na->num_rx_rings + 1; i++) {
-		nm_disable_ring(na->rx_rings + i);
+		netmap_disable_ring(na->rx_rings + i);
 		na->nm_notify(na, i, NR_RX, 
 			(i == na->num_rx_rings ? NAF_GLOBAL_NOTIFY: 0));
 	}
@@ -1043,9 +1043,8 @@ get_hw_na(struct ifnet *ifp, struct netmap_adapter **na)
  * is acquired by this function, it must be released using nm_if_rele().
  */
 int
-get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
+netmap_get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 {
-	const char *name = nmr->nr_name;
 	struct ifnet *ifp;
 	int error = 0;
 	struct netmap_adapter *ret;
@@ -1055,14 +1054,11 @@ get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 	/* first try to see if this is a bridge port. */
 	NMG_LOCK_ASSERT();
 
-#ifdef WITH_VALE
-	error = get_bdg_na(nmr, na, create);
-	if (error || *na != NULL) /* valid match in get_bdg_na() */
+	error = netmap_get_bdg_na(nmr, na, create);
+	if (error || *na != NULL) /* valid match in netmap_get_bdg_na() */
 		return error;
-#endif /* WITH_VALE */
 
-
-	ifp = ifunit_ref(name);
+	ifp = ifunit_ref(nmr->nr_name);
 	if (ifp == NULL) {
 	        return ENXIO;
 	}
@@ -1327,11 +1323,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			break;
 		}
 		if (nmr->nr_cmd == NETMAP_BDG_LIST) {
-#ifdef WITH_VALE
 			error = netmap_bdg_ctl(nmr, NULL);
-#else /* !WITH_VALE */
-			error = EINVAL;
-#endif /* !WITH_VALE */
 			break;
 		}
 
@@ -1343,7 +1335,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 
 			if (nmr->nr_name[0] != '\0') {
 				/* get a refcount */
-				error = get_na(nmr, &na, 1 /* create */);
+				error = netmap_get_na(nmr, &na, 1 /* create */);
 				if (error)
 					break;
 				nmd = na->nm_mem; /* get memory allocator */
@@ -1377,11 +1369,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		/* possibly attach/detach NIC and VALE switch */
 		i = nmr->nr_cmd;
 		if (i == NETMAP_BDG_ATTACH || i == NETMAP_BDG_DETACH) {
-#ifdef WITH_VALE
 			error = netmap_bdg_ctl(nmr, NULL);
-#else /* !WITH_VALE */
-			error = EINVAL;
-#endif /* !WITH_VALE */
 			break;
 		} else if (i != 0) {
 			D("nr_cmd must be 0 not %d", i);
@@ -1399,7 +1387,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 				break;
 			}
 			/* find the interface and a reference */
-			error = get_na(nmr, &na, 1 /* create */); /* keep reference */
+			error = netmap_get_na(nmr, &na, 1 /* create */); /* keep reference */
 			if (error)
 				break;
 			ifp = na->ifp;
@@ -1518,7 +1506,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 
 		bzero(&so, sizeof(so));
 		NMG_LOCK();
-		error = get_na(nmr, &na, 0 /* don't create */); /* keep reference */
+		error = netmap_get_na(nmr, &na, 0 /* don't create */); /* keep reference */
 		if (error) {
 			netmap_adapter_put(na);
 			NMG_UNLOCK();
@@ -2238,7 +2226,7 @@ static struct cdev *netmap_dev; /* /dev/netmap character device. */
 int
 netmap_init(void)
 {
-	int i, error;
+	int error;
 
 	NMG_LOCK_INIT();
 
@@ -2251,10 +2239,7 @@ netmap_init(void)
 	netmap_dev = make_dev(&netmap_cdevsw, 0, UID_ROOT, GID_WHEEL, 0660,
 			      "netmap");
 
-	i = 0; // XXX
-#ifdef WITH_VALE
 	netmap_init_bridges();
-#endif /* WITH_VALE */
 	return (error);
 }
 

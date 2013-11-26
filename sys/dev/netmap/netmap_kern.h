@@ -34,7 +34,7 @@
 #ifndef _NET_NETMAP_KERN_H_
 #define _NET_NETMAP_KERN_H_
 
-#define WITH_VALE
+#define WITH_VALE	// comment out to disable VALE support
 
 #if defined(__FreeBSD__)
 
@@ -395,6 +395,17 @@ struct netmap_adapter {
 };
 
 /*
+ * If the NIC is owned by the kernel
+ * (i.e., bridge), neither another bridge nor user can use it;
+ * if the NIC is owned by a user, only users can share it.
+ * Evaluation must be done under NMG_LOCK().
+ */
+#define NETMAP_OWNED_BY_KERN(na)	(na->na_private)
+#define NETMAP_OWNED_BY_ANY(na) \
+	(NETMAP_OWNED_BY_KERN(na) || (na->active_fds > 0))
+
+
+/*
  * derived netmap adapters for various types of ports
  */
 struct netmap_vp_adapter {	/* VALE software port */
@@ -434,6 +445,8 @@ struct netmap_generic_adapter {	/* non-native device */
         struct hrtimer mit_timer;
         int mit_pending;
 };
+
+#ifdef WITH_VALE
 
 /* bridge wrapper for non VALE ports. It is used to connect real devices to the bridge.
  *
@@ -491,7 +504,7 @@ struct netmap_bwrap_adapter {
 
 
 /*
- * Available space in the ring.
+ * Available space in the ring. Only used in VALE code
  */
 static inline uint32_t
 nm_kr_space(struct netmap_kring *k, int is_rx)
@@ -523,25 +536,6 @@ nm_kr_space(struct netmap_kring *k, int is_rx)
 }
 
 
-/* return update position */
-static inline uint32_t
-nm_kr_rxpos(struct netmap_kring *k)
-{
-	uint32_t pos = k->nr_hwcur + k->nr_hwavail;
-	if (pos >= k->nkr_num_slots)
-		pos -= k->nkr_num_slots;
-#if 0
-	if (pos >= k->nkr_num_slots ||
-		k->nkr_hwlease >= k->nkr_num_slots ||
-		k->nr_hwcur >= k->nkr_num_slots ||
-		k->nr_hwavail >= k->nkr_num_slots ||
-		k->nkr_lease_idx >= k->nkr_num_slots) {
-		D("invalid kring, cur %d avail %d lease %d lease_idx %d lim %d",			k->nr_hwcur, k->nr_hwavail, k->nkr_hwlease,
-			k->nkr_lease_idx, k->nkr_num_slots);
-	}
-#endif
-	return pos;
-}
 
 
 /* make a lease on the kring for N positions. return the
@@ -577,6 +571,28 @@ nm_kr_lease(struct netmap_kring *k, u_int n, int is_rx)
 	return lease_idx;
 }
 
+#endif /* WITH_VALE */
+
+/* return update position */
+static inline uint32_t
+nm_kr_rxpos(struct netmap_kring *k)
+{
+	uint32_t pos = k->nr_hwcur + k->nr_hwavail;
+	if (pos >= k->nkr_num_slots)
+		pos -= k->nkr_num_slots;
+#if 0
+	if (pos >= k->nkr_num_slots ||
+		k->nkr_hwlease >= k->nkr_num_slots ||
+		k->nr_hwcur >= k->nkr_num_slots ||
+		k->nr_hwavail >= k->nkr_num_slots ||
+		k->nkr_lease_idx >= k->nkr_num_slots) {
+		D("invalid kring, cur %d avail %d lease %d lease_idx %d lim %d",			k->nr_hwcur, k->nr_hwavail, k->nkr_hwlease,
+			k->nkr_lease_idx, k->nkr_num_slots);
+	}
+#endif
+	return pos;
+}
+
 
 /*
  * protect against multiple threads using the same ring.
@@ -610,6 +626,8 @@ static __inline int nm_kr_tryget(struct netmap_kring *kr)
 	}
 	return 0;
 }
+
+
 /*
  * The following are support routines used by individual drivers to
  * support netmap operation.
@@ -636,6 +654,11 @@ int netmap_transmit(struct ifnet *, struct mbuf *);
 struct netmap_slot *netmap_reset(struct netmap_adapter *na,
 	enum txrx tx, u_int n, u_int new_cur);
 int netmap_ring_reinit(struct netmap_kring *);
+
+
+/*
+ * Support routines to be used with the VALE switch
+ */
 int netmap_update_config(struct netmap_adapter *na);
 int netmap_krings_create(struct netmap_adapter *na, u_int ntx, u_int nrx, u_int tailroom);
 void netmap_krings_delete(struct netmap_adapter *na);
@@ -645,13 +668,12 @@ netmap_do_regif(struct netmap_priv_d *priv, struct netmap_adapter *na,
         uint16_t ringid, int *err);
 
 
+
 u_int nm_bound_var(u_int *v, u_int dflt, u_int lo, u_int hi, const char *msg);
-int get_na(struct nmreq *nmr, struct netmap_adapter **na, int create);
-int get_hw_na(struct ifnet *ifp, struct netmap_adapter **na);
+int netmap_get_na(struct nmreq *nmr, struct netmap_adapter **na, int create);
+int netmap_get_hw_na(struct ifnet *ifp, struct netmap_adapter **na);
 
 #ifdef WITH_VALE
-void netmap_init_bridges(void);
-int get_bdg_na(struct nmreq *nmr, struct netmap_adapter **na, int create);
 /*
  * The following bridge-related interfaces are used by other kernel modules
  * In the version that only supports unicast or broadcast, the lookup
@@ -661,17 +683,26 @@ int get_bdg_na(struct nmreq *nmr, struct netmap_adapter **na, int create);
  */
 typedef u_int (*bdg_lookup_fn_t)(char *buf, u_int len,
 		uint8_t *ring_nr, struct netmap_vp_adapter *);
-int netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func);
 u_int netmap_bdg_learning(char *, u_int, uint8_t *,
 		struct netmap_vp_adapter *);
 
 #define	NM_BDG_MAXPORTS		254	/* up to 254 */
 #define	NM_BDG_BROADCAST	NM_BDG_MAXPORTS
 #define	NM_BDG_NOPORT		(NM_BDG_MAXPORTS+1)
-#endif /* WITH_VALE */
 
-/* NM_NAME is always reserved */
 #define	NM_NAME			"vale"	/* prefix for bridge port name */
+
+
+/* these are redefined in case of no VALE support */
+int netmap_get_bdg_na(struct nmreq *nmr, struct netmap_adapter **na, int create);
+void netmap_init_bridges(void);
+int netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func);
+
+#else /* !WITH_VALE */
+#define	netmap_get_bdg_na(_1, _2, _3)	0
+#define netmap_init_bridges(_1)
+#define	netmap_bdg_ctl(_1, _2)	EINVAL
+#endif /* !WITH_VALE */
 
 /* Various prototypes */
 int netmap_poll(struct cdev *dev, int events, struct thread *td);
@@ -939,7 +970,7 @@ int netmap_common_irq(struct ifnet *, u_int, u_int *work_done);
 void netmap_txsync_to_host(struct netmap_adapter *na);
 void netmap_disable_all_rings(struct ifnet *);
 void netmap_enable_all_rings(struct ifnet *);
-void nm_disable_ring(struct netmap_kring *kr);
+void netmap_disable_ring(struct netmap_kring *kr);
 
 
 /* Structure associated to each thread which registered an interface.
@@ -977,20 +1008,12 @@ struct netmap_priv_d {
 	int		        np_refcount;	/* use with NMG_LOCK held */
 };
 
-/*
- * If the NIC is owned by the kernel
- * (i.e., bridge), neither another bridge nor user can use it;
- * if the NIC is owned by a user, only users can share it.
- * Evaluation must be done under NMG_LOCK().
- */
-#define NETMAP_OWNED_BY_KERN(na)	(na->na_private)
-#define NETMAP_OWNED_BY_ANY(na) \
-	(NETMAP_OWNED_BY_KERN(na) || (na->active_fds > 0))
-
 
 /*
  * generic netmap emulation for devices that do not have
- * native netmap support
+ * native netmap support.
+ * XXX generic_netmap_register() is only exported to implement
+ *	nma_is_generic().
  */
 int generic_netmap_register(struct netmap_adapter *na, int enable);
 int generic_netmap_attach(struct ifnet *ifp);

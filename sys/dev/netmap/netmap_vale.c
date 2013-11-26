@@ -556,7 +556,7 @@ netmap_adapter_vp_dtor(struct netmap_adapter *na)
 }
 
 int
-get_bdg_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
+netmap_get_bdg_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 {
 	const char *name = nmr->nr_name;
 	struct ifnet *ifp;
@@ -670,7 +670,7 @@ get_bdg_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 	} else {  /* this is a NIC */
 		struct ifnet *fake_ifp;
 
-		error = get_hw_na(ifp, &ret);
+		error = netmap_get_hw_na(ifp, &ret);
 		if (error || ret == NULL)
 			goto out;
 
@@ -743,11 +743,11 @@ nm_bdg_attach(struct nmreq *nmr)
 	if (npriv == NULL)
 		return ENOMEM;
 	NMG_LOCK();
-	/* XXX probably get_bdg_na() */
-	error = get_na(nmr, &na, 1 /* create if not exists */);
+	/* XXX probably netmap_get_bdg_na() */
+	error = netmap_get_na(nmr, &na, 1 /* create if not exists */);
 	if (error) /* no device, or another bridge or user owns the device */
 		goto unlock_exit;
-	/* get_na() sets na_bdg if this is a physical interface
+	/* netmap_get_na() sets na_bdg if this is a physical interface
 	 * that we can attach to a switch.
 	 */
 	if (!nma_is_bwrap(na)) {
@@ -792,7 +792,7 @@ nm_bdg_detach(struct nmreq *nmr)
 	int last_instance;
 
 	NMG_LOCK();
-	error = get_na(nmr, &na, 0 /* don't create */);
+	error = netmap_get_na(nmr, &na, 0 /* don't create */);
 	if (error) { /* no device, or another bridge or user owns the device */
 		goto unlock_exit;
 	}
@@ -1674,7 +1674,7 @@ netmap_bwrap_intr_notify(struct netmap_adapter *na, u_int ring_nr, enum txrx tx,
 		kring = &na->tx_rings[ring_nr];
 		bkring = &vpna->up.rx_rings[ring_nr];
 		if (kring->nkr_stopped)
-			nm_disable_ring(bkring);
+			netmap_disable_ring(bkring);
 		else
 			bkring->nkr_stopped = 0;
 		return 0;
