@@ -1718,9 +1718,6 @@ netmap_bwrap_register(struct netmap_adapter *na, int onoff)
 			hwna->rx_rings[i].nkr_num_slots = na->tx_rings[i].nkr_num_slots;
 			hwna->rx_rings[i].ring = na->tx_rings[i].ring;
 		}
-	} else {
-		hwna->na_lut = NULL;
-		hwna->na_lut_objtotal = 0;
 	}
 
 	if (hwna->ifp) {
@@ -1736,6 +1733,8 @@ netmap_bwrap_register(struct netmap_adapter *na, int onoff)
 		hwna->nm_notify = netmap_bwrap_intr_notify;
 	} else {
 		hwna->nm_notify = bna->save_notify;
+		hwna->na_lut = NULL;
+		hwna->na_lut_objtotal = 0;
 	}
 
 	return 0;

@@ -847,9 +847,12 @@ netmap_txsync_to_host(struct netmap_adapter *na)
 	struct netmap_ring *ring = kring->ring;
 	u_int k, lim = kring->nkr_num_slots - 1;
 	struct mbq q;
+	int error;
 
-	if (nm_kr_tryget(kring)) {
-		D("ring %p busy (user error)", kring);
+	error = nm_kr_tryget(kring);
+	if (error) {
+		if (error == NM_KR_BUSY) 
+			D("ring %p busy (user error)", kring);
 		return;
 	}
 	k = ring->cur;
