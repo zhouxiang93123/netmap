@@ -496,16 +496,6 @@ int bridge_batch = NM_BDG_BATCH; /* bridge batch size */
 SYSCTL_INT(_dev_netmap, OID_AUTO, bridge_batch, CTLFLAG_RW, &bridge_batch, 0 , "");
 
 
-/* The bridge references the buffers using the device specific look up table */
-static inline void *
-BDG_NMB(struct netmap_adapter *na, struct netmap_slot *slot)
-{
-	struct lut_entry *lut = na->na_lut;
-	uint32_t i = slot->buf_idx;
-	return (unlikely(i >= na->na_lut_objtotal)) ?
-		lut[0].vaddr : lut[i].vaddr;
-}
-
 static int bdg_netmap_attach(struct netmap_adapter *);
 static int bdg_netmap_reg(struct netmap_adapter *na, int onoff);
 static int netmap_bwrap_attach(struct ifnet *, struct ifnet *);

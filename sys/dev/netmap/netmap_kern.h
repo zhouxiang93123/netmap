@@ -855,6 +855,16 @@ PNMB(struct netmap_slot *slot, uint64_t *pp)
 	return ret;
 }
 
+/* Generic version of NMB, which uses device-specific memory. */
+static inline void *
+BDG_NMB(struct netmap_adapter *na, struct netmap_slot *slot)
+{
+	struct lut_entry *lut = na->na_lut;
+	uint32_t i = slot->buf_idx;
+	return (unlikely(i >= na->na_lut_objtotal)) ?
+		lut[0].vaddr : lut[i].vaddr;
+}
+
 /* default functions to handle rx/tx interrupts */
 int netmap_rx_irq(struct ifnet *, u_int, u_int *);
 #define netmap_tx_irq(_n, _q) netmap_rx_irq(_n, _q, NULL)
