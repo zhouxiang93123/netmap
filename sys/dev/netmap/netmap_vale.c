@@ -1693,12 +1693,21 @@ netmap_bwrap_register(struct netmap_adapter *na, int onoff)
 	struct netmap_bwrap_adapter *bna =
 		(struct netmap_bwrap_adapter *)na;
 	struct netmap_adapter *hwna = bna->hwna;
+	struct netmap_vp_adapter *hostna = &bna->host;
 	int error;
 
 	ND("%s %d", NM_IFPNAME(ifp), onoff);
 
 	if (onoff) {
 		int i;
+
+		hwna->na_lut = na->na_lut;
+		hwna->na_lut_objtotal = na->na_lut_objtotal;
+
+		if (hostna->na_bdg) {
+			hostna->up.na_lut = na->na_lut;
+			hostna->up.na_lut_objtotal = na->na_lut_objtotal;
+		}
 
 		/* cross-link the netmap rings */
 		for (i = 0; i <= na->num_tx_rings; i++) {
@@ -1709,6 +1718,9 @@ netmap_bwrap_register(struct netmap_adapter *na, int onoff)
 			hwna->rx_rings[i].nkr_num_slots = na->tx_rings[i].nkr_num_slots;
 			hwna->rx_rings[i].ring = na->tx_rings[i].ring;
 		}
+	} else {
+		hwna->na_lut = NULL;
+		hwna->na_lut_objtotal = 0;
 	}
 
 	if (hwna->ifp) {

@@ -1239,6 +1239,9 @@ netmap_do_regif(struct netmap_priv_d *priv, struct netmap_adapter *na,
 		 * do not core lock because the race is harmless here,
 		 * there cannot be any traffic to netmap_transmit()
 		 */
+		na->na_lut = na->nm_mem->pools[NETMAP_BUF_POOL].lut;
+		ND("%p->na_lut == %p", na, na->na_lut);
+		na->na_lut_objtotal = na->nm_mem->pools[NETMAP_BUF_POOL].objtotal;
 		error = na->nm_register(na, 1); /* mode on */
 		if (error) {
 			netmap_do_unregif(priv, nifp);
@@ -1260,8 +1263,6 @@ out:
 		 */
 		wmb(); /* make sure previous writes are visible to all CPUs */
 		priv->np_nifp = nifp;
-		na->na_lut = na->nm_mem->pools[NETMAP_BUF_POOL].lut;
-		na->na_lut_objtotal = na->nm_mem->pools[NETMAP_BUF_POOL].objtotal;
 	}
 	return nifp;
 }
