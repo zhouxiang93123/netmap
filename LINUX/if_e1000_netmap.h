@@ -116,7 +116,8 @@ e1000_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	if (d < 0)
 		d += kring->nkr_num_slots;
 	if (d > kring->nr_hwavail) {
-		ND("=== j %d k %d d %d hwavail %d", j, k, d, kring->nr_hwavail);
+		RD(5, "=== j %d k %d d %d hwavail %d hwreserved %d",
+			j, k, d, kring->nr_hwavail, kring->nr_hwreserved);
 		return netmap_ring_reinit(kring);
 	}
 	if (!netif_carrier_ok(ifp)) {

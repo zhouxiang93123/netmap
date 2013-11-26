@@ -2116,6 +2116,7 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
 	kring->nkr_hwofs = new_hwofs;
 	if (tx == NR_TX)
 		kring->nr_hwavail = lim;
+	kring->nr_hwreserved = 0;
 
 #if 0 // def linux
 	/* XXX check that the mappings are correct */
