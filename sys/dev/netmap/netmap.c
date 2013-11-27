@@ -260,7 +260,7 @@ void netmap_disable_ring(struct netmap_kring *kr)
 	nm_kr_put(kr);
 }
 
-void netmap_disable_all_rings(struct ifnet *ifp)
+void netmap_set_all_rings(struct ifnet *ifp, int stopped)
 {
 	struct netmap_adapter *na;
 	int i;
@@ -270,35 +270,33 @@ void netmap_disable_all_rings(struct ifnet *ifp)
 
 	na = NA(ifp);
 
-	for (i = 0; i < na->num_tx_rings + 1; i++) {
-		netmap_disable_ring(na->tx_rings + i);
-		na->nm_notify(na, i, NR_TX, 
+	for (i = 0; i <= na->num_tx_rings; i++) {
+		if (stopped)
+			netmap_disable_ring(na->tx_rings + i);
+		else
+			na->tx_rings[i].nkr_stopped = 0;
+		na->nm_notify(na, i, NR_TX, NAF_DISABLE_NOTIFY |
 			(i == na->num_tx_rings ? NAF_GLOBAL_NOTIFY: 0));
 	}
-	for (i = 0; i < na->num_rx_rings + 1; i++) {
-		netmap_disable_ring(na->rx_rings + i);
-		na->nm_notify(na, i, NR_RX, 
+
+	for (i = 0; i <= na->num_rx_rings; i++) {
+		if (stopped)
+			netmap_disable_ring(na->rx_rings + i);
+		else
+			na->rx_rings[i].nkr_stopped = 0;
+		na->nm_notify(na, i, NR_RX, NAF_DISABLE_NOTIFY |
 			(i == na->num_rx_rings ? NAF_GLOBAL_NOTIFY: 0));
 	}
 }
 
+void netmap_disable_all_rings(struct ifnet *ifp)
+{
+	netmap_set_all_rings(ifp, 1 /* stopped */);
+}
+
 void netmap_enable_all_rings(struct ifnet *ifp)
 {
-	struct netmap_adapter *na;
-	int i;
-
-	if (!(ifp->if_capenable & IFCAP_NETMAP))
-		return;
-
-	na = NA(ifp);
-	for (i = 0; i < na->num_tx_rings + 1; i++) {
-		ND("enabling %p", na->tx_rings + i);
-		na->tx_rings[i].nkr_stopped = 0;
-	}
-	for (i = 0; i < na->num_rx_rings + 1; i++) {
-		ND("enabling %p", na->rx_rings + i);
-		na->rx_rings[i].nkr_stopped = 0;
-	}
+	netmap_set_all_rings(ifp, 0 /* enabled */);
 }
 
 
@@ -848,9 +846,12 @@ netmap_txsync_to_host(struct netmap_adapter *na)
 	struct netmap_ring *ring = kring->ring;
 	u_int k, lim = kring->nkr_num_slots - 1;
 	struct mbq q;
+	int error;
 
-	if (nm_kr_tryget(kring)) {
-		D("ring %p busy (user error)", kring);
+	error = nm_kr_tryget(kring);
+	if (error) {
+		if (error == NM_KR_BUSY) 
+			D("ring %p busy (user error)", kring);
 		return;
 	}
 	k = ring->cur;
@@ -974,29 +975,29 @@ netmap_get_hw_na(struct ifnet *ifp, struct netmap_adapter **na)
 		i = netmap_admode = NETMAP_ADMODE_BEST;
 
 	if (NETMAP_CAPABLE(ifp)) {
+		/* If an adapter already exists, but is
+		 * attached to a vale port, we report that the
+		 * port is busy.
+		 */
 		if (NETMAP_OWNED_BY_KERN(NA(ifp)))
-			/* If an adapter already exists, but is
-			 * attached to a vale port, we report that the
-			 * port is busy.
-			 */
 			return EBUSY;
 
+		/* If an adapter already exists, return it if
+		 * there are active file descriptors or if
+		 * netmap is not forced to use generic
+		 * adapters.
+		 */
 		if (NA(ifp)->active_fds > 0 ||
 				i != NETMAP_ADMODE_GENERIC) {
-			/* If an adapter already exists, return it if
-			 * there are active file descriptors or if
-			 * netmap is not forced to use generic
-			 * adapters.
-			 */
 			*na = NA(ifp);
 			return 0;
 		}
 	}
 
+	/* If there isn't native support and netmap is not allowed
+	 * to use generic adapters, we cannot satisfy the request.
+	 */
 	if (!NETMAP_CAPABLE(ifp) && i == NETMAP_ADMODE_NATIVE)
-		/* no native support and netmap is not allowed to
-		 * use generic adapters
-		 */
 		return EINVAL;
 		
 	/* Otherwise, create a generic adapter and return it,
@@ -1240,6 +1241,9 @@ netmap_do_regif(struct netmap_priv_d *priv, struct netmap_adapter *na,
 		 * do not core lock because the race is harmless here,
 		 * there cannot be any traffic to netmap_transmit()
 		 */
+		na->na_lut = na->nm_mem->pools[NETMAP_BUF_POOL].lut;
+		ND("%p->na_lut == %p", na, na->na_lut);
+		na->na_lut_objtotal = na->nm_mem->pools[NETMAP_BUF_POOL].objtotal;
 		error = na->nm_register(na, 1); /* mode on */
 		if (error) {
 			netmap_do_unregif(priv, nifp);
@@ -1262,8 +1266,6 @@ out:
 		 */
 		wmb(); /* make sure previous writes are visible to all CPUs */
 		priv->np_nifp = nifp;
-		na->na_lut = na->nm_mem->pools[NETMAP_BUF_POOL].lut;
-		na->na_lut_objtotal = na->nm_mem->pools[NETMAP_BUF_POOL].objtotal;
 	}
 	return nifp;
 }
@@ -2114,6 +2116,7 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
 	kring->nkr_hwofs = new_hwofs;
 	if (tx == NR_TX)
 		kring->nr_hwavail = lim;
+	kring->nr_hwreserved = 0;
 
 #if 0 // def linux
 	/* XXX check that the mappings are correct */

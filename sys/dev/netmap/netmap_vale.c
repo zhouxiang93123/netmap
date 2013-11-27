@@ -1661,18 +1661,21 @@ netmap_bwrap_intr_notify(struct netmap_adapter *na, u_int ring_nr, enum txrx tx,
 
 	ND("%s[%d] %s %x", NM_IFPNAME(ifp), ring_nr, (tx == NR_TX ? "TX" : "RX"), flags);
 
-	if (!(ifp->if_capenable & IFCAP_NETMAP))
-		return 0;
-
-	if (tx == NR_TX) {
-		kring = &na->tx_rings[ring_nr];
-		bkring = &vpna->up.rx_rings[ring_nr];
+	if (flags & NAF_DISABLE_NOTIFY) {
+		kring = tx == NR_TX ? na->tx_rings : na->rx_rings;
+		bkring = tx == NR_TX ? vpna->up.rx_rings : vpna->up.tx_rings;
 		if (kring->nkr_stopped)
 			netmap_disable_ring(bkring);
 		else
 			bkring->nkr_stopped = 0;
 		return 0;
 	}
+
+	if (ifp == NULL || !(ifp->if_capenable & IFCAP_NETMAP))
+		return 0;
+
+	if (tx == NR_TX)
+		return 0;
 
 	kring = &na->rx_rings[ring_nr];
 	ring = kring->ring;
@@ -1720,12 +1723,21 @@ netmap_bwrap_register(struct netmap_adapter *na, int onoff)
 	struct netmap_bwrap_adapter *bna =
 		(struct netmap_bwrap_adapter *)na;
 	struct netmap_adapter *hwna = bna->hwna;
+	struct netmap_vp_adapter *hostna = &bna->host;
 	int error;
 
 	ND("%s %d", NM_IFPNAME(ifp), onoff);
 
 	if (onoff) {
 		int i;
+
+		hwna->na_lut = na->na_lut;
+		hwna->na_lut_objtotal = na->na_lut_objtotal;
+
+		if (hostna->na_bdg) {
+			hostna->up.na_lut = na->na_lut;
+			hostna->up.na_lut_objtotal = na->na_lut_objtotal;
+		}
 
 		/* cross-link the netmap rings */
 		for (i = 0; i <= na->num_tx_rings; i++) {
@@ -1751,6 +1763,8 @@ netmap_bwrap_register(struct netmap_adapter *na, int onoff)
 		hwna->nm_notify = netmap_bwrap_intr_notify;
 	} else {
 		hwna->nm_notify = bna->save_notify;
+		hwna->na_lut = NULL;
+		hwna->na_lut_objtotal = 0;
 	}
 
 	return 0;

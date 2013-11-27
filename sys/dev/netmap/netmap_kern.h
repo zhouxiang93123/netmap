@@ -382,6 +382,7 @@ struct netmap_adapter {
 	int (*nm_notify)(struct netmap_adapter *,
 		u_int ring, enum txrx, int flags);
 #define NAF_GLOBAL_NOTIFY 4
+#define NAF_DISABLE_NOTIFY 8
 
 	/* standard refcount to control the lifetime of the adapter
          * (it should be equal to the lifetime of the corresponding ifp)
