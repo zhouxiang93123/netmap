@@ -311,11 +311,122 @@ static int netmap_socket_sendmsg(struct kiocb *iocb, struct socket *sock,
 }
 
 static int netmap_socket_recvmsg(struct kiocb *iocb, struct socket *sock,
-                                 struct msghdr *m, size_t total_len, int flags)
+		struct msghdr *m, size_t total_len, int flags)
 {
-    D("total_len %d", (int)total_len);
+	struct netmap_socket *np_sock = container_of(sock, struct netmap_socket, sock);
+	struct netmap_priv_d *priv = np_sock->priv;
+	struct netmap_adapter *na = priv->np_na;
+	struct netmap_ring *ring;
+	/* netmap variables */
+	unsigned i, avail;
+	bool morefrag;
+	unsigned nm_frag_size;
+	unsigned nm_frag_ofs;
+	uint8_t *src;
+	/* iovec variables */
+	unsigned j;
+	struct iovec *iov = m->msg_iov;
+	size_t iovcnt = m->msg_iovlen;
+	uint8_t *dst;
+	unsigned iov_frag_size;
+	unsigned iov_frag_ofs;
+	/* counters */
+	unsigned copy_size;
+	unsigned copied;
 
-    return 0;
+	/* The caller asks for 'total_len' bytes. */
+	ND("recvmsg %d, %p", (int)total_len, np_sock);
+
+	if (unlikely(na == NULL)) {
+		RD(5, "Null netmap adapter");
+		return total_len;
+	}
+
+	/* Total bytes actually copied. */
+	copied = 0;
+
+	/* Grab the netmap RX ring normally used from userspace. */
+	ring = na->rx_rings[0].ring;
+	i = ring->cur;
+	avail = ring->avail;
+
+	/* Index into the input iovec[]. */
+	j = 0;
+
+	/* Spurious call: Do nothing. */
+	if (avail == 0)
+		return 0;
+
+	/* init netmap variables */
+	morefrag = (ring->slot[i].flags & NS_MOREFRAG);
+	nm_frag_ofs = 0;
+	nm_frag_size = ring->slot[i].len;
+	src = BDG_NMB(na, &ring->slot[i]);
+
+	/* init iovec variables */
+	iov_frag_ofs = 0;
+	iov_frag_size = iov[j].iov_len;
+	dst = iov[j].iov_base;
+
+	/* Copy from the netmap scatter-gather to the caller
+	 * scatter-gather.
+	 */
+	while (copied < total_len) {
+		copy_size = min(nm_frag_size, iov_frag_size);
+		copy_to_user(dst + iov_frag_ofs, src + nm_frag_ofs,
+			     copy_size);
+		nm_frag_ofs += copy_size;
+		nm_frag_size -= copy_size;
+		iov_frag_ofs += copy_size;
+		iov_frag_size -= copy_size;
+		copied += copy_size;
+		if (nm_frag_size == 0) {
+			/* Netmap slot exhausted. If this was the
+			 * last slot, or no more slots ar available,
+			 * we've done.
+			 */
+			if (!morefrag || !avail)
+				break;
+			/* Take the next slot. */
+			i = NETMAP_RING_NEXT(ring, i);
+			avail--;
+			morefrag = (ring->slot[i].flags & NS_MOREFRAG);
+			nm_frag_ofs = 0;
+			nm_frag_size = ring->slot[i].len;
+			src = BDG_NMB(na, &ring->slot[i]);
+		}
+		if (iov_frag_size == 0) {
+			/* The current iovec fragment is exhausted.
+			 * Since we enter here, there must be more
+			 * to read from the netmap slots (otherwise
+			 * we would have exited the loop in the
+			 * above branch).
+			 * If this was the last fragment, it means
+			 * that there is not enough space in the input
+			 * iovec[].
+			 */
+			j++;
+			if (unlikely(j >= iovcnt)) {
+				break;
+			}
+			/* Take the next iovec fragment. */
+			iov_frag_ofs = 0;
+			iov_frag_size = iov[j].iov_len;
+			dst = iov[j].iov_base;
+		}
+	}
+
+	if (unlikely(!avail && morefrag)) {
+		RD(5, "Error: ran out of slots, with a pending"
+				"incomplete packet\n");
+	}
+
+	ring->cur = i;
+	ring->avail = avail;
+
+	D("read %d bytes using %d iovecs", copied, j);
+
+	return copied;
 }
 
 static struct proto netmap_socket_proto = {
