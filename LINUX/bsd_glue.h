@@ -233,7 +233,7 @@ static inline void mtx_unlock(safe_spinlock_t *m)
 
 /*--- selrecord and friends ---*/
 /* wake_up() or wake_up_interruptible() ? */
-#define	selwakeuppri(sw, pri)	wake_up(sw)
+#define	selwakeuppri(sw, pri)	wake_up_interruptible_poll(sw, POLLIN | POLLRDNORM | POLLRDBAND)
 #define selrecord(x, y)		poll_wait((struct file *)x, y, pwait)
 
 // #define knlist_destroy(x)	// XXX todo
