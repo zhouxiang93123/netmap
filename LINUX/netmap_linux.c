@@ -221,12 +221,20 @@ generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq)
 
 /* =========================== SOCKET SUPPORT ============================ */
 
+struct netmap_sock {
+	struct sock sk;
+	struct socket sock;
+	struct socket_wq wq;
+	void (*saved_nm_dtor)(struct netmap_adapter *);
+	void *owner;
+	struct netmap_adapter *na;
+};
+
 static int netmap_socket_sendmsg(struct kiocb *iocb, struct socket *sock,
                                  struct msghdr *m, size_t total_len)
 {
-    struct netmap_socket *np_sock = container_of(sock, struct netmap_socket, sock);
-    struct netmap_priv_d *priv = np_sock->priv;
-    struct netmap_adapter *na = priv->np_na;
+    struct netmap_sock *nm_sock = container_of(sock, struct netmap_sock, sock);
+    struct netmap_adapter *na = nm_sock->na;
     struct netmap_ring *ring;
     unsigned i, last;
     unsigned avail;
@@ -236,7 +244,7 @@ static int netmap_socket_sendmsg(struct kiocb *iocb, struct socket *sock,
     size_t iovcnt = m->msg_iovlen;
     unsigned slot_flags = NS_MOREFRAG | NS_VNET_HDR;
 
-    ND("message_len %d, %p", (int)total_len, np_sock);
+    ND("message_len %d, %p", (int)total_len, na_sock);
 
     if (unlikely(na == NULL)) {
         RD(5, "Null netmap adapter");
@@ -313,9 +321,8 @@ static int netmap_socket_sendmsg(struct kiocb *iocb, struct socket *sock,
 static int netmap_socket_recvmsg(struct kiocb *iocb, struct socket *sock,
 		struct msghdr *m, size_t total_len, int flags)
 {
-	struct netmap_socket *np_sock = container_of(sock, struct netmap_socket, sock);
-	struct netmap_priv_d *priv = np_sock->priv;
-	struct netmap_adapter *na = priv->np_na;
+	struct netmap_sock *nm_sock = container_of(sock, struct netmap_sock, sock);
+	struct netmap_adapter *na = nm_sock->na;
 	struct netmap_ring *ring;
 	/* netmap variables */
 	unsigned i, avail;
@@ -335,7 +342,7 @@ static int netmap_socket_recvmsg(struct kiocb *iocb, struct socket *sock,
 	unsigned copied;
 
 	/* The caller asks for 'total_len' bytes. */
-	ND("recvmsg %d, %p", (int)total_len, np_sock);
+	ND("recvmsg %d, %p", (int)total_len, nm_sock);
 
 	if (unlikely(na == NULL)) {
 		RD(5, "Null netmap adapter");
@@ -432,7 +439,7 @@ static int netmap_socket_recvmsg(struct kiocb *iocb, struct socket *sock,
 static struct proto netmap_socket_proto = {
         .name = "netmap",
         .owner = THIS_MODULE,
-        .obj_size = sizeof(struct netmap_socket),
+        .obj_size = sizeof(struct netmap_sock),
 };
 
 static struct proto_ops netmap_socket_ops = {
@@ -455,44 +462,79 @@ static void netmap_sock_write_space(struct sock *sk)
     }
 }
 
-int netmap_sock_setup(struct netmap_priv_d *priv)
+static void netmap_sock_teardown(struct netmap_adapter *na)
 {
-        struct netmap_socket *np_sock;
+	struct netmap_sock *nm_sock = na->na_private;
 
-        np_sock = priv->np_sock = (struct netmap_socket *)sk_alloc(&init_net, AF_UNSPEC,
+    if (nm_sock) {
+	/* Restore the saved destructor. */
+	na->nm_dtor = nm_sock->saved_nm_dtor;
+
+	/* Drain the receive queue, which sould contain
+	   the fake skb only. */
+	skb_queue_purge(&nm_sock->sk.sk_receive_queue);
+
+        sock_put(&nm_sock->sk);
+        /* XXX What?
+           kfree(nm_sock);
+           sk_release_kernel(&nm_sock->sk);
+           */
+        sk_free(&nm_sock->sk);
+        na->na_private = NULL;
+        D("socket support freed for (%p)", na);
+    }
+}
+
+static void netmap_socket_nm_dtor(struct netmap_adapter *na)
+{
+	netmap_sock_teardown(na);
+	/* Call the saved destructor, if any. */
+	if (na->nm_dtor)
+		na->nm_dtor(na);
+}
+
+static int netmap_sock_setup(struct netmap_adapter *na, struct file *filp)
+{
+        struct netmap_sock *nm_sock;
+	struct sk_buff *skb;
+
+        na->na_private = nm_sock = (struct netmap_sock *)sk_alloc(&init_net, AF_UNSPEC,
                                                         GFP_KERNEL, &netmap_socket_proto);
-        if (!np_sock) {
+        if (!nm_sock) {
             return ENOMEM;
         }
 
-        np_sock->sock.wq = &np_sock->wq;   /* XXX rcu? */
-        init_waitqueue_head(&np_sock->wq.wait);
-        np_sock->sock.file = priv->filp;
-        np_sock->sock.ops = &netmap_socket_ops;
-        sock_init_data(&np_sock->sock, &np_sock->sk);
-        np_sock->sk.sk_write_space = &netmap_sock_write_space;
-        /* Set the backpointer to the netmap_priv_d parent structure. */
-        np_sock->priv = priv;
+	nm_sock->sock.wq = &nm_sock->wq;   /* XXX rcu? */
+        init_waitqueue_head(&nm_sock->wq.wait);
+        nm_sock->sock.file = filp;
+        nm_sock->sock.ops = &netmap_socket_ops;
+        sock_init_data(&nm_sock->sock, &nm_sock->sk);
+        nm_sock->sk.sk_write_space = &netmap_sock_write_space;
 
-        sock_hold(&np_sock->sk);
+	/* Create a fake skb. */
+	skb = alloc_skb(1800, GFP_ATOMIC);
+	if (!skb) {
+		D("fake skbuff allocation failed");
+		sk_free(&nm_sock->sk);
+		na->na_private = NULL;
 
-        D("socket support OK (%p)", priv);
+		return ENOMEM;
+	}
+	skb_queue_tail(&nm_sock->sk.sk_receive_queue, skb);
+
+        sock_hold(&nm_sock->sk);
+
+        /* Set the backpointer to the netmap_adapter parent structure. */
+        nm_sock->na = na;
+
+	nm_sock->owner = current;
+
+	nm_sock->saved_nm_dtor = na->nm_dtor;
+	na->nm_dtor = &netmap_socket_nm_dtor;
+
+        D("socket support OK for (%p)", na);
 
         return 0;
-}
-
-void netmap_sock_teardown(struct netmap_priv_d *priv)
-{
-    if (priv->np_sock) {
-        sock_put(&priv->np_sock->sk);
-        /* XXX What?
-           kfree(priv->np_sock);
-           sk_release_kernel(&priv->np_sock->sk);
-           */
-        sk_free(&priv->np_sock->sk);
-        priv->np_sock = NULL;
-        D("socket support freed (%p)", priv);
-    }
 }
 
 
@@ -635,8 +677,6 @@ linux_netmap_open(struct inode *inode, struct file *file)
 		return -ENOMEM;
 
 	file->private_data = priv;
-        /* Set the backpointer to the parent file structure. */
-        priv->filp = file;
 
 	return (0);
 }
@@ -654,23 +694,43 @@ static struct file_operations netmap_fops = {
 
 struct socket *get_netmap_socket(int fd)
 {
-    struct file *filp = fget(fd);
-    struct netmap_priv_d *priv;
+	struct file *filp = fget(fd);
+	struct netmap_priv_d *priv;
+	struct netmap_adapter *na;
+	struct netmap_sock *nm_sock;
 
-    if (!filp) {
-        return ERR_PTR(EBADF);
-    }
+	if (!filp)
+		return ERR_PTR(EBADF);
 
-    if (filp->f_op != &netmap_fops) {
-        return ERR_PTR(EINVAL);
-    }
+	if (filp->f_op != &netmap_fops)
+		return ERR_PTR(EINVAL);
 
-    priv = (struct netmap_priv_d *)filp->private_data;
-    if (!priv || !priv->np_sock) {
-        return ERR_PTR(EBADF);
-    }
+	priv = (struct netmap_priv_d *)filp->private_data;
+	if (!priv)
+		return ERR_PTR(EBADF);
 
-    return &priv->np_sock->sock;
+	NMG_LOCK();
+	na = priv->np_na;
+	if (na == NULL) {
+		NMG_UNLOCK();
+		return ERR_PTR(EBADF);
+	}
+
+	nm_sock = (struct netmap_sock *)(na->na_private);
+
+	if (NETMAP_OWNED_BY_KERN(na) && (!nm_sock || nm_sock->owner != current)) {
+		NMG_UNLOCK();
+		return ERR_PTR(EBUSY);
+	}
+
+	if (!nm_sock)
+		netmap_sock_setup(na, filp);
+	nm_sock = (struct netmap_sock *)(na->na_private);
+	NMG_UNLOCK();
+
+	ND("na_private %p, nm_sock %p", na->na_private, nm_sock);
+
+	return &nm_sock->sock;
 }
 EXPORT_SYMBOL(get_netmap_socket);
 

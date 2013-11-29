@@ -632,7 +632,6 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 	}
 	/* delete the nifp */
 	netmap_mem_if_delete(na, nifp);
-        netmap_sock_teardown(priv);
 }
 
 
@@ -1250,7 +1249,6 @@ netmap_do_regif(struct netmap_priv_d *priv, struct netmap_adapter *na,
 			nifp = NULL;
 		}
 	}
-        error = netmap_sock_setup(priv);
 out:
 	*err = error;
 	if (error) {

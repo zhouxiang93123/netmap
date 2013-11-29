@@ -980,16 +980,6 @@ void netmap_disable_all_rings(struct ifnet *);
 void netmap_enable_all_rings(struct ifnet *);
 void netmap_disable_ring(struct netmap_kring *kr);
 
-#ifdef linux
-struct netmap_priv_d;
-
-struct netmap_socket {
-    struct sock sk;
-    struct socket sock;
-    struct socket_wq wq;
-    struct netmap_priv_d *priv;
-};
-#endif
 
 /* Structure associated to each thread which registered an interface.
  *
@@ -1024,10 +1014,6 @@ struct netmap_priv_d {
 	struct netmap_mem_d     *np_mref;	/* use with NMG_LOCK held */
 	/* np_refcount is only used on FreeBSD */
 	int		        np_refcount;	/* use with NMG_LOCK held */
-#ifdef linux
-        struct netmap_socket *np_sock;   /* socket support for netmap */
-        struct file *filp;
-#endif
 };
 
 
@@ -1065,10 +1051,5 @@ int netmap_mitigation_active(struct netmap_generic_adapter *na);
 void netmap_mitigation_cleanup(struct netmap_generic_adapter *na);
 
 enum hrtimer_restart generic_timer_handler(struct hrtimer *t);
-
-
-/* netmap socket support */
-int netmap_sock_setup(struct netmap_priv_d *priv);
-void netmap_sock_teardown(struct netmap_priv_d *priv);
 
 #endif /* _NET_NETMAP_KERN_H_ */
