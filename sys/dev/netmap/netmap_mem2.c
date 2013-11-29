@@ -167,12 +167,12 @@ const struct netmap_mem_d nm_blueprint = {
 #define DECLARE_SYSCTLS(id, name) \
 	SYSCTL_INT(_dev_netmap, OID_AUTO, name##_size, \
 	    CTLFLAG_RW, &netmap_params[id].size, 0, "Requested size of netmap " STRINGIFY(name) "s"); \
-        SYSCTL_INT(_dev_netmap, OID_AUTO, name##_curr_size, \
-            CTLFLAG_RD, &nm_mem.pools[id]._objsize, 0, "Current size of netmap " STRINGIFY(name) "s"); \
-        SYSCTL_INT(_dev_netmap, OID_AUTO, name##_num, \
-            CTLFLAG_RW, &netmap_params[id].num, 0, "Requested number of netmap " STRINGIFY(name) "s"); \
-        SYSCTL_INT(_dev_netmap, OID_AUTO, name##_curr_num, \
-            CTLFLAG_RD, &nm_mem.pools[id].objtotal, 0, "Current number of netmap " STRINGIFY(name) "s")
+	SYSCTL_INT(_dev_netmap, OID_AUTO, name##_curr_size, \
+	    CTLFLAG_RD, &nm_mem.pools[id]._objsize, 0, "Current size of netmap " STRINGIFY(name) "s"); \
+	SYSCTL_INT(_dev_netmap, OID_AUTO, name##_num, \
+	    CTLFLAG_RW, &netmap_params[id].num, 0, "Requested number of netmap " STRINGIFY(name) "s"); \
+	SYSCTL_INT(_dev_netmap, OID_AUTO, name##_curr_num, \
+	    CTLFLAG_RD, &nm_mem.pools[id].objtotal, 0, "Current number of netmap " STRINGIFY(name) "s")
 
 SYSCTL_DECL(_dev_netmap);
 DECLARE_SYSCTLS(NETMAP_IF_POOL, if);
@@ -843,7 +843,7 @@ netmap_mem_global_config(struct netmap_mem_d *nmd)
 			netmap_reset_obj_allocator(&nmd->pools[i]);
 		}
 		nmd->flags &= ~NETMAP_MEM_FINALIZED;
-        }
+	}
 
 	for (i = 0; i < NETMAP_POOLS_NR; i++) {
 		nmd->lasterr = netmap_config_obj_allocator(&nmd->pools[i],
