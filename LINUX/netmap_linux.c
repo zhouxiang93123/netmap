@@ -173,7 +173,7 @@ int generic_xmit_frame(struct ifnet *ifp, struct mbuf *m,
     /* Empty the sk_buff. */
     skb_trim(m, 0);
 
-    /* TODO Support the slot flags (NS_FRAG, NS_INDIRECT). */
+    /* TODO Support the slot flags (NS_MOREFRAG, NS_INDIRECT). */
     skb_copy_to_linear_data(m, addr, len); // skb_store_bits(m, 0, addr, len);
     skb_put(m, len);
     NM_ATOMIC_INC(&m->users);
@@ -216,325 +216,6 @@ generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq)
 {
     *txq = ifp->real_num_tx_queues;
     *rxq = 1; /* TODO ifp->real_num_rx_queues */
-}
-
-
-/* =========================== SOCKET SUPPORT ============================ */
-
-struct netmap_sock {
-	struct sock sk;
-	struct socket sock;
-	struct socket_wq wq;
-	void (*saved_nm_dtor)(struct netmap_adapter *);
-	void *owner;
-	struct netmap_adapter *na;
-};
-
-static int netmap_socket_sendmsg(struct kiocb *iocb, struct socket *sock,
-                                 struct msghdr *m, size_t total_len)
-{
-    struct netmap_sock *nm_sock = container_of(sock, struct netmap_sock, sock);
-    struct netmap_adapter *na = nm_sock->na;
-    struct netmap_ring *ring;
-    unsigned i, last;
-    unsigned avail;
-    unsigned j;
-    unsigned nm_buf_size;
-    struct iovec *iov = m->msg_iov;
-    size_t iovcnt = m->msg_iovlen;
-    unsigned slot_flags = NS_MOREFRAG | NS_VNET_HDR;
-
-    ND("message_len %d, %p", (int)total_len, na_sock);
-
-    if (unlikely(na == NULL)) {
-        RD(5, "Null netmap adapter");
-        return total_len;
-    }
-
-    /* Grab the netmap ring normally used from userspace. */
-    ring = na->tx_rings[0].ring;
-    nm_buf_size = ring->nr_buf_size;
-
-    i = last = ring->cur;
-    avail = ring->avail;
-    ND("A) cur=%d avail=%d, hwcur=%d, hwavail=%d\n", i, avail, na->tx_rings[0].nr_hwcur,
-                                                               na->tx_rings[0].nr_hwavail);
-    if (avail < iovcnt) {
-        /* Not enough netmap slots. */
-        return 0;
-    }
-
-    for (j=0; j<iovcnt; j++) {
-        uint8_t *iov_frag = iov[j].iov_base;
-        unsigned iov_frag_size = iov[j].iov_len;
-        unsigned offset = 0;
-#if 0
-        unsigned k = 0;
-        uint8_t ch;
-
-        printk("len=%d: ", iov_frag_size);
-        for (k=0; k<iov_frag_size && k<36; k++) {
-            if(copy_from_user(&ch, iov_frag + k, 1)) {
-                D("failed");
-            }
-            printk("%02x:", ch);
-        }printk("\n");
-#endif
-        while (iov_frag_size) {
-            unsigned nm_frag_size = min(iov_frag_size, nm_buf_size);
-            uint8_t *dst;
-
-            if (unlikely(avail == 0)) {
-                return 0;
-            }
-
-            dst = BDG_NMB(na, &ring->slot[i]);
-
-            ring->slot[i].len = nm_frag_size;
-            ring->slot[i].flags = slot_flags;
-            slot_flags &= ~NS_VNET_HDR;
-            if (copy_from_user(dst, iov_frag + offset, nm_frag_size)) {
-                D("copy_from_user() error");
-            }
-
-            last = i;
-            i = NETMAP_RING_NEXT(ring, i);
-            avail--;
-
-            offset += nm_frag_size;
-            iov_frag_size -= nm_frag_size;
-        }
-    }
-
-    ring->slot[last].flags &= ~NS_MOREFRAG;
-
-    ring->cur = i;
-    ring->avail = avail;
-
-    na->nm_txsync(na, 0, 0);
-    ND("B) cur=%d avail=%d, hwcur=%d, hwavail=%d\n", i, avail, na->tx_rings[0].nr_hwcur,
-                                                               na->tx_rings[0].nr_hwavail);
-
-    return total_len;
-}
-
-static int netmap_socket_recvmsg(struct kiocb *iocb, struct socket *sock,
-		struct msghdr *m, size_t total_len, int flags)
-{
-	struct netmap_sock *nm_sock = container_of(sock, struct netmap_sock, sock);
-	struct netmap_adapter *na = nm_sock->na;
-	struct netmap_ring *ring;
-	/* netmap variables */
-	unsigned i, avail;
-	bool morefrag;
-	unsigned nm_frag_size;
-	unsigned nm_frag_ofs;
-	uint8_t *src;
-	/* iovec variables */
-	unsigned j;
-	struct iovec *iov = m->msg_iov;
-	size_t iovcnt = m->msg_iovlen;
-	uint8_t *dst;
-	unsigned iov_frag_size;
-	unsigned iov_frag_ofs;
-	/* counters */
-	unsigned copy_size;
-	unsigned copied;
-
-	/* The caller asks for 'total_len' bytes. */
-	ND("recvmsg %d, %p", (int)total_len, nm_sock);
-
-	if (unlikely(na == NULL)) {
-		RD(5, "Null netmap adapter");
-		return total_len;
-	}
-
-	/* Total bytes actually copied. */
-	copied = 0;
-
-	/* Grab the netmap RX ring normally used from userspace. */
-	ring = na->rx_rings[0].ring;
-	i = ring->cur;
-	avail = ring->avail;
-
-	/* Index into the input iovec[]. */
-	j = 0;
-
-	/* Spurious call: Do nothing. */
-	if (avail == 0)
-		return 0;
-
-	/* init netmap variables */
-	morefrag = (ring->slot[i].flags & NS_MOREFRAG);
-	nm_frag_ofs = 0;
-	nm_frag_size = ring->slot[i].len;
-	src = BDG_NMB(na, &ring->slot[i]);
-
-	/* init iovec variables */
-	iov_frag_ofs = 0;
-	iov_frag_size = iov[j].iov_len;
-	dst = iov[j].iov_base;
-
-	/* Copy from the netmap scatter-gather to the caller
-	 * scatter-gather.
-	 */
-	while (copied < total_len) {
-		copy_size = min(nm_frag_size, iov_frag_size);
-		copy_to_user(dst + iov_frag_ofs, src + nm_frag_ofs,
-			     copy_size);
-		nm_frag_ofs += copy_size;
-		nm_frag_size -= copy_size;
-		iov_frag_ofs += copy_size;
-		iov_frag_size -= copy_size;
-		copied += copy_size;
-		if (nm_frag_size == 0) {
-			/* Netmap slot exhausted. If this was the
-			 * last slot, or no more slots ar available,
-			 * we've done.
-			 */
-			if (!morefrag || !avail)
-				break;
-			/* Take the next slot. */
-			i = NETMAP_RING_NEXT(ring, i);
-			avail--;
-			morefrag = (ring->slot[i].flags & NS_MOREFRAG);
-			nm_frag_ofs = 0;
-			nm_frag_size = ring->slot[i].len;
-			src = BDG_NMB(na, &ring->slot[i]);
-		}
-		if (iov_frag_size == 0) {
-			/* The current iovec fragment is exhausted.
-			 * Since we enter here, there must be more
-			 * to read from the netmap slots (otherwise
-			 * we would have exited the loop in the
-			 * above branch).
-			 * If this was the last fragment, it means
-			 * that there is not enough space in the input
-			 * iovec[].
-			 */
-			j++;
-			if (unlikely(j >= iovcnt)) {
-				break;
-			}
-			/* Take the next iovec fragment. */
-			iov_frag_ofs = 0;
-			iov_frag_size = iov[j].iov_len;
-			dst = iov[j].iov_base;
-		}
-	}
-
-	if (unlikely(!avail && morefrag)) {
-		RD(5, "Error: ran out of slots, with a pending"
-				"incomplete packet\n");
-	}
-
-	ring->cur = i;
-	ring->avail = avail;
-
-	D("read %d bytes using %d iovecs", copied, j);
-
-	return copied;
-}
-
-static struct proto netmap_socket_proto = {
-        .name = "netmap",
-        .owner = THIS_MODULE,
-        .obj_size = sizeof(struct netmap_sock),
-};
-
-static struct proto_ops netmap_socket_ops = {
-        .sendmsg = netmap_socket_sendmsg,
-        .recvmsg = netmap_socket_recvmsg,
-};
-
-static void netmap_sock_write_space(struct sock *sk)
-{
-    wait_queue_head_t *wqueue;
-
-    if (!sock_writeable(sk) ||
-        !test_and_clear_bit(SOCK_ASYNC_NOSPACE, &sk->sk_socket->flags)) {
-            return;
-    }
-
-    wqueue = sk_sleep(sk);
-    if (wqueue && waitqueue_active(wqueue)) {
-        wake_up_interruptible_poll(wqueue, POLLOUT | POLLWRNORM | POLLWRBAND);
-    }
-}
-
-static void netmap_sock_teardown(struct netmap_adapter *na)
-{
-	struct netmap_sock *nm_sock = na->na_private;
-
-    if (nm_sock) {
-	/* Restore the saved destructor. */
-	na->nm_dtor = nm_sock->saved_nm_dtor;
-
-	/* Drain the receive queue, which sould contain
-	   the fake skb only. */
-	skb_queue_purge(&nm_sock->sk.sk_receive_queue);
-
-        sock_put(&nm_sock->sk);
-        /* XXX What?
-           kfree(nm_sock);
-           sk_release_kernel(&nm_sock->sk);
-           */
-        sk_free(&nm_sock->sk);
-        na->na_private = NULL;
-        D("socket support freed for (%p)", na);
-    }
-}
-
-static void netmap_socket_nm_dtor(struct netmap_adapter *na)
-{
-	netmap_sock_teardown(na);
-	/* Call the saved destructor, if any. */
-	if (na->nm_dtor)
-		na->nm_dtor(na);
-}
-
-static struct netmap_sock *netmap_sock_setup(struct netmap_adapter *na, struct file *filp)
-{
-        struct netmap_sock *nm_sock;
-	struct sk_buff *skb;
-
-        na->na_private = nm_sock = (struct netmap_sock *)sk_alloc(&init_net, AF_UNSPEC,
-                                                        GFP_KERNEL, &netmap_socket_proto);
-        if (!nm_sock) {
-            return NULL;
-        }
-
-	nm_sock->sock.wq = &nm_sock->wq;   /* XXX rcu? */
-        init_waitqueue_head(&nm_sock->wq.wait);
-        nm_sock->sock.file = filp;
-        nm_sock->sock.ops = &netmap_socket_ops;
-        sock_init_data(&nm_sock->sock, &nm_sock->sk);
-        nm_sock->sk.sk_write_space = &netmap_sock_write_space;
-
-	/* Create a fake skb. */
-	skb = alloc_skb(1800, GFP_ATOMIC);
-	if (!skb) {
-		D("fake skbuff allocation failed");
-		sk_free(&nm_sock->sk);
-		na->na_private = NULL;
-
-		return NULL;
-	}
-	skb_queue_tail(&nm_sock->sk.sk_receive_queue, skb);
-
-        sock_hold(&nm_sock->sk);
-
-        /* Set the backpointer to the netmap_adapter parent structure. */
-        nm_sock->na = na;
-
-	nm_sock->owner = current;
-
-	nm_sock->saved_nm_dtor = na->nm_dtor;
-	na->nm_dtor = &netmap_socket_nm_dtor;
-
-        D("socket support OK for (%p)", na);
-
-        return nm_sock;
 }
 
 
@@ -692,6 +373,185 @@ static struct file_operations netmap_fops = {
 };
 
 
+/* =========================== SOCKET SUPPORT ============================ */
+
+struct netmap_sock {
+	struct sock sk;
+	struct socket sock;
+	struct socket_wq wq;
+	void (*saved_nm_dtor)(struct netmap_adapter *);
+	int (*saved_nm_notify)(struct netmap_adapter *, u_int ring,
+				enum txrx, int flags);
+	void *owner;
+	struct sk_buff *fake_skb;
+	struct netmap_adapter *na;
+};
+
+static struct proto netmap_socket_proto = {
+        .name = "netmap",
+        .owner = THIS_MODULE,
+        .obj_size = sizeof(struct netmap_sock),
+};
+
+static int netmap_socket_sendmsg(struct kiocb *iocb, struct socket *sock,
+                                 struct msghdr *m, size_t total_len);
+static int netmap_socket_recvmsg(struct kiocb *iocb, struct socket *sock,
+		struct msghdr *m, size_t total_len, int flags);
+
+static struct proto_ops netmap_socket_ops = {
+        .sendmsg = netmap_socket_sendmsg,
+        .recvmsg = netmap_socket_recvmsg,
+};
+
+static void netmap_sock_write_space(struct sock *sk)
+{
+    wait_queue_head_t *wqueue;
+
+    if (!sock_writeable(sk) ||
+        !test_and_clear_bit(SOCK_ASYNC_NOSPACE, &sk->sk_socket->flags)) {
+            return;
+    }
+
+    wqueue = sk_sleep(sk);
+    if (wqueue && waitqueue_active(wqueue)) {
+        wake_up_interruptible_poll(wqueue, POLLOUT | POLLWRNORM | POLLWRBAND);
+    }
+}
+
+static void netmap_sock_teardown(struct netmap_adapter *na)
+{
+	struct netmap_sock *nm_sock = na->na_private;
+
+    if (nm_sock) {
+	/* Restore the saved destructor. */
+	na->nm_dtor = nm_sock->saved_nm_dtor;
+	na->nm_notify = nm_sock->saved_nm_notify;
+
+	kfree_skb(nm_sock->fake_skb);
+
+        sock_put(&nm_sock->sk);
+        /* XXX What?
+           kfree(nm_sock);
+           sk_release_kernel(&nm_sock->sk);
+           */
+        sk_free(&nm_sock->sk);
+        na->na_private = NULL;
+        D("socket support freed for (%p)", na);
+    }
+}
+
+static void netmap_socket_nm_dtor(struct netmap_adapter *na)
+{
+	netmap_sock_teardown(na);
+	/* Call the saved destructor, if any. */
+	if (na->nm_dtor)
+		na->nm_dtor(na);
+}
+
+static int netmap_socket_peek_len(struct netmap_kring *kring)
+{
+	struct netmap_ring *ring = kring->ring;
+	u_int i = ring->cur;
+	int ret = 0;
+
+	if (ring->avail) {
+		for(;;) {
+			ret += ring->slot[i].len;
+			if (!(ring->slot[i].flags & NS_MOREFRAG))
+				break;
+			if (unlikely(++i == kring->nkr_num_slots))
+				i = 0;
+		}
+	}
+
+	return ret;
+}
+
+static int netmap_socket_nm_notify(struct netmap_adapter *na,
+				u_int n_ring, enum txrx tx, int flags)
+{
+	struct netmap_kring *kring;
+	struct netmap_sock *nm_sock;
+
+	D("called");
+	nm_sock = (struct netmap_sock *)(na->na_private);
+	if (likely(nm_sock)) {
+		struct sk_buff_head* q = &nm_sock->sk.sk_receive_queue;
+		unsigned long f;
+
+		spin_lock_irqsave(&q->lock, f);
+		if (!skb_queue_len(q)) {
+			nm_sock->fake_skb->len = netmap_socket_peek_len(&na->rx_rings[0]);
+			D("peek %d", nm_sock->fake_skb->len);
+			if (nm_sock->fake_skb->len)
+				__skb_queue_tail(q, nm_sock->fake_skb);
+		}
+		spin_unlock_irqrestore(&q->lock, f);
+	}
+
+	if (tx == NR_TX) {
+		kring = na->tx_rings + n_ring;
+		wake_up_interruptible_poll(&kring->si, POLLIN |
+					POLLRDNORM | POLLRDBAND);
+		if (flags & NAF_GLOBAL_NOTIFY)
+			wake_up_interruptible_poll(&na->tx_si, POLLIN |
+					POLLRDNORM | POLLRDBAND);
+	} else {
+		kring = na->rx_rings + n_ring;
+		wake_up_interruptible_poll(&kring->si, POLLIN |
+					POLLRDNORM | POLLRDBAND);
+		if (flags & NAF_GLOBAL_NOTIFY)
+			wake_up_interruptible_poll(&na->rx_si, POLLIN |
+					POLLRDNORM | POLLRDBAND);
+	}
+
+	return 0;
+}
+
+static struct netmap_sock *netmap_sock_setup(struct netmap_adapter *na, struct file *filp)
+{
+        struct netmap_sock *nm_sock;
+
+        na->na_private = nm_sock = (struct netmap_sock *)sk_alloc(&init_net, AF_UNSPEC,
+                                                        GFP_KERNEL, &netmap_socket_proto);
+        if (!nm_sock) {
+            return NULL;
+        }
+
+	nm_sock->sock.wq = &nm_sock->wq;   /* XXX rcu? */
+        init_waitqueue_head(&nm_sock->wq.wait);
+        nm_sock->sock.file = filp;
+        nm_sock->sock.ops = &netmap_socket_ops;
+        sock_init_data(&nm_sock->sock, &nm_sock->sk);
+        nm_sock->sk.sk_write_space = &netmap_sock_write_space;
+
+	/* Create a fake skb. */
+	nm_sock->fake_skb = alloc_skb(1800, GFP_ATOMIC);
+	if (!nm_sock->fake_skb) {
+		D("fake skbuff allocation failed");
+		sk_free(&nm_sock->sk);
+		na->na_private = NULL;
+
+		return NULL;
+	}
+
+        sock_hold(&nm_sock->sk);
+
+        /* Set the backpointer to the netmap_adapter parent structure. */
+        nm_sock->na = na;
+
+	nm_sock->owner = current;
+
+	nm_sock->saved_nm_dtor = na->nm_dtor;
+	nm_sock->saved_nm_notify = na->nm_notify;
+	na->nm_dtor = &netmap_socket_nm_dtor;
+	na->nm_notify = &netmap_socket_nm_notify;
+
+        D("socket support OK for (%p)", na);
+
+        return nm_sock;
+}
+
 struct socket *get_netmap_socket(int fd)
 {
 	struct file *filp = fget(fd);
@@ -737,6 +597,224 @@ struct socket *get_netmap_socket(int fd)
 }
 EXPORT_SYMBOL(get_netmap_socket);
 
+static int netmap_socket_sendmsg(struct kiocb *iocb, struct socket *sock,
+                                 struct msghdr *m, size_t total_len)
+{
+    struct netmap_sock *nm_sock = container_of(sock, struct netmap_sock, sock);
+    struct netmap_adapter *na = nm_sock->na;
+    struct netmap_ring *ring;
+    unsigned i, last;
+    unsigned avail;
+    unsigned j;
+    unsigned nm_buf_size;
+    struct iovec *iov = m->msg_iov;
+    size_t iovcnt = m->msg_iovlen;
+    unsigned slot_flags = NS_MOREFRAG | NS_VNET_HDR;
+
+    ND("message_len %d, %p", (int)total_len, na_sock);
+
+    if (unlikely(na == NULL)) {
+        RD(5, "Null netmap adapter");
+        return total_len;
+    }
+
+    /* Grab the netmap ring normally used from userspace. */
+    ring = na->tx_rings[0].ring;
+    nm_buf_size = ring->nr_buf_size;
+
+    i = last = ring->cur;
+    avail = ring->avail;
+    ND("A) cur=%d avail=%d, hwcur=%d, hwavail=%d\n", i, avail, na->tx_rings[0].nr_hwcur,
+                                                               na->tx_rings[0].nr_hwavail);
+    if (avail < iovcnt) {
+        /* Not enough netmap slots. */
+        return 0;
+    }
+
+    for (j=0; j<iovcnt; j++) {
+        uint8_t *iov_frag = iov[j].iov_base;
+        unsigned iov_frag_size = iov[j].iov_len;
+        unsigned offset = 0;
+#if 0
+        unsigned k = 0;
+        uint8_t ch;
+
+        printk("len=%d: ", iov_frag_size);
+        for (k=0; k<iov_frag_size && k<36; k++) {
+            if(copy_from_user(&ch, iov_frag + k, 1)) {
+                D("failed");
+            }
+            printk("%02x:", ch);
+        }printk("\n");
+#endif
+        while (iov_frag_size) {
+            unsigned nm_frag_size = min(iov_frag_size, nm_buf_size);
+            uint8_t *dst;
+
+            if (unlikely(avail == 0)) {
+                return 0;
+            }
+
+            dst = BDG_NMB(na, &ring->slot[i]);
+
+            ring->slot[i].len = nm_frag_size;
+            ring->slot[i].flags = slot_flags;
+            slot_flags &= ~NS_VNET_HDR;
+            if (copy_from_user(dst, iov_frag + offset, nm_frag_size)) {
+                D("copy_from_user() error");
+            }
+
+            last = i;
+            i = NETMAP_RING_NEXT(ring, i);
+            avail--;
+
+            offset += nm_frag_size;
+            iov_frag_size -= nm_frag_size;
+        }
+    }
+
+    ring->slot[last].flags &= ~NS_MOREFRAG;
+
+    ring->cur = i;
+    ring->avail = avail;
+
+    na->nm_txsync(na, 0, 0);
+    ND("B) cur=%d avail=%d, hwcur=%d, hwavail=%d\n", i, avail, na->tx_rings[0].nr_hwcur,
+                                                               na->tx_rings[0].nr_hwavail);
+
+    return total_len;
+}
+
+static int netmap_socket_recvmsg(struct kiocb *iocb, struct socket *sock,
+		struct msghdr *m, size_t total_len, int flags)
+{
+	struct netmap_sock *nm_sock = container_of(sock, struct netmap_sock, sock);
+	struct netmap_adapter *na = nm_sock->na;
+	struct netmap_ring *ring;
+	/* netmap variables */
+	unsigned i, avail;
+	bool morefrag;
+	unsigned nm_frag_size;
+	unsigned nm_frag_ofs;
+	uint8_t *src;
+	/* iovec variables */
+	unsigned j;
+	struct iovec *iov = m->msg_iov;
+	size_t iovcnt = m->msg_iovlen;
+	uint8_t *dst;
+	unsigned iov_frag_size;
+	unsigned iov_frag_ofs;
+	/* counters */
+	unsigned copy_size;
+	unsigned copied;
+	int peek_len;
+
+	/* The caller asks for 'total_len' bytes. */
+	ND("recvmsg %d, %p", (int)total_len, nm_sock);
+
+	if (unlikely(na == NULL)) {
+		RD(5, "Null netmap adapter");
+		return total_len;
+	}
+
+	/* Total bytes actually copied. */
+	copied = 0;
+
+	/* Grab the netmap RX ring normally used from userspace. */
+	ring = na->rx_rings[0].ring;
+	i = ring->cur;
+	avail = ring->avail;
+
+	/* Index into the input iovec[]. */
+	j = 0;
+
+	/* Spurious call: Do nothing. */
+	if (avail == 0)
+		return 0;
+
+	/* init netmap variables */
+	morefrag = (ring->slot[i].flags & NS_MOREFRAG);
+	nm_frag_ofs = 0;
+	nm_frag_size = ring->slot[i].len;
+	src = BDG_NMB(na, &ring->slot[i]);
+
+	/* init iovec variables */
+	iov_frag_ofs = 0;
+	iov_frag_size = iov[j].iov_len;
+	dst = iov[j].iov_base;
+
+	/* Copy from the netmap scatter-gather to the caller
+	 * scatter-gather.
+	 */
+	while (copied < total_len) {
+		copy_size = min(nm_frag_size, iov_frag_size);
+		copy_to_user(dst + iov_frag_ofs, src + nm_frag_ofs,
+			     copy_size);
+		nm_frag_ofs += copy_size;
+		nm_frag_size -= copy_size;
+		iov_frag_ofs += copy_size;
+		iov_frag_size -= copy_size;
+		copied += copy_size;
+		if (nm_frag_size == 0) {
+			/* Netmap slot exhausted. If this was the
+			 * last slot, or no more slots ar available,
+			 * we've done.
+			 */
+			if (!morefrag || !avail)
+				break;
+			/* Take the next slot. */
+			i = NETMAP_RING_NEXT(ring, i);
+			avail--;
+			morefrag = (ring->slot[i].flags & NS_MOREFRAG);
+			nm_frag_ofs = 0;
+			nm_frag_size = ring->slot[i].len;
+			src = BDG_NMB(na, &ring->slot[i]);
+		}
+		if (iov_frag_size == 0) {
+			/* The current iovec fragment is exhausted.
+			 * Since we enter here, there must be more
+			 * to read from the netmap slots (otherwise
+			 * we would have exited the loop in the
+			 * above branch).
+			 * If this was the last fragment, it means
+			 * that there is not enough space in the input
+			 * iovec[].
+			 */
+			j++;
+			if (unlikely(j >= iovcnt)) {
+				break;
+			}
+			/* Take the next iovec fragment. */
+			iov_frag_ofs = 0;
+			iov_frag_size = iov[j].iov_len;
+			dst = iov[j].iov_base;
+		}
+	}
+
+	if (unlikely(!avail && morefrag)) {
+		RD(5, "Error: ran out of slots, with a pending"
+				"incomplete packet\n");
+	}
+
+	ring->cur = i;
+	ring->avail = avail;
+
+	/* Update the fake skbuff. */
+	peek_len = netmap_socket_peek_len(&na->rx_rings[0]);
+	if (peek_len)
+		nm_sock->fake_skb->len = peek_len;
+	else {
+		skb_dequeue(&nm_sock->sk.sk_receive_queue);
+		D("dequeue");
+	}
+
+	D("read %d bytes using %d iovecs", copied, j);
+
+	return copied;
+}
+
+
+/* =========================== MODULE INIT ======================== */
 
 struct miscdevice netmap_cdevsw = { /* same name as FreeBSD */
 	MISC_DYNAMIC_MINOR,
