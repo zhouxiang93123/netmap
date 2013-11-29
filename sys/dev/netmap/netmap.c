@@ -260,7 +260,7 @@ void netmap_disable_ring(struct netmap_kring *kr)
 	nm_kr_put(kr);
 }
 
-void netmap_set_all_rings(struct ifnet *ifp, int stopped)
+static void netmap_set_all_rings(struct ifnet *ifp, int stopped)
 {
 	struct netmap_adapter *na;
 	int i;
