@@ -493,7 +493,7 @@ static void netmap_socket_nm_dtor(struct netmap_adapter *na)
 		na->nm_dtor(na);
 }
 
-static int netmap_sock_setup(struct netmap_adapter *na, struct file *filp)
+static struct netmap_sock *netmap_sock_setup(struct netmap_adapter *na, struct file *filp)
 {
         struct netmap_sock *nm_sock;
 	struct sk_buff *skb;
@@ -501,7 +501,7 @@ static int netmap_sock_setup(struct netmap_adapter *na, struct file *filp)
         na->na_private = nm_sock = (struct netmap_sock *)sk_alloc(&init_net, AF_UNSPEC,
                                                         GFP_KERNEL, &netmap_socket_proto);
         if (!nm_sock) {
-            return ENOMEM;
+            return NULL;
         }
 
 	nm_sock->sock.wq = &nm_sock->wq;   /* XXX rcu? */
@@ -518,7 +518,7 @@ static int netmap_sock_setup(struct netmap_adapter *na, struct file *filp)
 		sk_free(&nm_sock->sk);
 		na->na_private = NULL;
 
-		return ENOMEM;
+		return NULL;
 	}
 	skb_queue_tail(&nm_sock->sk.sk_receive_queue, skb);
 
@@ -534,7 +534,7 @@ static int netmap_sock_setup(struct netmap_adapter *na, struct file *filp)
 
         D("socket support OK for (%p)", na);
 
-        return 0;
+        return nm_sock;
 }
 
 
@@ -724,11 +724,14 @@ struct socket *get_netmap_socket(int fd)
 	}
 
 	if (!nm_sock)
-		netmap_sock_setup(na, filp);
-	nm_sock = (struct netmap_sock *)(na->na_private);
+		nm_sock = netmap_sock_setup(na, filp);
 	NMG_UNLOCK();
 
 	ND("na_private %p, nm_sock %p", na->na_private, nm_sock);
+
+	/* netmap_sock_setup() may fail because of OOM */
+	if (!nm_sock)
+		return ERR_PTR(ENOMEM);
 
 	return &nm_sock->sock;
 }
