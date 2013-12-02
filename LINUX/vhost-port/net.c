@@ -116,6 +116,22 @@ enum v1000_net_poll_state {
     VHOST_NET_POLL_STOPPED = 2,
 };
 
+struct v1000_backend {
+    /* Get the file struct attached to the backend. */
+    struct file *(*get_file)(void *opaque);
+    /* Get the current available tx space in the backend. */
+    int (*avail_tx_space)(void *opaque);
+    /* Get the total tx space in the backend.
+       TODO maybe it's not necessary a callback */
+    int (*total_tx_space)(void *opaque);
+    /* Send a packet to the backend. */
+    int (*sendmsg)(void *opaque, struct msghdr *msg, size_t iovlen);
+    /* Get the length of the next rx buffer ready into the backend. */
+    int (*peek_head_len)(void *opaque);
+    /* Receive a packet from the backend. */
+    int (*recvmsg)(void *opaque, struct msghdr *msg, size_t len);
+};
+
 struct v1000_net {
     struct v1000_dev dev;
     struct v1000_ring tx_ring, rx_ring;
@@ -134,8 +150,67 @@ struct v1000_net {
     struct virtio_net_hdr __user * rx_hdr;
     struct e1000_state state;
     bool broken;
+    struct v1000_backend backend;
     IFRATE(struct rate_context rate_ctx);
 };
+
+static struct file *socket_backend_get_file(void *opaque)
+{
+    struct socket *sock = (struct socket *)opaque;
+
+    return sock->file;
+}
+
+static int socket_backend_avail_tx_space(void *opaque)
+{
+    struct socket *sock = (struct socket *)opaque;
+
+    return atomic_read(&sock->sk->sk_wmem_alloc);
+}
+
+static int socket_backend_total_tx_space(void *opaque)
+{
+    struct socket *sock = (struct socket *)opaque;
+
+    return sock->sk->sk_sndbuf;
+}
+
+static int socket_backend_sendmsg(void *opaque, struct msghdr *msg,
+                                   size_t iovlen)
+{
+    struct socket *sock = (struct socket *)opaque;
+
+    return sock->ops->sendmsg(NULL, sock, msg, iovlen);
+}
+
+static int socket_backend_peek_head_len(void *opaque)
+{
+    struct socket *sock = (struct socket *)opaque;
+    struct sock *sk = sock->sk;
+    struct sk_buff *head;
+    int len = 0;
+    unsigned long flags;
+
+    spin_lock_irqsave(&sk->sk_receive_queue.lock, flags);
+    head = skb_peek(&sk->sk_receive_queue);
+    if (likely(head)) {
+	len = head->len;
+	if (vlan_tx_tag_present(head))
+	    len += VLAN_HLEN;
+    }
+
+    spin_unlock_irqrestore(&sk->sk_receive_queue.lock, flags);
+    return len;
+}
+
+static int socket_backend_recvmsg(void *opaque, struct msghdr *msg,
+                                  size_t len)
+{
+    struct socket *sock = (struct socket *)opaque;
+
+    return sock->ops->recvmsg(NULL, sock, msg, len,
+                              MSG_DONTWAIT | MSG_TRUNC);
+}
 
 #ifdef DEBUG
 /* Print the translation table. */
@@ -199,13 +274,13 @@ static void tx_poll_stop(struct v1000_net *net)
 }
 
 /* Caller must have TX VQ lock */
-static int tx_poll_start(struct v1000_net *net, struct socket *sock)
+static int tx_poll_start(struct v1000_net *net, void *opaque)
 {
     int ret;
 
     if (unlikely(net->tx_poll_state != VHOST_NET_POLL_STOPPED))
 	return 0;
-    ret = v1000_poll_start(&net->tx_poll, sock->file);
+    ret = v1000_poll_start(&net->tx_poll, net->backend.get_file(opaque));
     if (!ret)
 	net->tx_poll_state = VHOST_NET_POLL_STARTED;
     return ret;
@@ -243,7 +318,8 @@ static void handle_tx(struct v1000_net *net)
     struct virtio_net_hdr hdr;
     size_t iovlen, total_len = 0;
     int err, wmem;
-    struct socket *sock;
+    void *opaque;
+    int total_tx_space;
     struct e1000_state * st = &net->state;
     struct e1000_tx_desc desc;
     struct e1000_context_desc * ctxdp =
@@ -255,17 +331,18 @@ static void handle_tx(struct v1000_net *net)
     uint32_t desc_type;
     bool eop;
 
-    sock = rcu_dereference_check(vr->private_data, 1);
-    if (unlikely(!sock || net->broken)) {
+    opaque = rcu_dereference_check(vr->private_data, 1);
+    if (unlikely(!opaque || net->broken)) {
 	printk("[v1000] Broken device\n");
 	return;
     }
 
-    wmem = atomic_read(&sock->sk->sk_wmem_alloc);
-    if (wmem >= sock->sk->sk_sndbuf) {
-        /* No space in the sock transmit queue. */
+    total_tx_space = net->backend.total_tx_space(opaque);
+    wmem = net->backend.avail_tx_space(opaque);
+    if (wmem >= total_tx_space) {
+        /* No space in the backend transmit queue. */
 	mutex_lock(&vr->mutex);
-	tx_poll_start(net, sock);
+	tx_poll_start(net, opaque);
 	mutex_unlock(&vr->mutex);
 	return;
     }
@@ -274,7 +351,7 @@ static void handle_tx(struct v1000_net *net)
     /* Disable notifications. */
     v1000_set_txkick(net, false);
 
-    if (wmem < sock->sk->sk_sndbuf / 2) {
+    if (wmem < total_tx_space / 2) {
         /* Sock is writable (default write policy, sock_writeable()). */
 	tx_poll_stop(net);
     }
@@ -288,10 +365,10 @@ static void handle_tx(struct v1000_net *net)
     for (;;) {
 	/* Nothing new?  Wait for eventfd to tell us they refilled. */
 	if (st->tdt == st->tdh) {
-	    wmem = atomic_read(&sock->sk->sk_wmem_alloc);
-	    if (wmem >= sock->sk->sk_sndbuf * 3 / 4) {
-		tx_poll_start(net, sock);
-		set_bit(SOCK_ASYNC_NOSPACE, &sock->flags);
+            wmem = net->backend.avail_tx_space(opaque);
+	    if (wmem >= total_tx_space * 3 / 4) {
+		tx_poll_start(net, opaque);
+		// XXX set_bit(SOCK_ASYNC_NOSPACE, &sock->flags);
 		break;
 	    }
 	    /* Reenable notifications. */
@@ -422,11 +499,12 @@ static void handle_tx(struct v1000_net *net)
                     /* Once we have collected all the frame fragments,
                        we can send it through the backend. */
                     msg.msg_iovlen = iovcnt;
+                    /* TODO compute iovlen during the cycle */
                     iovlen = iov_length(vr->iov, iovcnt);
-                    err = sock->ops->sendmsg(NULL, sock, &msg, iovlen);
+                    err = net->backend.sendmsg(opaque, &msg, iovlen);
                     if (unlikely(err < 0)) {
                         if (err == -EAGAIN || err == -ENOBUFS)
-                            tx_poll_start(net, sock);
+                            tx_poll_start(net, opaque);
                         printk("sendmsg() err!!\n");
                         goto leave; // XXX
                     }
@@ -512,24 +590,6 @@ static inline bool v1000_rx_interrupts_enabled(struct v1000_net * net)
     return v;
 }
 
-static int peek_head_len(struct sock *sk)
-{
-    struct sk_buff *head;
-    int len = 0;
-    unsigned long flags;
-
-    spin_lock_irqsave(&sk->sk_receive_queue.lock, flags);
-    head = skb_peek(&sk->sk_receive_queue);
-    if (likely(head)) {
-	len = head->len;
-	if (vlan_tx_tag_present(head))
-	    len += VLAN_HLEN;
-    }
-
-    spin_unlock_irqrestore(&sk->sk_receive_queue.lock, flags);
-    return len;
-}
-
 #if 0
 long lj = 0;
 long cj;
@@ -552,7 +612,7 @@ static void handle_rx(struct v1000_net *net)
     size_t total_len = 0;
     int err;
     size_t sock_len;
-    struct socket *sock = rcu_dereference_check(vr->private_data, 1);
+    void *opaque = rcu_dereference_check(vr->private_data, 1);
     struct e1000_state * st = &net->state;
     struct e1000_rx_desc desc;
     void __user * va;
@@ -564,7 +624,7 @@ static void handle_rx(struct v1000_net *net)
 
     DBG(printk("handle_rx()\n"));
 
-    if (unlikely(!sock || net->broken)) {
+    if (unlikely(!opaque || net->broken)) {
 	printk("[v1000] Broken device\n");
 	return;
     }
@@ -574,7 +634,7 @@ static void handle_rx(struct v1000_net *net)
     v1000_set_rxkick(net, false);
     CSB_READ(net->csb, guest_rdt, st->rdt);
 
-    while ((sock_len = peek_head_len(sock->sk))) {
+    while ((sock_len = net->backend.peek_head_len(opaque))) {
 	fill = sock_len;
 	sock_len += sizeof(struct virtio_net_hdr);
 	avail_bytes = v1000_avail_rx_bytes(net);
@@ -647,8 +707,7 @@ static void handle_rx(struct v1000_net *net)
 	vr->wb[iovcnt-2].value |= E1000_RXD_STAT_EOP;
 	msg.msg_iovlen = iovcnt;
 
-	err = sock->ops->recvmsg(NULL, sock, &msg,
-		sock_len, MSG_DONTWAIT | MSG_TRUNC);
+        err = net->backend.recvmsg(opaque, &msg, sock_len);
 	/* Userspace might have consumed the packet meanwhile:
 	 * it's not supposed to do this usually, but might be hard
 	 * to prevent. Discard data we got (if any) and keep going. */
@@ -796,41 +855,41 @@ static void v1000_net_disable_vr(struct v1000_net *n,
 static int v1000_net_enable_vr(struct v1000_net *n,
 	struct v1000_ring *vr)
 {
-    struct socket *sock;
+    void *opaque;
     int ret;
 
-    sock = rcu_dereference_protected(vr->private_data,
+    opaque = rcu_dereference_protected(vr->private_data,
 	    lockdep_is_held(&vr->mutex));
-    if (!sock)
+    if (!opaque)
 	return 0;
     if (vr == &n->tx_ring) {
 	n->tx_poll_state = VHOST_NET_POLL_STOPPED;
-	ret = tx_poll_start(n, sock);
+	ret = tx_poll_start(n, opaque);
     } else
-	ret = v1000_poll_start(&n->rx_poll, sock->file);
+	ret = v1000_poll_start(&n->rx_poll, n->backend.get_file(opaque));
 
     return ret;
 }
 
-static struct socket *v1000_net_stop_vr(struct v1000_net *n,
+static void *v1000_net_stop_vr(struct v1000_net *n,
 	struct v1000_ring *vr)
 {
-    struct socket *sock;
+    void *opaque;
 
     mutex_lock(&vr->mutex);
-    sock = rcu_dereference_protected(vr->private_data,
+    opaque = rcu_dereference_protected(vr->private_data,
 	    lockdep_is_held(&vr->mutex));
     v1000_net_disable_vr(n, vr);
     rcu_assign_pointer(vr->private_data, NULL);
     mutex_unlock(&vr->mutex);
-    return sock;
+    return opaque;
 }
 
-static void v1000_net_stop(struct v1000_net *n, struct socket **tx_sock,
-	struct socket **rx_sock)
+static void v1000_net_stop(struct v1000_net *n, void **tx_opaque,
+	void **rx_opaque)
 {
-    *tx_sock = v1000_net_stop_vr(n, &n->tx_ring);
-    *rx_sock = v1000_net_stop_vr(n, &n->rx_ring);
+    *tx_opaque = v1000_net_stop_vr(n, &n->tx_ring);
+    *rx_opaque = v1000_net_stop_vr(n, &n->rx_ring);
 }
 
 static void v1000_net_flush(struct v1000_net *n)
@@ -844,18 +903,18 @@ static void v1000_net_flush(struct v1000_net *n)
 static int v1000_release(struct inode *inode, struct file *f)
 {
     struct v1000_net *n = f->private_data;
-    struct socket *tx_sock;
-    struct socket *rx_sock;
+    void *tx_opaque;
+    void *rx_opaque;
 
     printk("%p.RELEASE()\n", n);
-    v1000_net_stop(n, &tx_sock, &rx_sock);
+    v1000_net_stop(n, &tx_opaque, &rx_opaque);
     v1000_net_flush(n);
     v1000_dev_stop(&n->dev);
     v1000_dev_cleanup(&n->dev);
-    if (tx_sock)
-	fput(tx_sock->file);
-    if (rx_sock)
-	fput(rx_sock->file);
+    if (tx_opaque)
+	fput(n->backend.get_file(tx_opaque));
+    if (rx_opaque)
+	fput(n->backend.get_file(rx_opaque));
     /* We do an extra flush before freeing memory,
      * since jobs can re-queue themselves. */
     v1000_net_flush(n);
@@ -938,22 +997,28 @@ static struct socket *get_socket(int fd)
     return ERR_PTR(-ENOTSOCK);
 }
 
+static void *get_backend(int fd)
+{
+    /* TODO add get_netmap_adapter */
+    return get_socket(fd);
+}
+
 static long v1000_net_set_backend(struct v1000_net *n, struct v1000_ring *vr, int fd)
 {
-    struct socket *sock;
+    void *opaque;
     int r = 0;
 
     mutex_lock(&vr->mutex);
 
-    sock = get_socket(fd);
-    if (IS_ERR(sock)) {
-	r = PTR_ERR(sock);
+    opaque = get_backend(fd);
+    if (IS_ERR(opaque)) {
+	r = PTR_ERR(opaque);
 	goto err_vr;
     }
 
     /* start polling new socket */
     //v1000_net_disable_vr(n, vr);
-    rcu_assign_pointer(vr->private_data, sock);
+    rcu_assign_pointer(vr->private_data, opaque);
     if (r)
 	goto err_used;
     //r = v1000_net_enable_vr(n, vr);
@@ -966,7 +1031,7 @@ static long v1000_net_set_backend(struct v1000_net *n, struct v1000_ring *vr, in
 
 err_used:
     v1000_net_enable_vr(n, vr);
-    fput(sock->file);
+    fput(n->backend.get_file(opaque));
 err_vr:
     mutex_unlock(&vr->mutex);
     return r;
@@ -1055,6 +1120,16 @@ static int v1000_set_eventfds(struct v1000_net * net)
     return 0;
 }
 
+static void v1000_net_set_backend_ops(struct v1000_net *net, int fd)
+{
+    net->backend.get_file = socket_backend_get_file;
+    net->backend.avail_tx_space = socket_backend_avail_tx_space;
+    net->backend.total_tx_space = socket_backend_total_tx_space;
+    net->backend.sendmsg = socket_backend_sendmsg;
+    net->backend.peek_head_len = socket_backend_peek_head_len;
+    net->backend.recvmsg = socket_backend_recvmsg;
+}
+
 static void v1000_print_configuration(struct v1000_net * net)
 {
     int i;
@@ -1092,6 +1167,7 @@ static int v1000_configure(struct v1000_net * net)
 	return r;
     if ((r = v1000_net_set_backend(net, &net->tx_ring, net->config.tapfd)))
 	return r;
+    v1000_net_set_backend_ops(net, net->config.tapfd);
     net->state.txnum = net->config.tx_ring.num;
     net->state.rxnum = net->config.rx_ring.num;
 
