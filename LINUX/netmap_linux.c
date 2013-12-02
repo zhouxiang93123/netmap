@@ -943,21 +943,21 @@ struct file* netmap_backend_get_file(void *opaque)
 }
 EXPORT_SYMBOL(netmap_backend_get_file);
 
-int netmap_backend_avail_tx_space(void *opaque)
+int netmap_backend_used_tx_space(void *opaque)
 {
     struct netmap_backend *be = opaque;
     struct netmap_ring *ring = be->na->tx_rings[0].ring;
 
-    return ring->avail * ring->nr_buf_size;
+    return (ring->num_slots - ring->avail) * ring->nr_buf_size;
 }
-EXPORT_SYMBOL(netmap_backend_avail_tx_space);
+EXPORT_SYMBOL(netmap_backend_used_tx_space);
 
 int netmap_backend_total_tx_space(void *opaque)
 {
     struct netmap_backend *be = opaque;
     struct netmap_ring *ring = be->na->tx_rings[0].ring;
 
-    return ring->num_slots * ring->nr_buf_size;
+    return (ring->num_slots - 1) * ring->nr_buf_size;
 }
 EXPORT_SYMBOL(netmap_backend_total_tx_space);
 
@@ -1056,7 +1056,7 @@ int netmap_backend_peek_head_len(void *opaque)
 	u_int i = ring->cur;
 	int ret = 0;
 
-	if (ring->avail) {
+	if (0 && ring->avail) {
 		for(;;) {
 			ret += ring->slot[i].len;
 			if (!(ring->slot[i].flags & NS_MOREFRAG))

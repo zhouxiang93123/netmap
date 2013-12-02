@@ -119,8 +119,8 @@ enum v1000_net_poll_state {
 struct v1000_backend {
     /* Get the file struct attached to the backend. */
     struct file *(*get_file)(void *opaque);
-    /* Get the current available tx space in the backend. */
-    int (*avail_tx_space)(void *opaque);
+    /* Get the current used tx space in the backend. */
+    int (*used_tx_space)(void *opaque);
     /* Get the total tx space in the backend.
        TODO maybe it's not necessary a callback */
     int (*total_tx_space)(void *opaque);
@@ -162,7 +162,7 @@ static struct file *socket_backend_get_file(void *opaque)
     return sock->file;
 }
 
-static int socket_backend_avail_tx_space(void *opaque)
+static int socket_backend_used_tx_space(void *opaque)
 {
     struct socket *sock = (struct socket *)opaque;
 
@@ -339,7 +339,7 @@ static void handle_tx(struct v1000_net *net)
     }
 
     total_tx_space = net->backend.total_tx_space(opaque);
-    wmem = net->backend.avail_tx_space(opaque);
+    wmem = net->backend.used_tx_space(opaque);
     if (wmem >= total_tx_space) {
         /* No space in the backend transmit queue. */
 	mutex_lock(&vr->mutex);
@@ -366,7 +366,7 @@ static void handle_tx(struct v1000_net *net)
     for (;;) {
 	/* Nothing new?  Wait for eventfd to tell us they refilled. */
 	if (st->tdt == st->tdh) {
-            wmem = net->backend.avail_tx_space(opaque);
+            wmem = net->backend.used_tx_space(opaque);
 	    if (wmem >= total_tx_space * 3 / 4) {
 		tx_poll_start(net, opaque);
 		// XXX set_bit(SOCK_ASYNC_NOSPACE, &sock->flags);
@@ -979,7 +979,7 @@ static struct socket *get_tap_socket(int fd)
 struct socket *get_netmap_socket(int fd);
 void *netmap_get_backend(int fd);
 struct file *netmap_backend_get_file(void *opaque);
-int netmap_backend_avail_tx_space(void *opaque);
+int netmap_backend_used_tx_space(void *opaque);
 int netmap_backend_total_tx_space(void *opaque);
 int netmap_backend_sendmsg(void *opaque, struct msghdr *m, size_t len);
 int netmap_backend_peek_head_len(void *opaque);
@@ -1011,7 +1011,7 @@ static void *get_backend(struct v1000_net *n, int fd)
     if (!IS_ERR(ret)) {
         /* Set the netmap backend ops. */
         n->backend.get_file = &netmap_backend_get_file;
-        n->backend.avail_tx_space = &netmap_backend_avail_tx_space;
+        n->backend.used_tx_space = &netmap_backend_used_tx_space;
         n->backend.total_tx_space = &netmap_backend_total_tx_space;
         n->backend.sendmsg = &netmap_backend_sendmsg;
         n->backend.peek_head_len = &netmap_backend_peek_head_len;
@@ -1024,7 +1024,7 @@ static void *get_backend(struct v1000_net *n, int fd)
     if (!IS_ERR(ret)) {
         /* Set the socket backend ops. */
         n->backend.get_file = &socket_backend_get_file;
-        n->backend.avail_tx_space = &socket_backend_avail_tx_space;
+        n->backend.used_tx_space = &socket_backend_used_tx_space;
         n->backend.total_tx_space = &socket_backend_total_tx_space;
         n->backend.sendmsg = &socket_backend_sendmsg;
         n->backend.peek_head_len = &socket_backend_peek_head_len;
