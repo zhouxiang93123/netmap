@@ -31,6 +31,9 @@
 
 /* ========================== LINUX-SPECIFIC ROUTINES ================== */
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,28)
+#endif /* we have hrtimers */
+
 /*
  * The generic driver calls netmap once per received packet.
  * This is inefficient so we implement a mitigation mechanism,
@@ -104,12 +107,20 @@ void netmap_mitigation_cleanup(struct netmap_generic_adapter *gna)
  * Stolen packets are put in a queue where the
  * generic_netmap_rxsync() callback can extract them.
  */
+#ifdef RX_HANDLER_CONSUMED
 rx_handler_result_t linux_generic_rx_handler(struct mbuf **pm)
 {
     generic_rx_handler((*pm)->dev, *pm);
 
     return RX_HANDLER_CONSUMED;
 }
+#else /* 2.6.38 and before */
+struct sk_buff *linux_generic_rx_handler(struct mbuf *m)
+{
+	generic_rx_handler(m->dev, m);
+	return NULL;
+}
+#endif /* 2.6.38 and before */
 
 /* Ask the Linux RX subsystem to intercept (or stop intercepting)
  * the packets incoming from the interface attached to 'na'.
@@ -208,14 +219,22 @@ generic_find_num_desc(struct ifnet *ifp, unsigned int *tx, unsigned int *rx)
 void
 generic_find_num_queues(struct ifnet *ifp, u_int *txq, u_int *rxq)
 {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,28) // XXX
+    *txq = 1;
+#else
     *txq = ifp->real_num_tx_queues;
+#endif
     *rxq = 1; /* TODO ifp->real_num_rx_queues */
 }
 
 struct net_device *
 ifunit_ref(const char *name)
 {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,28) // XXX
+	return dev_get_by_name(name);
+#else
 	return dev_get_by_name(&init_net, name);
+#endif
 }
 
 void if_rele(struct net_device *ifp)

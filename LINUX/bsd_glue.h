@@ -35,6 +35,7 @@
 /* a set of headers used in netmap */
 #include <linux/version.h>
 #include <linux/compiler.h>	// ACCESS_ONCE()
+
 #include <linux/if.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
@@ -49,11 +50,26 @@
 #include <linux/etherdevice.h>	// eth_type_trans
 #include <linux/module.h>
 #include <linux/moduleparam.h>
+#include <linux/delay.h>	// msleep
+#include <linux/skbuff.h>		// skb_copy_to_linear_data_offset
+
 #include <linux/io.h>	// virt_to_phys
 #include <linux/hrtimer.h>
 
 #define printf(fmt, arg...)	printk(KERN_ERR fmt, ##arg)
 #define KASSERT(a, b)		BUG_ON(!(a))
+
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2, 6, 18)
+#define ACCESS_ONCE(x)	(x)
+#define uintptr_t	unsigned long
+#define HRTIMER_MODE_REL	HRTIMER_REL
+/* Forward a hrtimer so it expires after the hrtimer's current now */
+static inline u64 hrtimer_forward_now(struct hrtimer *timer,
+                                      ktime_t interval)
+{
+        return hrtimer_forward(timer, timer->base->get_time(), interval);
+}
+#endif /* 2.6.18 and below */
 
 /* Type redefinitions. XXX check them */
 typedef	void *			bus_dma_tag_t;
@@ -221,6 +237,17 @@ static inline void mtx_unlock(safe_spinlock_t *m)
 // XXX do we need GPF_ZERO ?
 // XXX do we need GFP_DMA for slots ?
 // http://www.mjmwired.net/kernel/Documentation/DMA-API.txt
+
+#ifndef ilog2 /* not in 2.6.18 */
+static inline int ilog(uint64_t n)
+{
+	uint64_t k = 1ULL<<63;
+	int i;
+	for (i = 63; i >= 0 && !(n &k); i--, k >>=1)
+		;
+	return i;
+}
+#endif /* ilog2 */
 
 #define contigmalloc(sz, ty, flags, a, b, pgsz, c)		\
 	(char *) __get_free_pages(GFP_ATOMIC |  __GFP_ZERO,	\
