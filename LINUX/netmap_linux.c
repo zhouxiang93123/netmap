@@ -560,27 +560,27 @@ struct socket *get_netmap_socket(int fd)
 	struct netmap_sock *nm_sock;
 
 	if (!filp)
-		return ERR_PTR(EBADF);
+		return ERR_PTR(-EBADF);
 
 	if (filp->f_op != &netmap_fops)
-		return ERR_PTR(EINVAL);
+		return ERR_PTR(-EINVAL);
 
 	priv = (struct netmap_priv_d *)filp->private_data;
 	if (!priv)
-		return ERR_PTR(EBADF);
+		return ERR_PTR(-EBADF);
 
 	NMG_LOCK();
 	na = priv->np_na;
 	if (na == NULL) {
 		NMG_UNLOCK();
-		return ERR_PTR(EBADF);
+		return ERR_PTR(-EBADF);
 	}
 
 	nm_sock = (struct netmap_sock *)(na->na_private);
 
 	if (NETMAP_OWNED_BY_KERN(na) && (!nm_sock || nm_sock->owner != current)) {
 		NMG_UNLOCK();
-		return ERR_PTR(EBUSY);
+		return ERR_PTR(-EBUSY);
 	}
 
 	if (!nm_sock)
@@ -591,7 +591,7 @@ struct socket *get_netmap_socket(int fd)
 
 	/* netmap_sock_setup() may fail because of OOM */
 	if (!nm_sock)
-		return ERR_PTR(ENOMEM);
+		return ERR_PTR(-ENOMEM);
 
 	return &nm_sock->sock;
 }
@@ -812,6 +812,381 @@ static int netmap_socket_recvmsg(struct kiocb *iocb, struct socket *sock,
 
 	return copied;
 }
+
+
+
+/* ===================== V1000 BACKEND SUPPORT ==================== */
+
+struct netmap_backend {
+    struct netmap_adapter *na;
+    struct file *file;
+    struct task_struct *owner;
+    void (*saved_nm_dtor)(struct netmap_adapter *);
+    int (*saved_nm_notify)(struct netmap_adapter *, u_int ring,
+                           enum txrx, int flags);
+};
+
+static void netmap_backend_nm_dtor(struct netmap_adapter *na)
+{
+        struct netmap_backend *be = na->na_private;
+
+        if (be) {
+                na->nm_dtor = be->saved_nm_dtor;
+                na->nm_notify = be->saved_nm_notify;
+                kfree(be);
+                na->na_private = NULL;
+                D("v1000 backend support removed for %p", na);
+
+        }
+
+        /* Call the saved destructor, if any. */
+        if (na->nm_dtor)
+            na->nm_dtor(na);
+}
+
+static int netmap_backend_nm_notify(struct netmap_adapter *na,
+				u_int n_ring, enum txrx tx, int flags)
+{
+	struct netmap_kring *kring;
+
+	D("called");
+	if (tx == NR_TX) {
+		kring = na->tx_rings + n_ring;
+		wake_up_interruptible_poll(&kring->si, POLLIN |
+					POLLRDNORM | POLLRDBAND);
+		if (flags & NAF_GLOBAL_NOTIFY)
+			wake_up_interruptible_poll(&na->tx_si, POLLIN |
+					POLLRDNORM | POLLRDBAND);
+	} else {
+		kring = na->rx_rings + n_ring;
+		wake_up_interruptible_poll(&kring->si, POLLIN |
+					POLLRDNORM | POLLRDBAND);
+		if (flags & NAF_GLOBAL_NOTIFY)
+			wake_up_interruptible_poll(&na->rx_si, POLLIN |
+					POLLRDNORM | POLLRDBAND);
+	}
+
+	return 0;
+}
+
+void *netmap_get_backend(int fd)
+{
+	struct file *filp = fget(fd);
+	struct netmap_priv_d *priv;
+	struct netmap_adapter *na;
+        struct netmap_backend *be;
+        int error = 0;
+
+	if (!filp)
+            return ERR_PTR(-EBADF);
+
+	if (filp->f_op != &netmap_fops) {
+            error = -EINVAL;
+            goto err;
+        }
+
+	priv = (struct netmap_priv_d *)filp->private_data;
+	if (!priv) {
+            error = -EBADF;
+            goto err;
+        }
+
+	NMG_LOCK();
+	na = priv->np_na;
+	if (na == NULL) {
+            error = -EBADF;
+            goto lock_err;
+	}
+
+        be = (struct netmap_backend *)(na->na_private);
+
+        if (NETMAP_OWNED_BY_KERN(na) && (!be || be->owner != current)) {
+                error = -EBUSY;
+                goto lock_err;
+        }
+
+        if (!be) {
+                be = na->na_private = malloc(sizeof(struct netmap_backend),
+                                            M_DEVBUF, M_MOWAIT | M_ZERO);
+                if (!be) {
+                        error = -ENOMEM;
+                        goto lock_err;
+                }
+                be->na = na;
+                be->file = filp;
+                be->owner = current;
+
+                be->saved_nm_dtor = na->nm_dtor;
+                be->saved_nm_notify = na->nm_notify;
+                na->nm_dtor = &netmap_backend_nm_dtor;
+                na->nm_notify = &netmap_backend_nm_notify;
+
+                D("v1000 backend support created for %p", na);
+        }
+        NMG_UNLOCK();
+
+        return be;
+
+lock_err:
+	NMG_UNLOCK();
+err:
+        fput(filp);
+        return ERR_PTR(error);
+}
+EXPORT_SYMBOL(netmap_get_backend);
+
+struct file* netmap_backend_get_file(void *opaque)
+{
+    struct netmap_backend *be = opaque;
+
+    return be->file;
+}
+EXPORT_SYMBOL(netmap_backend_get_file);
+
+int netmap_backend_avail_tx_space(void *opaque)
+{
+    struct netmap_backend *be = opaque;
+    struct netmap_ring *ring = be->na->tx_rings[0].ring;
+
+    return ring->avail * ring->nr_buf_size;
+}
+EXPORT_SYMBOL(netmap_backend_avail_tx_space);
+
+int netmap_backend_total_tx_space(void *opaque)
+{
+    struct netmap_backend *be = opaque;
+    struct netmap_ring *ring = be->na->tx_rings[0].ring;
+
+    return ring->num_slots * ring->nr_buf_size;
+}
+EXPORT_SYMBOL(netmap_backend_total_tx_space);
+
+int netmap_backend_sendmsg(void *opaque, struct msghdr *m, size_t len)
+{
+    struct netmap_backend *be = opaque;
+    struct netmap_adapter *na = be->na;
+    struct netmap_ring *ring;
+    unsigned i, last;
+    unsigned avail;
+    unsigned j;
+    unsigned nm_buf_size;
+    struct iovec *iov = m->msg_iov;
+    size_t iovcnt = m->msg_iovlen;
+    unsigned slot_flags = NS_MOREFRAG | NS_VNET_HDR;
+
+    ND("message_len %d, %p", (int)len, na_sock);
+
+    if (unlikely(na == NULL)) {
+        RD(5, "Null netmap adapter");
+        return len;
+    }
+
+    /* Grab the netmap ring normally used from userspace. */
+    ring = na->tx_rings[0].ring;
+    nm_buf_size = ring->nr_buf_size;
+
+    i = last = ring->cur;
+    avail = ring->avail;
+    ND("A) cur=%d avail=%d, hwcur=%d, hwavail=%d\n", i, avail, na->tx_rings[0].nr_hwcur,
+                                                               na->tx_rings[0].nr_hwavail);
+    if (avail < iovcnt) {
+        /* Not enough netmap slots. */
+        return 0;
+    }
+
+    for (j=0; j<iovcnt; j++) {
+        uint8_t *iov_frag = iov[j].iov_base;
+        unsigned iov_frag_size = iov[j].iov_len;
+        unsigned offset = 0;
+#if 0
+        unsigned k = 0;
+        uint8_t ch;
+
+        printk("len=%d: ", iov_frag_size);
+        for (k=0; k<iov_frag_size && k<36; k++) {
+            if(copy_from_user(&ch, iov_frag + k, 1)) {
+                D("failed");
+            }
+            printk("%02x:", ch);
+        }printk("\n");
+#endif
+        while (iov_frag_size) {
+            unsigned nm_frag_size = min(iov_frag_size, nm_buf_size);
+            uint8_t *dst;
+
+            if (unlikely(avail == 0)) {
+                return 0;
+            }
+
+            dst = BDG_NMB(na, &ring->slot[i]);
+
+            ring->slot[i].len = nm_frag_size;
+            ring->slot[i].flags = slot_flags;
+            slot_flags &= ~NS_VNET_HDR;
+            if (copy_from_user(dst, iov_frag + offset, nm_frag_size)) {
+                D("copy_from_user() error");
+            }
+
+            last = i;
+            i = NETMAP_RING_NEXT(ring, i);
+            avail--;
+
+            offset += nm_frag_size;
+            iov_frag_size -= nm_frag_size;
+        }
+    }
+
+    ring->slot[last].flags &= ~NS_MOREFRAG;
+
+    ring->cur = i;
+    ring->avail = avail;
+
+    na->nm_txsync(na, 0, 0);
+    ND("B) cur=%d avail=%d, hwcur=%d, hwavail=%d\n", i, avail, na->tx_rings[0].nr_hwcur,
+                                                               na->tx_rings[0].nr_hwavail);
+
+    return len;
+}
+EXPORT_SYMBOL(netmap_backend_sendmsg);
+
+int netmap_backend_peek_head_len(void *opaque)
+{
+        struct netmap_backend *be = opaque;
+        struct netmap_ring *ring = be->na->rx_rings[0].ring;
+	u_int i = ring->cur;
+	int ret = 0;
+
+	if (ring->avail) {
+		for(;;) {
+			ret += ring->slot[i].len;
+			if (!(ring->slot[i].flags & NS_MOREFRAG))
+				break;
+			if (unlikely(++i == ring->num_slots))
+				i = 0;
+		}
+	}
+
+	return ret;
+}
+EXPORT_SYMBOL(netmap_backend_peek_head_len);
+
+int netmap_backend_recvmsg(void *opaque, struct msghdr *m, size_t len)
+{
+        struct netmap_backend *be = opaque;
+        struct netmap_adapter *na= be->na;
+	struct netmap_ring *ring;
+	/* netmap variables */
+	unsigned i, avail;
+	bool morefrag;
+	unsigned nm_frag_size;
+	unsigned nm_frag_ofs;
+	uint8_t *src;
+	/* iovec variables */
+	unsigned j;
+	struct iovec *iov = m->msg_iov;
+	size_t iovcnt = m->msg_iovlen;
+	uint8_t *dst;
+	unsigned iov_frag_size;
+	unsigned iov_frag_ofs;
+	/* counters */
+	unsigned copy_size;
+	unsigned copied;
+
+	/* The caller asks for 'len' bytes. */
+	ND("recvmsg %d, %p", (int)len, nm_sock);
+
+	if (unlikely(na == NULL)) {
+		RD(5, "Null netmap adapter");
+		return len;
+	}
+
+	/* Total bytes actually copied. */
+	copied = 0;
+
+	/* Grab the netmap RX ring normally used from userspace. */
+	ring = na->rx_rings[0].ring;
+	i = ring->cur;
+	avail = ring->avail;
+
+	/* Index into the input iovec[]. */
+	j = 0;
+
+	/* Spurious call: Do nothing. */
+	if (avail == 0)
+		return 0;
+
+	/* init netmap variables */
+	morefrag = (ring->slot[i].flags & NS_MOREFRAG);
+	nm_frag_ofs = 0;
+	nm_frag_size = ring->slot[i].len;
+	src = BDG_NMB(na, &ring->slot[i]);
+
+	/* init iovec variables */
+	iov_frag_ofs = 0;
+	iov_frag_size = iov[j].iov_len;
+	dst = iov[j].iov_base;
+
+	/* Copy from the netmap scatter-gather to the caller
+	 * scatter-gather.
+	 */
+	while (copied < len) {
+		copy_size = min(nm_frag_size, iov_frag_size);
+		copy_to_user(dst + iov_frag_ofs, src + nm_frag_ofs,
+			     copy_size);
+		nm_frag_ofs += copy_size;
+		nm_frag_size -= copy_size;
+		iov_frag_ofs += copy_size;
+		iov_frag_size -= copy_size;
+		copied += copy_size;
+		if (nm_frag_size == 0) {
+			/* Netmap slot exhausted. If this was the
+			 * last slot, or no more slots ar available,
+			 * we've done.
+			 */
+			if (!morefrag || !avail)
+				break;
+			/* Take the next slot. */
+			i = NETMAP_RING_NEXT(ring, i);
+			avail--;
+			morefrag = (ring->slot[i].flags & NS_MOREFRAG);
+			nm_frag_ofs = 0;
+			nm_frag_size = ring->slot[i].len;
+			src = BDG_NMB(na, &ring->slot[i]);
+		}
+		if (iov_frag_size == 0) {
+			/* The current iovec fragment is exhausted.
+			 * Since we enter here, there must be more
+			 * to read from the netmap slots (otherwise
+			 * we would have exited the loop in the
+			 * above branch).
+			 * If this was the last fragment, it means
+			 * that there is not enough space in the input
+			 * iovec[].
+			 */
+			j++;
+			if (unlikely(j >= iovcnt)) {
+				break;
+			}
+			/* Take the next iovec fragment. */
+			iov_frag_ofs = 0;
+			iov_frag_size = iov[j].iov_len;
+			dst = iov[j].iov_base;
+		}
+	}
+
+	if (unlikely(!avail && morefrag)) {
+		RD(5, "Error: ran out of slots, with a pending"
+				"incomplete packet\n");
+	}
+
+	ring->cur = i;
+	ring->avail = avail;
+
+	D("read %d bytes using %d iovecs", copied, j);
+
+	return copied;
+}
+EXPORT_SYMBOL(netmap_backend_recvmsg);
 
 
 /* =========================== MODULE INIT ======================== */

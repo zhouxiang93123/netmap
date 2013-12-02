@@ -154,6 +154,7 @@ struct v1000_net {
     IFRATE(struct rate_context rate_ctx);
 };
 
+/* #################### SOCKET BACKEND CALLBACKS ################### */
 static struct file *socket_backend_get_file(void *opaque)
 {
     struct socket *sock = (struct socket *)opaque;
@@ -976,6 +977,13 @@ static struct socket *get_tap_socket(int fd)
 }
 
 struct socket *get_netmap_socket(int fd);
+void *netmap_get_backend(int fd);
+struct file *netmap_backend_get_file(void *opaque);
+int netmap_backend_avail_tx_space(void *opaque);
+int netmap_backend_total_tx_space(void *opaque);
+int netmap_backend_sendmsg(void *opaque, struct msghdr *m, size_t len);
+int netmap_backend_peek_head_len(void *opaque);
+int netmap_backend_recvmsg(void *opaque, struct msghdr *m, size_t len);
 
 static struct socket *get_socket(int fd)
 {
@@ -993,14 +1001,40 @@ static struct socket *get_socket(int fd)
     sock = get_netmap_socket(fd);
     if (!IS_ERR(sock))
 	return sock;
-    printk("[v1000] No backend found\n");
     return ERR_PTR(-ENOTSOCK);
 }
 
-static void *get_backend(int fd)
+static void *get_backend(struct v1000_net *n, int fd)
 {
-    /* TODO add get_netmap_adapter */
-    return get_socket(fd);
+    void *ret = netmap_get_backend(fd);
+
+    if (!IS_ERR(ret)) {
+        /* Set the netmap backend ops. */
+        n->backend.get_file = &netmap_backend_get_file;
+        n->backend.avail_tx_space = &netmap_backend_avail_tx_space;
+        n->backend.total_tx_space = &netmap_backend_total_tx_space;
+        n->backend.sendmsg = &netmap_backend_sendmsg;
+        n->backend.peek_head_len = &netmap_backend_peek_head_len;
+        n->backend.recvmsg = &netmap_backend_recvmsg;
+        printk("[v1000] netmap backend selected\n");
+        return ret;
+    }
+
+    ret = get_socket(fd);
+    if (!IS_ERR(ret)) {
+        /* Set the socket backend ops. */
+        n->backend.get_file = &socket_backend_get_file;
+        n->backend.avail_tx_space = &socket_backend_avail_tx_space;
+        n->backend.total_tx_space = &socket_backend_total_tx_space;
+        n->backend.sendmsg = &socket_backend_sendmsg;
+        n->backend.peek_head_len = &socket_backend_peek_head_len;
+        n->backend.recvmsg = &socket_backend_recvmsg;
+        printk("[v1000] socket backend selected\n");
+    } else {
+        printk("[v1000] no backend found\n");
+    }
+
+    return ret;
 }
 
 static long v1000_net_set_backend(struct v1000_net *n, struct v1000_ring *vr, int fd)
@@ -1010,13 +1044,13 @@ static long v1000_net_set_backend(struct v1000_net *n, struct v1000_ring *vr, in
 
     mutex_lock(&vr->mutex);
 
-    opaque = get_backend(fd);
+    opaque = get_backend(n, fd);
     if (IS_ERR(opaque)) {
 	r = PTR_ERR(opaque);
 	goto err_vr;
     }
 
-    /* start polling new socket */
+    /* start polling new backend */
     //v1000_net_disable_vr(n, vr);
     rcu_assign_pointer(vr->private_data, opaque);
     if (r)
@@ -1120,16 +1154,6 @@ static int v1000_set_eventfds(struct v1000_net * net)
     return 0;
 }
 
-static void v1000_net_set_backend_ops(struct v1000_net *net, int fd)
-{
-    net->backend.get_file = socket_backend_get_file;
-    net->backend.avail_tx_space = socket_backend_avail_tx_space;
-    net->backend.total_tx_space = socket_backend_total_tx_space;
-    net->backend.sendmsg = socket_backend_sendmsg;
-    net->backend.peek_head_len = socket_backend_peek_head_len;
-    net->backend.recvmsg = socket_backend_recvmsg;
-}
-
 static void v1000_print_configuration(struct v1000_net * net)
 {
     int i;
@@ -1167,7 +1191,6 @@ static int v1000_configure(struct v1000_net * net)
 	return r;
     if ((r = v1000_net_set_backend(net, &net->tx_ring, net->config.tapfd)))
 	return r;
-    v1000_net_set_backend_ops(net, net->config.tapfd);
     net->state.txnum = net->config.tx_ring.num;
     net->state.rxnum = net->config.rx_ring.num;
 
