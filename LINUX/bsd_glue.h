@@ -34,6 +34,7 @@
 
 /* a set of headers used in netmap */
 #include <linux/version.h>
+#include <linux/compiler.h>	// ACCESS_ONCE()
 #include <linux/if.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
@@ -45,11 +46,10 @@
 #include <linux/sched.h>
 #include <linux/wait.h>
 #include <linux/miscdevice.h>
-//#include <linux/log2.h>	// ilog2
 #include <linux/etherdevice.h>	// eth_type_trans
 #include <linux/module.h>
 #include <linux/moduleparam.h>
-#include <linux/virtio.h>	// virt_to_phys
+#include <linux/io.h>	// virt_to_phys
 #include <linux/hrtimer.h>
 
 #define printf(fmt, arg...)	printk(KERN_ERR fmt, ##arg)
