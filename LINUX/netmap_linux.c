@@ -31,8 +31,6 @@
 
 /* ========================== LINUX-SPECIFIC ROUTINES ================== */
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,28)
-#endif /* we have hrtimers */
 
 /*
  * The generic driver calls netmap once per received packet.
@@ -45,7 +43,11 @@
  * - when the timer expires and there are pending packets,
  *   a notification is sent up and the timer is restarted.
  */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,21)
+int
+#else
 enum hrtimer_restart
+#endif
 generic_timer_handler(struct hrtimer *t)
 {
     struct netmap_generic_adapter *gna =

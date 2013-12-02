@@ -1048,6 +1048,6 @@ void netmap_mitigation_restart(struct netmap_generic_adapter *na);
 int netmap_mitigation_active(struct netmap_generic_adapter *na);
 void netmap_mitigation_cleanup(struct netmap_generic_adapter *na);
 
-enum hrtimer_restart generic_timer_handler(struct hrtimer *t);
+// int generic_timer_handler(struct hrtimer *t);
 
 #endif /* _NET_NETMAP_KERN_H_ */

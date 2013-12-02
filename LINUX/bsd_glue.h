@@ -63,6 +63,17 @@
 #define HRTIMER_MODE_REL	HRTIMER_REL
 #endif
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 22)
+#define skb_copy_from_linear_data_offset(skb, offset, to, copy)	\
+	memcpy(to, (skb)->data + offset, copy)
+
+#define skb_copy_to_linear_data_offset(skb, offset, from, copy)	\
+	memcpy((skb)->data + offset, from, copy)
+
+#define skb_copy_to_linear_data(skb, from, copy)		\
+	memcpy((skb)->data, from, copy)
+#endif
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 24)
 #define ACCESS_ONCE(x)	(x)
 #define uintptr_t	unsigned long
