@@ -849,7 +849,7 @@ static int netmap_backend_nm_notify(struct netmap_adapter *na,
 {
 	struct netmap_kring *kring;
 
-	D("called");
+	ND("called");
 	if (tx == NR_TX) {
 		kring = na->tx_rings + n_ring;
 		wake_up_interruptible_poll(&kring->si, POLLIN |
@@ -1052,11 +1052,15 @@ EXPORT_SYMBOL(netmap_backend_sendmsg);
 int netmap_backend_peek_head_len(void *opaque)
 {
         struct netmap_backend *be = opaque;
-        struct netmap_ring *ring = be->na->rx_rings[0].ring;
-	u_int i = ring->cur;
+        struct netmap_adapter *na = be->na;
+        struct netmap_ring *ring = na->rx_rings[0].ring;
+	u_int i;
 	int ret = 0;
 
-	if (0 && ring->avail) {
+        na->nm_rxsync(na, 0, NAF_FORCE_READ);
+
+        i = ring->cur;
+	if (ring->avail) {
 		for(;;) {
 			ret += ring->slot[i].len;
 			if (!(ring->slot[i].flags & NS_MOREFRAG))
@@ -1065,6 +1069,14 @@ int netmap_backend_peek_head_len(void *opaque)
 				i = 0;
 		}
 	}
+        ND("peek %d, %d iovecs cur=%d avail=%d, hwcur=%d, hwavail=%d\n",
+            ret, i + 1 - ring->cur,
+            ring->cur, ring->avail, be->na->rx_rings[0].nr_hwcur,
+            be->na->rx_rings[0].nr_hwavail);
+
+        if (ret >= sizeof(struct virtio_net_hdr)) {
+            ret -= sizeof(struct virtio_net_hdr);
+        }
 
 	return ret;
 }
@@ -1093,7 +1105,7 @@ int netmap_backend_recvmsg(void *opaque, struct msghdr *m, size_t len)
 	unsigned copied;
 
 	/* The caller asks for 'len' bytes. */
-	ND("recvmsg %d, %p", (int)len, nm_sock);
+	ND("recvmsg %d, %p", (int)len, na);
 
 	if (unlikely(na == NULL)) {
 		RD(5, "Null netmap adapter");
@@ -1107,12 +1119,14 @@ int netmap_backend_recvmsg(void *opaque, struct msghdr *m, size_t len)
 	ring = na->rx_rings[0].ring;
 	i = ring->cur;
 	avail = ring->avail;
+        ND("A) cur=%d avail=%d, hwcur=%d, hwavail=%d\n", i, avail, na->rx_rings[0].nr_hwcur,
+                                                               na->rx_rings[0].nr_hwavail);
 
 	/* Index into the input iovec[]. */
 	j = 0;
 
 	/* Spurious call: Do nothing. */
-	if (avail == 0)
+	if (unlikely(avail == 0))
 		return 0;
 
 	/* init netmap variables */
@@ -1120,11 +1134,14 @@ int netmap_backend_recvmsg(void *opaque, struct msghdr *m, size_t len)
 	nm_frag_ofs = 0;
 	nm_frag_size = ring->slot[i].len;
 	src = BDG_NMB(na, &ring->slot[i]);
+        i = NETMAP_RING_NEXT(ring, i);
+        avail--;
 
 	/* init iovec variables */
 	iov_frag_ofs = 0;
 	iov_frag_size = iov[j].iov_len;
 	dst = iov[j].iov_base;
+        j++;
 
 	/* Copy from the netmap scatter-gather to the caller
 	 * scatter-gather.
@@ -1145,13 +1162,13 @@ int netmap_backend_recvmsg(void *opaque, struct msghdr *m, size_t len)
 			 */
 			if (!morefrag || !avail)
 				break;
-			/* Take the next slot. */
-			i = NETMAP_RING_NEXT(ring, i);
-			avail--;
 			morefrag = (ring->slot[i].flags & NS_MOREFRAG);
 			nm_frag_ofs = 0;
 			nm_frag_size = ring->slot[i].len;
 			src = BDG_NMB(na, &ring->slot[i]);
+			/* Take the next slot. */
+			i = NETMAP_RING_NEXT(ring, i);
+			avail--;
 		}
 		if (iov_frag_size == 0) {
 			/* The current iovec fragment is exhausted.
@@ -1163,7 +1180,6 @@ int netmap_backend_recvmsg(void *opaque, struct msghdr *m, size_t len)
 			 * that there is not enough space in the input
 			 * iovec[].
 			 */
-			j++;
 			if (unlikely(j >= iovcnt)) {
 				break;
 			}
@@ -1171,6 +1187,7 @@ int netmap_backend_recvmsg(void *opaque, struct msghdr *m, size_t len)
 			iov_frag_ofs = 0;
 			iov_frag_size = iov[j].iov_len;
 			dst = iov[j].iov_base;
+			j++;
 		}
 	}
 
@@ -1182,7 +1199,9 @@ int netmap_backend_recvmsg(void *opaque, struct msghdr *m, size_t len)
 	ring->cur = i;
 	ring->avail = avail;
 
-	D("read %d bytes using %d iovecs", copied, j);
+	ND("read %d bytes using %d iovecs", copied, j);
+        ND("B) cur=%d avail=%d, hwcur=%d, hwavail=%d\n", i, avail, na->rx_rings[0].nr_hwcur,
+                                                               na->rx_rings[0].nr_hwavail);
 
 	return copied;
 }

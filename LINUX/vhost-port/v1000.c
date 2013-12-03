@@ -44,7 +44,7 @@ static int v1000_poll_wakeup(wait_queue_t *wait, unsigned mode, int sync,
 {
     struct v1000_poll *poll = container_of(wait, struct v1000_poll, wait);
 
-printk("%p.v1000_poll_wakeup(), %lu, %lu\n",poll,(unsigned long)key, poll->mask);
+    //printk("%p.v1000_poll_wakeup(), %lu, %lu\n",poll,(unsigned long)key, poll->mask);
     if (!((unsigned long)key & poll->mask))
 	return 0;
 
