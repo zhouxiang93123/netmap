@@ -1101,9 +1101,10 @@ int netmap_backend_peek_head_len(void *opaque)
 	u_int i;
 	int ret = 0;
 
-        /* Do the rxsync here. The call to the recvmsg() callback must
-           happen after the peek_head_len() callback. */
-        na->nm_rxsync(na, 0, NAF_FORCE_READ);
+        /* Do the rxsync here. The recvmsg() callback must be
+           called after the peek_head_len() callback. */
+        if (!ring->avail)
+            na->nm_rxsync(na, 0, NAF_FORCE_READ);
 
         i = ring->cur;
 	if (ring->avail) {
