@@ -851,33 +851,47 @@ static int netmap_socket_recvmsg(struct kiocb *iocb, struct socket *sock,
 
 /* ===================== V1000 BACKEND SUPPORT ==================== */
 
+/* Private info stored into the memory area pointed by
+   netmap_adapter.na_private field. */
 struct netmap_backend {
+    /* The netmap adapter connected to the v1000 backend. */
     struct netmap_adapter *na;
+    /* The file struct attached to the unique priv_structure
+       attached to *na. */
     struct file *file;
+    /* Pointer to the task which owns this v1000 backend, and
+       so the adapter. */
     struct task_struct *owner;
+    /* Pointers to callbacks (in *na) that are overridden by
+       the v1000 backend. */
     void (*saved_nm_dtor)(struct netmap_adapter *);
     int (*saved_nm_notify)(struct netmap_adapter *, u_int ring,
                            enum txrx, int flags);
 };
 
+/* Callback that overrides na->nm_dtor. */
 static void netmap_backend_nm_dtor(struct netmap_adapter *na)
 {
         struct netmap_backend *be = na->na_private;
 
         if (be) {
+                /* Restore the netmap adapter callbacks
+                   overridden by the backend. */
                 na->nm_dtor = be->saved_nm_dtor;
                 na->nm_notify = be->saved_nm_notify;
+                /* Free the backend memory. */
                 kfree(be);
                 na->na_private = NULL;
                 D("v1000 backend support removed for %p", na);
 
         }
 
-        /* Call the saved destructor, if any. */
+        /* Call the original destructor, if any. */
         if (na->nm_dtor)
             na->nm_dtor(na);
 }
 
+/* Callback that overrides na->nm_notify. */
 static int netmap_backend_nm_notify(struct netmap_adapter *na,
 				u_int n_ring, enum txrx tx, int flags)
 {
@@ -903,9 +917,16 @@ static int netmap_backend_nm_notify(struct netmap_adapter *na,
 	return 0;
 }
 
+/* Called by an external module (the v1000 frontend) which wants to
+   attach to the netmap file descriptor fd. Setup the backend (if
+   necessary) and return a pointer to the backend private structure,
+   which can be passed back to the backend exposed interface.
+   If successful, the caller holds a reference to the file struct
+   associated to 'fd'.
+*/
 void *netmap_get_backend(int fd)
 {
-	struct file *filp = fget(fd);
+	struct file *filp = fget(fd); /* fd --> file */
 	struct netmap_priv_d *priv;
 	struct netmap_adapter *na;
         struct netmap_backend *be;
@@ -919,6 +940,7 @@ void *netmap_get_backend(int fd)
             goto err;
         }
 
+        /* file --> netmap priv */
 	priv = (struct netmap_priv_d *)filp->private_data;
 	if (!priv) {
             error = -EBADF;
@@ -926,7 +948,7 @@ void *netmap_get_backend(int fd)
         }
 
 	NMG_LOCK();
-	na = priv->np_na;
+	na = priv->np_na; /* netmap priv --> netmap adapter */
 	if (na == NULL) {
             error = -EBADF;
             goto lock_err;
@@ -934,12 +956,15 @@ void *netmap_get_backend(int fd)
 
         be = (struct netmap_backend *)(na->na_private);
 
+        /* Allow request if the netmap adapter is not already used by
+           the kernel or the request comes from the owner. */
         if (NETMAP_OWNED_BY_KERN(na) && (!be || be->owner != current)) {
                 error = -EBUSY;
                 goto lock_err;
         }
 
         if (!be) {
+                /* Setup the backend. */
                 be = na->na_private = malloc(sizeof(struct netmap_backend),
                                             M_DEVBUF, M_MOWAIT | M_ZERO);
                 if (!be) {
@@ -948,8 +973,9 @@ void *netmap_get_backend(int fd)
                 }
                 be->na = na;
                 be->file = filp;
-                be->owner = current;
+                be->owner = current;  /* set the owner */
 
+                /* Override some callbacks. */
                 be->saved_nm_dtor = na->nm_dtor;
                 be->saved_nm_notify = na->nm_notify;
                 na->nm_dtor = &netmap_backend_nm_dtor;
@@ -991,6 +1017,7 @@ int netmap_backend_total_tx_space(void *opaque)
     struct netmap_backend *be = opaque;
     struct netmap_ring *ring = be->na->tx_rings[0].ring;
 
+    /* One slot is always unused, isn't it? */
     return (ring->num_slots - 1) * ring->nr_buf_size;
 }
 EXPORT_SYMBOL(netmap_backend_total_tx_space);
@@ -1092,6 +1119,8 @@ int netmap_backend_peek_head_len(void *opaque)
 	u_int i;
 	int ret = 0;
 
+        /* Do the rxsync here. The call to the recvmsg() callback must
+           happen after the peek_head_len() callback. */
         na->nm_rxsync(na, 0, NAF_FORCE_READ);
 
         i = ring->cur;
@@ -1109,7 +1138,9 @@ int netmap_backend_peek_head_len(void *opaque)
             ring->cur, ring->avail, be->na->rx_rings[0].nr_hwcur,
             be->na->rx_rings[0].nr_hwavail);
 
-        if (ret >= sizeof(struct virtio_net_hdr)) {
+        /* The v1000 frontend assumes that the peek_head_len() callback
+           doesn't count the bytes of the virtio-net-header. */
+        if (likely(ret >= sizeof(struct virtio_net_hdr))) {
             ret -= sizeof(struct virtio_net_hdr);
         }
 

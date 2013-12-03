@@ -116,6 +116,8 @@ enum v1000_net_poll_state {
     VHOST_NET_POLL_STOPPED = 2,
 };
 
+/* A set of callbacks through wich the v1000 frontend interacts
+   with a backend (socket or netmap). */
 struct v1000_backend {
     /* Get the file struct attached to the backend. */
     struct file *(*get_file)(void *opaque);
@@ -1006,6 +1008,7 @@ static struct socket *get_socket(int fd)
 
 static void *get_backend(struct v1000_net *n, int fd)
 {
+    /* Probe for the netmap backend first. */
     void *ret = netmap_get_backend(fd);
 
     if (!IS_ERR(ret)) {
@@ -1020,6 +1023,7 @@ static void *get_backend(struct v1000_net *n, int fd)
         return ret;
     }
 
+    /* Probe for a socket backend. */
     ret = get_socket(fd);
     if (!IS_ERR(ret)) {
         /* Set the socket backend ops. */
