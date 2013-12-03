@@ -1003,7 +1003,7 @@ struct file* netmap_backend_get_file(void *opaque)
 }
 EXPORT_SYMBOL(netmap_backend_get_file);
 
-int netmap_backend_sendmsg(void *opaque, struct msghdr *m, size_t len)
+int netmap_backend_sendmsg(void *opaque, struct msghdr *m, size_t len, unsigned flags)
 {
     struct netmap_backend *be = opaque;
     struct netmap_adapter *na = be->na;
@@ -1084,7 +1084,8 @@ int netmap_backend_sendmsg(void *opaque, struct msghdr *m, size_t len)
     ring->cur = i;
     ring->avail = avail;
 
-    na->nm_txsync(na, 0, 0);
+    if (!(flags & MSG_MORE))
+        na->nm_txsync(na, 0, 0);
     ND("B) cur=%d avail=%d, hwcur=%d, hwavail=%d\n", i, avail, na->tx_rings[0].nr_hwcur,
                                                                na->tx_rings[0].nr_hwavail);
 

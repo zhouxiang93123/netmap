@@ -50,6 +50,7 @@ struct rate_stats {
     unsigned long brxwu;    /* Backend Rx wake-up. */
     unsigned long txpkts;   /* Transmitted packets. */
     unsigned long rxpkts;   /* Received packets. */
+    unsigned long txfl;     /* TX flushes requests. */
 };
 
 struct rate_context {
@@ -73,6 +74,7 @@ static void rate_callback(unsigned long arg)
     printk("grxk = %lu Hz\n", (cur.grxk - ctx->old.grxk)/RATE_PERIOD);
     printk("hrxk = %lu Hz\n", (cur.hrxk - ctx->old.hrxk)/RATE_PERIOD);
     printk("brxw = %lu Hz\n", (cur.brxwu - ctx->old.brxwu)/RATE_PERIOD);
+    printk("txfl = %lu Hz\n", (cur.txfl - ctx->old.txfl)/RATE_PERIOD);
     printk("\n");
 
     ctx->old = cur;
@@ -115,7 +117,7 @@ struct v1000_backend {
     /* Get the file struct attached to the backend. */
     struct file *(*get_file)(void *opaque);
     /* Send a packet to the backend. */
-    int (*sendmsg)(void *opaque, struct msghdr *msg, size_t iovlen);
+    int (*sendmsg)(void *opaque, struct msghdr *msg, size_t iovlen, unsigned flags);
     /* Get the length of the next rx buffer ready into the backend. */
     int (*peek_head_len)(void *opaque);
     /* Receive a packet from the backend. */
@@ -149,7 +151,7 @@ static struct file *socket_backend_get_file(void *opaque)
 }
 
 static int socket_backend_sendmsg(void *opaque, struct msghdr *msg,
-                                   size_t iovlen)
+                                   size_t iovlen, unsigned flags)
 {
     struct socket *sock = (struct socket *)opaque;
 
@@ -280,6 +282,7 @@ static void handle_tx(struct v1000_net *net)
     uint16_t len;
     uint32_t desc_type;
     bool eop;
+    uint32_t next_tdh;
 
     mutex_lock(&vr->mutex);
     opaque = vr->private_data;
@@ -290,6 +293,11 @@ static void handle_tx(struct v1000_net *net)
 
     /* Disable notifications. */
     v1000_set_txkick(net, false);
+
+    next_tdh = st->tdh + 1;
+    if (unlikely(next_tdh == st->txnum)) {
+        next_tdh = 0;
+    }
 
     smp_mb();
     CSB_READ(net->csb, guest_tdt, st->tdt);
@@ -430,7 +438,9 @@ static void handle_tx(struct v1000_net *net)
                     msg.msg_iovlen = iovcnt;
                     /* TODO compute iovlen during the cycle */
                     iovlen = iov_length(vr->iov, iovcnt);
-                    err = net->backend.sendmsg(opaque, &msg, iovlen);
+                    err = net->backend.sendmsg(opaque, &msg, iovlen,
+                                st->tdt == next_tdh ? 0 : MSG_MORE);
+                    IFRATE(if (st->tdt == next_tdh) net->rate_ctx.new.txfl++);
                     if (unlikely(err < 0)) {
                         printk("sendmsg() err!!\n");
                         goto leave; // XXX
@@ -455,8 +465,9 @@ static void handle_tx(struct v1000_net *net)
             }
 
 next:
-	    if (unlikely(++st->tdh == st->txnum))
-		st->tdh = 0;
+            st->tdh = next_tdh;
+	    if (unlikely(++next_tdh == st->txnum))
+		next_tdh = 0;
 	} while (!eop);
 
 	if (unlikely(total_len >= V1000_NET_WEIGHT)) {
@@ -898,7 +909,8 @@ static struct socket *get_tap_socket(int fd)
 struct socket *get_netmap_socket(int fd);
 void *netmap_get_backend(int fd);
 struct file *netmap_backend_get_file(void *opaque);
-int netmap_backend_sendmsg(void *opaque, struct msghdr *m, size_t len);
+int netmap_backend_sendmsg(void *opaque, struct msghdr *m, size_t len,
+                           unsigned flags);
 int netmap_backend_peek_head_len(void *opaque);
 int netmap_backend_recvmsg(void *opaque, struct msghdr *m, size_t len);
 
