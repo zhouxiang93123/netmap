@@ -14,7 +14,6 @@
 #include <linux/moduleparam.h>
 #include <linux/mutex.h>
 #include <linux/workqueue.h>
-#include <linux/rcupdate.h>
 #include <linux/file.h>
 #include <linux/slab.h>
 #include <linux/cdev.h>
@@ -282,13 +281,13 @@ static void handle_tx(struct v1000_net *net)
     uint32_t desc_type;
     bool eop;
 
-    opaque = rcu_dereference_check(vr->private_data, 1);
+    mutex_lock(&vr->mutex);
+    opaque = vr->private_data;
     if (unlikely(!opaque || net->broken)) {
 	printk("[v1000] Broken device\n");
-	return;
+	goto leave;
     }
 
-    mutex_lock(&vr->mutex);
     /* Disable notifications. */
     v1000_set_txkick(net, false);
 
@@ -296,7 +295,7 @@ static void handle_tx(struct v1000_net *net)
     CSB_READ(net->csb, guest_tdt, st->tdt);
     if (unlikely(st->tdt >= st->txnum)) {
         net->broken = true;
-        return;
+        goto leave;
     }
     for (;;) {
 	/* Nothing new?  Wait for eventfd to tell us they refilled. */
@@ -308,7 +307,7 @@ static void handle_tx(struct v1000_net *net)
 	    CSB_READ(net->csb, guest_tdt, st->tdt);
             if (unlikely(st->tdt >= st->txnum)) {
                 net->broken = true;
-                return;
+                goto leave;
             }
 	    if (unlikely(st->tdt != st->tdh)) {
 		v1000_set_txkick(net, false);
@@ -471,7 +470,7 @@ next:
 	    CSB_READ(net->csb, guest_tdt, st->tdt);
             if (unlikely(st->tdt >= st->txnum)) {
                 net->broken = true;
-                return;
+                goto leave;
             }
 	}
     }
@@ -481,8 +480,6 @@ leave:
 	eventfd_signal(vr->call_ctx, 1);
         IFRATE(net->rate_ctx.new.htxk++);
     }
-    //printk("handle_tx()\n");
-
     mutex_unlock(&vr->mutex);
 
     return;
@@ -540,7 +537,7 @@ static void handle_rx(struct v1000_net *net)
     size_t total_len = 0;
     int err;
     size_t sock_len;
-    void *opaque = rcu_dereference_check(vr->private_data, 1);
+    void *opaque;
     struct e1000_state * st = &net->state;
     struct e1000_rx_desc desc;
     void __user * va;
@@ -552,12 +549,13 @@ static void handle_rx(struct v1000_net *net)
 
     DBG(printk("handle_rx()\n"));
 
+    mutex_lock(&vr->mutex);
+    opaque = vr->private_data;
     if (unlikely(!opaque || net->broken)) {
 	printk("[v1000] Broken device\n");
-	return;
+	goto leave;
     }
 
-    mutex_lock(&vr->mutex);
     /* XXX Disable notification only when NOT using host_rxkick_at. */
     v1000_set_rxkick(net, false);
     CSB_READ(net->csb, guest_rdt, st->rdt);
@@ -678,14 +676,13 @@ static void handle_rx(struct v1000_net *net)
 	    break;
 	}
     }
+
 leave:
     if (v1000_rx_interrupts_enabled(net)) {
 	eventfd_signal(vr->call_ctx, 1);
         IFRATE(net->rate_ctx.new.hrxk++);
     }
-
     mutex_unlock(&vr->mutex);
-
     DBG(printk("rxintr=%d\n", v1000_rx_interrupts_enabled(net)));
 }
 
@@ -784,8 +781,7 @@ static int v1000_net_enable_vr(struct v1000_net *n,
     void *opaque;
     int ret;
 
-    opaque = rcu_dereference_protected(vr->private_data,
-	    lockdep_is_held(&vr->mutex));
+    opaque = vr->private_data;
     if (!opaque)
 	return 0;
     if (vr == &n->tx_ring) {
@@ -802,10 +798,9 @@ static void *v1000_net_stop_vr(struct v1000_net *n,
     void *opaque;
 
     mutex_lock(&vr->mutex);
-    opaque = rcu_dereference_protected(vr->private_data,
-	    lockdep_is_held(&vr->mutex));
+    opaque = vr->private_data;
     v1000_net_disable_vr(n, vr);
-    rcu_assign_pointer(vr->private_data, NULL);
+    vr->private_data = NULL;
     mutex_unlock(&vr->mutex);
     return opaque;
 }
@@ -972,7 +967,7 @@ static long v1000_net_set_backend(struct v1000_net *n, struct v1000_ring *vr, in
 
     /* start polling new backend */
     //v1000_net_disable_vr(n, vr);
-    rcu_assign_pointer(vr->private_data, opaque);
+    vr->private_data = opaque;
     if (r)
 	goto err_used;
     //r = v1000_net_enable_vr(n, vr);

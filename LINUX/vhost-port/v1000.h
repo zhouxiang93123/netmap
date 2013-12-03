@@ -73,14 +73,8 @@ struct v1000_ring {
 
     struct writeback_info wb[UIO_MAXIOV];
 
-    /* We use a kind of RCU to access private pointer.
-     * All readers access it from worker, which makes it possible to
-     * flush the v1000_work instead of synchronize_rcu. Therefore readers do
-     * not need to call rcu_read_lock/rcu_read_unlock: the beginning of
-     * v1000_work execution acts instead of rcu_read_lock() and the end of
-     * v1000_work execution acts instead of rcu_read_unlock().
-     * Writers use virtqueue mutex. */
-    void __rcu *private_data;
+    /* Protected by virtual ring mutex. */
+    void *private_data;
 };
 
 struct v1000_dev {
