@@ -8,7 +8,7 @@
  *      notice, this list of conditions and the following disclaimer.
  *   2. Redistributions in binary form must reproduce the above copyright
  *      notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
+ *      documentation and/or other materials provided with the distribution.
  *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -371,7 +371,7 @@ generic_mbuf_destructor(struct mbuf *m)
  * nr_hwcur is the first unsent buffer.
  * When cleaning, we try to recover buffers between nr_ntc and nr_hwcur.
  */
-int
+static int
 generic_netmap_tx_clean(struct netmap_kring *kring)
 {
     u_int num_slots = kring->nkr_num_slots;
