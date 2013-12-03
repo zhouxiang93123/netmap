@@ -110,12 +110,6 @@ struct e1000_state {
  * Using this limit prevents one virtqueue from starving others. */
 #define V1000_NET_WEIGHT 0x80000
 
-enum v1000_net_poll_state {
-    VHOST_NET_POLL_DISABLED = 0,
-    VHOST_NET_POLL_STARTED = 1,
-    VHOST_NET_POLL_STOPPED = 2,
-};
-
 /* A set of callbacks through wich the v1000 frontend interacts
    with a backend (socket or netmap). */
 struct v1000_backend {
@@ -138,10 +132,6 @@ struct v1000_net {
     struct v1000_dev dev;
     struct v1000_ring tx_ring, rx_ring;
     struct v1000_poll tx_poll, rx_poll;
-    /* Tells us whether we are polling a socket for TX.
-     * We only do this when socket buffer fills up.
-     * Protected by tx vr lock. */
-    enum v1000_net_poll_state tx_poll_state;
 
     struct V1000Config config;
     bool configured;
@@ -267,28 +257,6 @@ static void * lookup_translation(struct v1000_net * net, uint64_t address, uint6
 	} \
     } while (0)
 
-/* Caller must have TX VQ lock */
-static void tx_poll_stop(struct v1000_net *net)
-{
-    if (likely(net->tx_poll_state != VHOST_NET_POLL_STARTED))
-	return;
-    v1000_poll_stop(&net->tx_poll);
-    net->tx_poll_state = VHOST_NET_POLL_STOPPED;
-}
-
-/* Caller must have TX VQ lock */
-static int tx_poll_start(struct v1000_net *net, void *opaque)
-{
-    int ret;
-
-    if (unlikely(net->tx_poll_state != VHOST_NET_POLL_STOPPED))
-	return 0;
-    ret = v1000_poll_start(&net->tx_poll, net->backend.get_file(opaque));
-    if (!ret)
-	net->tx_poll_state = VHOST_NET_POLL_STARTED;
-    return ret;
-}
-
 static inline void v1000_set_txkick(struct v1000_net *net, bool enable)
 {
     uint32_t v = enable ? 1 : 0;
@@ -320,9 +288,8 @@ static void handle_tx(struct v1000_net *net)
     };
     struct virtio_net_hdr hdr;
     size_t iovlen, total_len = 0;
-    int err, wmem;
+    int err;
     void *opaque;
-    int total_tx_space;
     struct e1000_state * st = &net->state;
     struct e1000_tx_desc desc;
     struct e1000_context_desc * ctxdp =
@@ -340,24 +307,9 @@ static void handle_tx(struct v1000_net *net)
 	return;
     }
 
-    total_tx_space = net->backend.total_tx_space(opaque);
-    wmem = net->backend.used_tx_space(opaque);
-    if (wmem >= total_tx_space) {
-        /* No space in the backend transmit queue. */
-	mutex_lock(&vr->mutex);
-	tx_poll_start(net, opaque);
-	mutex_unlock(&vr->mutex);
-	return;
-    }
-
     mutex_lock(&vr->mutex);
     /* Disable notifications. */
     v1000_set_txkick(net, false);
-
-    if (wmem < total_tx_space / 2) {
-        /* Sock is writable (default write policy, sock_writeable()). */
-	tx_poll_stop(net);
-    }
 
     smp_mb();
     CSB_READ(net->csb, guest_tdt, st->tdt);
@@ -368,12 +320,6 @@ static void handle_tx(struct v1000_net *net)
     for (;;) {
 	/* Nothing new?  Wait for eventfd to tell us they refilled. */
 	if (st->tdt == st->tdh) {
-            wmem = net->backend.used_tx_space(opaque);
-	    if (wmem >= total_tx_space * 3 / 4) {
-		tx_poll_start(net, opaque);
-		// XXX set_bit(SOCK_ASYNC_NOSPACE, &sock->flags);
-		break;
-	    }
 	    /* Reenable notifications. */
 	    v1000_set_txkick(net, true);
 	    /* Doublecheck. */
@@ -506,8 +452,6 @@ static void handle_tx(struct v1000_net *net)
                     iovlen = iov_length(vr->iov, iovcnt);
                     err = net->backend.sendmsg(opaque, &msg, iovlen);
                     if (unlikely(err < 0)) {
-                        if (err == -EAGAIN || err == -ENOBUFS)
-                            tx_poll_start(net, opaque);
                         printk("sendmsg() err!!\n");
                         goto leave; // XXX
                     }
@@ -825,7 +769,6 @@ static int v1000_open(struct inode *inode, struct file *f)
 
     v1000_poll_init(&n->tx_poll, handle_tx_net, POLLOUT, dev);
     v1000_poll_init(&n->rx_poll, handle_rx_net, POLLIN, dev);
-    n->tx_poll_state = VHOST_NET_POLL_DISABLED;
 
     f->private_data = n;
 
@@ -848,10 +791,9 @@ static void v1000_net_disable_vr(struct v1000_net *n,
 {
     if (!vr->private_data)
 	return;
-    if (vr == &n->tx_ring) {
-	tx_poll_stop(n);
-	n->tx_poll_state = VHOST_NET_POLL_DISABLED;
-    } else
+    if (vr == &n->tx_ring)
+	v1000_poll_stop(&n->tx_poll);
+    else
 	v1000_poll_stop(&n->rx_poll);
 }
 
@@ -866,8 +808,7 @@ static int v1000_net_enable_vr(struct v1000_net *n,
     if (!opaque)
 	return 0;
     if (vr == &n->tx_ring) {
-	n->tx_poll_state = VHOST_NET_POLL_STOPPED;
-	ret = tx_poll_start(n, opaque);
+	ret = v1000_poll_start(&n->tx_poll, n->backend.get_file(opaque));
     } else
 	ret = v1000_poll_start(&n->rx_poll, n->backend.get_file(opaque));
 
