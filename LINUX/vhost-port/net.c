@@ -115,11 +115,6 @@ struct e1000_state {
 struct v1000_backend {
     /* Get the file struct attached to the backend. */
     struct file *(*get_file)(void *opaque);
-    /* Get the current used tx space in the backend. */
-    int (*used_tx_space)(void *opaque);
-    /* Get the total tx space in the backend.
-       TODO maybe it's not necessary a callback */
-    int (*total_tx_space)(void *opaque);
     /* Send a packet to the backend. */
     int (*sendmsg)(void *opaque, struct msghdr *msg, size_t iovlen);
     /* Get the length of the next rx buffer ready into the backend. */
@@ -152,20 +147,6 @@ static struct file *socket_backend_get_file(void *opaque)
     struct socket *sock = (struct socket *)opaque;
 
     return sock->file;
-}
-
-static int socket_backend_used_tx_space(void *opaque)
-{
-    struct socket *sock = (struct socket *)opaque;
-
-    return atomic_read(&sock->sk->sk_wmem_alloc);
-}
-
-static int socket_backend_total_tx_space(void *opaque)
-{
-    struct socket *sock = (struct socket *)opaque;
-
-    return sock->sk->sk_sndbuf;
 }
 
 static int socket_backend_sendmsg(void *opaque, struct msghdr *msg,
@@ -922,8 +903,6 @@ static struct socket *get_tap_socket(int fd)
 struct socket *get_netmap_socket(int fd);
 void *netmap_get_backend(int fd);
 struct file *netmap_backend_get_file(void *opaque);
-int netmap_backend_used_tx_space(void *opaque);
-int netmap_backend_total_tx_space(void *opaque);
 int netmap_backend_sendmsg(void *opaque, struct msghdr *m, size_t len);
 int netmap_backend_peek_head_len(void *opaque);
 int netmap_backend_recvmsg(void *opaque, struct msghdr *m, size_t len);
@@ -955,8 +934,6 @@ static void *get_backend(struct v1000_net *n, int fd)
     if (!IS_ERR(ret)) {
         /* Set the netmap backend ops. */
         n->backend.get_file = &netmap_backend_get_file;
-        n->backend.used_tx_space = &netmap_backend_used_tx_space;
-        n->backend.total_tx_space = &netmap_backend_total_tx_space;
         n->backend.sendmsg = &netmap_backend_sendmsg;
         n->backend.peek_head_len = &netmap_backend_peek_head_len;
         n->backend.recvmsg = &netmap_backend_recvmsg;
@@ -969,8 +946,6 @@ static void *get_backend(struct v1000_net *n, int fd)
     if (!IS_ERR(ret)) {
         /* Set the socket backend ops. */
         n->backend.get_file = &socket_backend_get_file;
-        n->backend.used_tx_space = &socket_backend_used_tx_space;
-        n->backend.total_tx_space = &socket_backend_total_tx_space;
         n->backend.sendmsg = &socket_backend_sendmsg;
         n->backend.peek_head_len = &socket_backend_peek_head_len;
         n->backend.recvmsg = &socket_backend_recvmsg;

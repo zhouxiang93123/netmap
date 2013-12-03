@@ -1003,25 +1003,6 @@ struct file* netmap_backend_get_file(void *opaque)
 }
 EXPORT_SYMBOL(netmap_backend_get_file);
 
-int netmap_backend_used_tx_space(void *opaque)
-{
-    struct netmap_backend *be = opaque;
-    struct netmap_ring *ring = be->na->tx_rings[0].ring;
-
-    return (ring->num_slots - ring->avail) * ring->nr_buf_size;
-}
-EXPORT_SYMBOL(netmap_backend_used_tx_space);
-
-int netmap_backend_total_tx_space(void *opaque)
-{
-    struct netmap_backend *be = opaque;
-    struct netmap_ring *ring = be->na->tx_rings[0].ring;
-
-    /* One slot is always unused, isn't it? */
-    return (ring->num_slots - 1) * ring->nr_buf_size;
-}
-EXPORT_SYMBOL(netmap_backend_total_tx_space);
-
 int netmap_backend_sendmsg(void *opaque, struct msghdr *m, size_t len)
 {
     struct netmap_backend *be = opaque;
