@@ -73,6 +73,7 @@ all: $(GET_DRIVERS) build
 
 build:
 	$(MAKE) -C $(KSRC) M=$(PWD) CONFIG_NETMAP=m $(MOD_LIST) \
+		EXTRA_CFLAGS='$(EXTRA_CFLAGS)'			\
 		O_DRIVERS="$(DRIVERS:%.c=%.o)" modules
 	@ls -l `find . -name \*.ko`
 
