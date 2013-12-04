@@ -130,10 +130,14 @@ get-drivers:
 	    for i in $$s; do (cd $$i ;					\
 		echo "  From `pwd` :";					\
 		ls -ldp $${what} 2> /dev/null | sed 's/^/    /' ;	\
-	    	cp -Rp $${what} $(PWD) 2>/dev/null ); done )
-	-@(for i in $(PATCHES) ; do echo "** patch with $$i";	\
-		patch --posix --quiet --force -p1 < patches/$$i; done )
-	@echo "Building the following drivers: $(S_DRIVERS)"
+	    	cp -Rp $${what} $(PWD) 2>/dev/null );			\
+	    done ;							\
+	    cd $(PWD) ;							\
+	    for i in $(PATCHES) ;					\
+		do echo "** patch with $$i";				\
+		patch --posix --quiet --force -p1 < patches/$$i;	\
+	    done ;							\
+	    echo "Building the following drivers: $(S_DRIVERS)" )
 	@touch get-drivers
 
 
