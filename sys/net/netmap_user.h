@@ -169,7 +169,7 @@ static int nm_close(struct nm_desc_t *);
  * Try to open, return descriptor if successful, NULL otherwise.
  * An invalid netmap name will return errno = 0;
  */
-static nm_desc_t *
+static struct nm_desc_t *
 nm_open(const char *ifname, const char *ring_name, int flags, int ring_flags)
 {
 	struct nm_desc_t *d;
@@ -255,6 +255,7 @@ nm_close(struct nm_desc_t *d)
 /*
  * Same prototype as pcap_dispatch(), only need to cast.
  */
+inline /* not really, but disable unused warnings */
 static int
 nm_dispatch(struct nm_desc_t *d, int cnt, nm_cb_t cb, u_char *arg)
 {
@@ -292,6 +293,7 @@ nm_dispatch(struct nm_desc_t *d, int cnt, nm_cb_t cb, u_char *arg)
 	return got;
 }
 
+inline /* not really, but disable unused warnings */
 static u_char *
 nm_next(struct nm_desc_t *d, struct nm_hdr_t *hdr)
 {
