@@ -4,34 +4,41 @@
 #       make oldconfig; make scripts; make prepare
 #
 
-
-netmap_lin-objs := netmap.o netmap_mem2.o netmap_linux.o netmap_generic.o netmap_mbq.o
-netmap_lin-objs += netmap_vale.o
+# list of objects for this module
+netmap_lin-objs := netmap.o netmap_mem2.o netmap_linux.o \
+	netmap_generic.o netmap_mbq.o netmap_vale.o
 
 obj-$(CONFIG_NETMAP) = netmap_lin.o
+
 ifndef NODRIVERS
-# list of modules to be built
-MOD_LIST=	CONFIG_E1000=m CONFIG_E1000E=m \
-		CONFIG_BNX2X=m CONFIG_MLX4=m \
-		CONFIG_IXGBE=m CONFIG_IGB=m
-obj-m += $(DRIVERS)
+# list of modules to be built (actually also forcedeth and r8169)
+MOD_LIST:=	CONFIG_E1000=m CONFIG_E1000E=m	\
+		CONFIG_IXGBE=m CONFIG_IGB=m	\
+		CONFIG_BNX2X=m CONFIG_MLX4=m 
+obj-m += $(O_DRIVERS)
+GET_DRIVERS := get-drivers
 else
-MOD_LIST=
+MOD_LIST:=
 endif
 
-# names of the driver sources. In old linuxes are under
-# KSRC/drivers/net, but depending on where you build they
-# can be in $(KSRC)/source/drivers/net/ethernet/$(manufacturer)
+# DRIVER_SRCS names of the driver sources is only used to
+# clean files that we copied.
 DRIVER_SRCS = r8169.c forcedeth.c e1000/ e1000e/ ixgbe/ igb/
 DRIVER_SRCS += bnx2x/ mellanox/ mlx4/
+
+# _DRV_SUBDIRS contains the subdirs with driver sources.
+# In old linuxes everything is under drivers/net, newer versions
+# have them in source/drivers/net/ethernet/$(manufacturer)
+
 _DRV_SUBDIRS= nvidia realtek intel broadcom .
 
-# The following commands are needed to build the modules as out-of-tree, in
-# fact the kernel sources path must be specified.
+# The following commands are needed to build the modules as out-of-tree,
+# in fact the kernel sources path must be specified.
 
-# Additional compile flags (e.g. header location)
 PWD ?= $(CURDIR)
 M:=$(PWD)
+
+# Additional compile flags (e.g. header location)
 EXTRA_CFLAGS := -I$(M) -I$(M)/../sys -I$(M)/../sys/dev -DCONFIG_NETMAP
 EXTRA_CFLAGS += -Wno-unused-but-set-variable
 
@@ -40,7 +47,7 @@ EXTRA_CFLAGS += -Wno-unused-but-set-variable
 KSRC ?= /lib/modules/$(shell uname -r)/build
 SRC ?= $(KSRC)
 
-# extract version number and filter with the available patches.
+# extract version number.
 # version.h can be in two different places.
 # NOTE- A.B.C translates to aXXYY where XXYY are hex
 LIN_VER = $(shell V=linux/version.h; G=. ; \
@@ -50,19 +57,23 @@ LIN_VER = $(shell V=linux/version.h; G=. ; \
 
 # produce a list of applicable patches for this version
 PATCHES := $(shell \
-	    cd $(PWD)/patches; ls diff--* | awk -v v=$(LIN_VER) -F -- '{ \
-	    if ((!$$3 || $$3 <= v) && (!$$4 || v < $$4)) print $0; }')
+	    cd $(PWD)/patches; ls diff--* | awk -v v=$(LIN_VER) -F -- \
+	    '{ if ((!$$3 || $$3 <= v) && (!$$4 || v < $$4)) print $$0; }')
 
-DRIVERS := $(shell \
-	    cd $(PWD)/patches; ls diff--* | awk -v v=$(LIN_VER) -F -- '{ \
-	    if ((!$$3 || $$3 <= v) && (!$$4 || v < $$4)) { ; \
-	    if (match($$2, ".c")) print $$2 ; else print $$2 "/" } }' )
+# source drivers to copy. Names derived from the patches
+S_DRIVERS := $(shell \
+	    cd $(PWD)/patches; ls diff--* | awk -v v=$(LIN_VER) -F -- \
+	    '{ if ((!$$3 || $$3 <= v) && (!$$4 || v < $$4)) print $$2 }' )
 
-all: get-drivers build
+# actual drivers after copy and patch
+DRIVERS = $(shell [ "$(PATCHES)" != "" ] && ls -dAp \
+	`echo $(PATCHES:diff--%=%) | sed -E 's/--[0-9a-f-]+//g'` 2> /dev/null)
+
+all: $(GET_DRIVERS) build
 
 build:
 	$(MAKE) -C $(KSRC) M=$(PWD) CONFIG_NETMAP=m $(MOD_LIST) \
-		DRIVERS="$(DRIVERS:%.c=%.o)" modules
+		O_DRIVERS="$(DRIVERS:%.c=%.o)" modules
 	@ls -l `find . -name \*.ko`
 
 
@@ -102,26 +113,33 @@ $(obj)/netmap_vale.o: $(M)/../sys/dev/netmap/netmap_vale.c
 #-- copy and patch initial files
 # The location changes depending on the OS version, so ...
 get-drivers:
-ifndef NODRIVERS
-	@echo "LIN_VER $(LIN_VER) subdirs $(_DRV_SUBDIRS) files $(DRIVERS)"
 	-@(								\
 	    if [ -d "$(DRIVER_SRC)" ] ; then				\
-		cd "$(DRIVER_SRC)"; s=.;				\
+		cd "$(DRIVER_SRC)"; s=.; what="`ls -dp *`" ;		\
 	    else							\
-		cd $(SRC); [ -d source ] && cd source;			\
+		cd $(SRC); [ -d source ] && cd source ;			\
 		cd drivers/net; s=. ;					\
 		[ -d ethernet ] && cd ethernet && s="$(_DRV_SUBDIRS)" ;	\
+		what="$(S_DRIVERS)" ;					\
 	    fi ;							\
-	    echo "Building from `pwd`";					\
+	    echo "LIN_VER $(LIN_VER)" ;					\
+	    [ "$${what}" = "" ] && echo "-- NO DRIVERS --" && return;	\
+	    echo "---- Building from `pwd`";				\
+	    echo "---- copying $${what} ---" ;				\
 	    for i in $$s; do (cd $$i ;					\
-		echo "Copying from `pwd` ";				\
-	    	cp -Rp $(DRIVERS) $(PWD) 2>/dev/null ); done )
-	-@(for i in $(PATCHES) ; do echo "** use patches/$$i";		\
+		echo "  From `pwd` :";					\
+		ls -ldp $${what} 2> /dev/null | sed 's/^/    /' ;	\
+	    	cp -Rp $${what} $(PWD) 2>/dev/null ); done )
+	-@(for i in $(PATCHES) ; do echo "** patch with $$i";	\
 		patch --posix --quiet --force -p1 < patches/$$i; done )
-	@echo "Building the following drivers: $(PATCHES)"
-endif
+	@echo "Building the following drivers: $(S_DRIVERS)"
 	@touch get-drivers
 
+
+test3:
+	@echo "from $(PATCHES) -- to $(MYDRIVERS)"
+	@echo "Drivers is $(DRIVERS)"
+	@echo "Actually have `ls -d $(DRIVERS) 2> /dev/null`"
 
 # compute the diffs for the original files
 diffs:
