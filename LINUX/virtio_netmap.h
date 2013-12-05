@@ -4,6 +4,8 @@
 
 
 #define SOFTC_T	virtnet_info
+static int virtnet_close(struct ifnet *ifp);
+static int virtnet_open(struct ifnet *ifp);
 
 /*
  * Register/unregister, similar to e1000_reinit_safe()
@@ -12,7 +14,7 @@ static int
 virtio_netmap_reg(struct netmap_adapter *na, int onoff)
 {
         struct ifnet *ifp = na->ifp;
-	struct SOFTC_T *vi = netdev_priv(ifp);
+	/* struct SOFTC_T *vi = netdev_priv(ifp); */
 	struct netmap_hw_adapter *hwna = (struct netmap_hw_adapter*)na;
 	int error = 0;
 
@@ -332,7 +334,7 @@ virtio_netmap_attach(struct SOFTC_T *vi)
 
 	bzero(&na, sizeof(na));
 
-	na.ifp = vi->netdev;
+	na.ifp = vi->dev;
 	na.num_tx_desc = 256;
 	na.num_rx_desc = 256;
 	na.nm_register = virtio_netmap_reg;

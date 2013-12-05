@@ -9,6 +9,7 @@ netmap_lin-objs := netmap.o netmap_mem2.o netmap_linux.o \
 	netmap_generic.o netmap_mbq.o netmap_vale.o
 
 obj-$(CONFIG_NETMAP) = netmap_lin.o
+obj-$(CONFIG_NETMAP) += virtio_net.o
 
 ifndef NODRIVERS
 # list of modules to be built (actually also forcedeth and r8169)
