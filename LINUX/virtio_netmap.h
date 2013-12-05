@@ -55,7 +55,7 @@ virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
         struct send_queue *sq = &vi->sq[ring_nr];
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-        struct netmap_slot *slot;
+        struct netmap_adapter *token;
 	u_int j, k, l, n, lim = kring->nkr_num_slots - 1;
 	int new_slots;
 
@@ -64,10 +64,11 @@ virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
         /* Free used slots. */
         n = 0;
         for (;;) {
-                slot = virtqueue_get_buf(sq->vq, &l);
-                if (slot == NULL)
+                token = virtqueue_get_buf(sq->vq, &l);
+                if (token == NULL)
                         break;
-                n++;
+                if (token == na)
+                        n++;
         }
         kring->nr_hwavail += n;
         D("[B] %d %d %d %d", ring->cur, kring->nr_hwcur, kring->nr_hwavail, kring->nr_hwreserved);
@@ -110,7 +111,7 @@ virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 
 			slot->flags &= ~NS_REPORT;
                         sg_set_buf(sq->sg, addr, slot->len);
-                        err = virtqueue_add_outbuf(sq->vq, sq->sg, 1, slot, GFP_ATOMIC);
+                        err = virtqueue_add_outbuf(sq->vq, sq->sg, 1, na, GFP_ATOMIC);
                         if (err < 0) {
                                 D("virtqueue_add_outbuf failed");
                                 break;
@@ -171,20 +172,22 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	 */
 	if (netmap_no_pendintr || force_update) {
 		uint16_t slot_flags = kring->nkr_slot_flags;
-                struct netmap_slot *slot;
+                struct netmap_adapter *token;
 
                 j = kring->nr_hwcur + kring->nr_hwavail;
                 if (j >= kring->nkr_num_slots)
                         j -= kring->nkr_num_slots;
                 n = 0;
 		for (;;) {
-                        slot = virtqueue_get_buf(rq->vq, &l);
-                        if (slot == NULL)
+                        token = virtqueue_get_buf(rq->vq, &l);
+                        if (token == NULL)
                                 break;
-			ring->slot[j].len = l;
-			ring->slot[j].flags = slot_flags;
-			j = (j == lim) ? 0 : j + 1;
-                        n++;
+                        if (likely(token == na)) {
+                            ring->slot[j].len = l;
+                            ring->slot[j].flags = slot_flags;
+                            j = (j == lim) ? 0 : j + 1;
+                            n++;
+                        }
 		}
 		kring->nr_hwavail += n;
 		kring->nr_kflags &= ~NKR_PENDINTR;
@@ -213,7 +216,7 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 				slot->flags &= ~NS_BUF_CHANGED;
 
                         sg_set_buf(rq->sg, addr, ring->nr_buf_size);
-                        err = virtqueue_add_inbuf(rq->vq, rq->sg, 1, slot, GFP_ATOMIC);
+                        err = virtqueue_add_inbuf(rq->vq, rq->sg, 1, na, GFP_ATOMIC);
                         if (err < 0) {
                             D("virtqueue_add_inbuf failed");
                             return err;
@@ -267,7 +270,7 @@ static int virtio_netmap_init_buffers(struct SOFTC_T *vi)
                         slot = &ring->slot[i];
                         addr = NMB(slot);
                         sg_set_buf(rq->sg, addr, ring->nr_buf_size);
-                        err = virtqueue_add_inbuf(rq->vq, rq->sg, 1, slot, GFP_ATOMIC);
+                        err = virtqueue_add_inbuf(rq->vq, rq->sg, 1, na, GFP_ATOMIC);
                         if (err < 0) {
                             D("virtqueue_add_inbuf failed");
 
