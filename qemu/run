@@ -13,6 +13,7 @@ QEMU_DIR=/usr/ports-luigi/qemu-netmap/work-head/qemu-7527bd8/x86_64-softmmu/
 
 QEMU_DIR=/usr/home/luigi/work-qemu/git-head-20130131/x86_64-softmmu/
 QEMU_DIR=/usr/home/luigi/qemu-misc/qemu/x86_64-softmmu/
+QEMU_DIR=/usr/home/luigi/qemu-misc/qemu-head/x86_64-softmmu/
 [ "$QEMU_PORT" = ""  ] && QEMU_PORT=4444
 NET1=""
 QEMU_OPTS="-m 1024 -smp 2 "
