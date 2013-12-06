@@ -52,7 +52,12 @@ int verbose = 0;
 
 #define SKIP_PAYLOAD 1 /* do not check payload. */
 
+struct virt_header {
+	uint8_t fields[10];
+};
+
 struct pkt {
+	struct virt_header vh;
 	struct ether_header eh;
 	struct ip ip;
 	struct udphdr udp;
@@ -109,6 +114,7 @@ struct glob_arg {
 	char *ifname;
 	char *nmr_config;
 	int dummy_send;
+	int virt_header;	/* send also the virt_header */
 };
 enum dev_type { DEV_NONE, DEV_NETMAP, DEV_PCAP, DEV_TAP };
 
@@ -559,6 +565,8 @@ initialize_packet(struct targ *targ)
 	bcopy(&targ->g->src_mac.start, eh->ether_shost, 6);
 	bcopy(&targ->g->dst_mac.start, eh->ether_dhost, 6);
 	eh->ether_type = htons(ETHERTYPE_IP);
+
+	bzero(&pkt->vh, sizeof(pkt->vh));
 	// dump_payload((void *)pkt, targ->g->pkt_size, NULL, 0);
 }
 
@@ -570,18 +578,18 @@ initialize_packet(struct targ *targ)
  * an interrupt when done.
  */
 static int
-send_packets(struct netmap_ring *ring, struct pkt *pkt, 
-		struct glob_arg *g, u_int count, int options, u_int nfrags)
+send_packets(struct netmap_ring *ring, struct pkt *pkt, void *frame,
+		int size, struct glob_arg *g, u_int count, int options,
+		u_int nfrags)
 {
 	u_int sent, cur = ring->cur;
 	int fcnt;
-	int size = g->pkt_size;
 
 	if (ring->avail < count)
 		count = ring->avail;
 	if (count < nfrags) {
 		D("truncating packet, no room for frags %d %d",
-			count, nfrags);
+				count, nfrags);
 	}
 #if 0
 	if (options & (OPT_COPY | OPT_PREFETCH) ) {
@@ -602,13 +610,13 @@ send_packets(struct netmap_ring *ring, struct pkt *pkt,
 		slot->flags = 0;
 		if (options & OPT_INDIRECT) {
 			slot->flags |= NS_INDIRECT;
-			slot->ptr = (uint64_t)pkt;
+			slot->ptr = (uint64_t)frame;
 		} else if (options & OPT_COPY) {
-			pkt_copy(pkt, p, size);
+			pkt_copy(frame, p, size);
 			if (fcnt == 1)
 				update_addresses(pkt, g);
 		} else if (options & OPT_MEMCPY) {
-			memcpy(p, pkt, size);
+			memcpy(p, frame, size);
 			if (fcnt == 1)
 				update_addresses(pkt, g);
 		} else if (options & OPT_PREFETCH) {
@@ -647,6 +655,16 @@ pinger_body(void *data)
 	struct pollfd fds[1];
 	struct netmap_if *nifp = targ->nifp;
 	int i, rx = 0, n = targ->g->npackets;
+	void *frame;
+	int size;
+
+	if (!targ->g->virt_header) {
+		frame = &targ->pkt.eh;
+		size = targ->g->pkt_size;
+	} else {
+		frame = &targ->pkt;
+		size = targ->g->pkt_size + sizeof(targ->pkt.vh);
+	}
 
 	fds[0].fd = targ->fd;
 	fds[0].events = (POLLIN);
@@ -666,13 +684,13 @@ pinger_body(void *data)
 		char *p;
 	    for (i = 0; i < 1; i++) {
 		slot = &ring->slot[ring->cur];
-		slot->len = targ->g->pkt_size;
+		slot->len = size;
 		p = NETMAP_BUF(ring, slot->buf_idx);
 
 		if (ring->avail == 0) {
 			D("-- ouch, cannot send");
 		} else {
-			pkt_copy(&targ->pkt, p, targ->g->pkt_size);
+			pkt_copy(frame, p, size);
 			clock_gettime(CLOCK_REALTIME_PRECISE, &ts);
 			bcopy(&sent, p+42, sizeof(sent));
 			bcopy(&ts, p+46, sizeof(ts));
@@ -900,6 +918,17 @@ sender_body(void *data)
 	int options = targ->g->options | OPT_COPY;
 	struct timespec nexttime = { 0, 0}; // XXX silence compiler
 	int rate_limit = targ->g->tx_rate;
+	struct pkt *pkt = &targ->pkt;
+	void *frame;
+	int size;
+
+	if (!targ->g->virt_header) {
+		frame = &pkt->eh;
+		size = targ->g->pkt_size;
+	} else {
+		frame = pkt;
+		size = targ->g->pkt_size + sizeof(pkt->vh);
+	}
 
 	D("start");
 	if (setaffinity(targ->thread, targ->affinity))
@@ -918,12 +947,10 @@ sender_body(void *data)
 		nexttime = targ->tic;
 	}
     if (targ->g->dev_type == DEV_PCAP) {
-	    int size = targ->g->pkt_size;
-	    void *pkt = &targ->pkt;
 	    pcap_t *p = targ->g->p;
 
 	    for (i = 0; !targ->cancel && (n == 0 || sent < n); i++) {
-		if (pcap_inject(p, pkt, size) != -1)
+		if (pcap_inject(p, frame, size) != -1)
 			sent++;
 		update_addresses(pkt, targ->g);
 		if (i > 10000) {
@@ -932,12 +959,10 @@ sender_body(void *data)
 		}
 	    }
     } else if (targ->g->dev_type == DEV_TAP) { /* tap */
-	    int size = targ->g->pkt_size;
-	    void *pkt = &targ->pkt;
 	    D("writing to file desc %d", targ->g->main_fd);
 
 	    for (i = 0; !targ->cancel && (n == 0 || sent < n); i++) {
-		if (write(targ->g->main_fd, pkt, size) != -1)
+		if (write(targ->g->main_fd, frame, size) != -1)
 			sent++;
 		update_addresses(pkt, targ->g);
 		if (i > 10000) {
@@ -987,7 +1012,7 @@ sender_body(void *data)
 			if (frags > 1)
 				limit = ((limit + frags - 1) / frags) * frags;
 				
-			m = send_packets(txring, &targ->pkt, targ->g,
+			m = send_packets(txring, pkt, frame, size, targ->g,
 					 limit, options, frags);
 			ND("limit %d avail %d frags %d m %d", 
 				limit, txring->avail, frags, m);
@@ -1492,9 +1517,10 @@ main(int arc, char **argv)
 	g.tx_rate = 0;
 	g.frags = 1;
 	g.nmr_config = "";
+	g.virt_header = 0;
 
 	while ( (ch = getopt(arc, argv,
-			"a:f:F:n:i:It:r:l:d:s:D:S:b:c:o:p:PT:w:WvR:XC:")) != -1) {
+			"a:f:F:n:i:It:r:l:d:s:D:S:b:c:o:p:PT:w:WvR:XC:H")) != -1) {
 		struct sf *fn;
 
 		switch(ch) {
@@ -1617,6 +1643,9 @@ main(int arc, char **argv)
 			break;
 		case 'C':
 			g.nmr_config = strdup(optarg);
+			break;
+		case 'H':
+			g.virt_header = 1;
 		}
 	}
 
