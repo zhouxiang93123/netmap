@@ -970,7 +970,7 @@ BDG_NMB(struct netmap_adapter *na, struct netmap_slot *slot)
 /* default functions to handle rx/tx interrupts */
 int netmap_rx_irq(struct ifnet *, u_int, u_int *);
 #define netmap_tx_irq(_n, _q) netmap_rx_irq(_n, _q, NULL)
-int netmap_common_irq(struct ifnet *, u_int, u_int *work_done);
+void netmap_common_irq(struct ifnet *, u_int, u_int *work_done);
 
 
 void netmap_txsync_to_host(struct netmap_adapter *na);
