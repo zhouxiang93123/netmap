@@ -2180,7 +2180,7 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
  * Finally, if called on rx from an interface connected to a switch,
  * calls the proper forwarding routine, and return 1.
  */
-int
+void
 netmap_common_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 {
 	struct netmap_adapter *na = NA(ifp);
@@ -2194,7 +2194,7 @@ netmap_common_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 
 	if (work_done) { /* RX path */
 		if (q >= na->num_rx_rings)
-			return 0;	// not a physical queue
+			return;	// not a physical queue
 		kring = na->rx_rings + q;
 		kring->nr_kflags |= NKR_PENDINTR;	// XXX atomic ?
 		na->nm_notify(na, q, NR_RX,
@@ -2202,12 +2202,11 @@ netmap_common_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 		*work_done = 1; /* do not fire napi again */
 	} else { /* TX path */
 		if (q >= na->num_tx_rings)
-			return 0;	// not a physical queue
+			return;	// not a physical queue
 		kring = na->tx_rings + q;
 		na->nm_notify(na, q, NR_TX,
 			(na->num_tx_rings > 1 ? NAF_GLOBAL_NOTIFY : 0));
 	}
-	return 1;
 }
 
 /*
@@ -2241,7 +2240,8 @@ netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 		return 0;
 	}
 
-	return netmap_common_irq(ifp, q, work_done);
+	netmap_common_irq(ifp, q, work_done);
+	return 1;
 }
 
 
