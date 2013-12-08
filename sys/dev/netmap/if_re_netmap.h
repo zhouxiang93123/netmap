@@ -49,21 +49,13 @@ re_netmap_reg(struct netmap_adapter *na, int onoff)
 	struct rl_softc *adapter = ifp->if_softc;
 	int error = 0;
 
-	if (na == NULL)
-		return EINVAL;
 	/* Tell the stack that the interface is no longer active */
 	ifp->if_drv_flags &= ~(IFF_DRV_RUNNING | IFF_DRV_OACTIVE);
 
 	re_stop(adapter);
 
 	if (onoff) {
-		ifp->if_capenable |= IFCAP_NETMAP;
-		na->na_flags |= NAF_NATIVE_ON;
-
-		/* save if_transmit to restore it later */
-		na->if_transmit = ifp->if_transmit;
-		ifp->if_transmit = netmap_transmit;
-
+		nm_set_native_flags(na);
 		re_init_locked(adapter);
 
 		if ((ifp->if_drv_flags & (IFF_DRV_RUNNING | IFF_DRV_OACTIVE)) == 0) {
@@ -72,10 +64,7 @@ re_netmap_reg(struct netmap_adapter *na, int onoff)
 		}
 	} else {
 fail:
-		/* restore if_transmit */
-		ifp->if_transmit = na->if_transmit;
-		ifp->if_capenable &= ~IFCAP_NETMAP;
-		na->na_flags &= ~NAF_NATIVE_ON;
+		nm_clear_native_flags(na);
 		re_init_locked(adapter);	/* also enables intr */
 	}
 	return (error);
@@ -90,13 +79,17 @@ re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
 	struct ifnet *ifp = na->ifp;
 	struct rl_softc *sc = ifp->if_softc;
-	struct rl_txdesc *txd = sc->rl_ldata.rl_tx_desc;
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	int j, k, l, n, lim = kring->nkr_num_slots - 1;
+	u_int nm_i;
+	u_int nic_i;
+	u_int n;
+	u_int const cur = ring->cur;
+	u_int const lim = kring->nkr_num_slots - 1;
 
-	k = ring->cur;
-	if (k > lim)
+	struct rl_txdesc *txd = sc->rl_ldata.rl_tx_desc;
+
+	if (cur > lim)
 		return netmap_ring_reinit(kring);
 
 	/* Sync the TX descriptor list */
@@ -106,16 +99,16 @@ re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 
 	/* XXX move after the transmissions */
 	/* record completed transmissions */
-	for (n = 0, l = sc->rl_ldata.rl_tx_considx;
-	    l != sc->rl_ldata.rl_tx_prodidx;
-	    n++, l = RL_TX_DESC_NXT(sc, l)) {
+	for (n = 0, nic_i = sc->rl_ldata.rl_tx_considx;
+	    nic_i != sc->rl_ldata.rl_tx_prodidx;
+	    n++, nic_i = RL_TX_DESC_NXT(sc, nic_i)) {
 		uint32_t cmdstat =
-			le32toh(sc->rl_ldata.rl_tx_list[l].rl_cmdstat);
+			le32toh(sc->rl_ldata.rl_tx_list[nic_i].rl_cmdstat);
 		if (cmdstat & RL_TDESC_STAT_OWN)
 			break;
 	}
 	if (n > 0) {
-		sc->rl_ldata.rl_tx_considx = l;
+		sc->rl_ldata.rl_tx_considx = nic_i;
 		sc->rl_ldata.rl_tx_free += n;
 		kring->nr_hwavail += n;
 	}
@@ -123,24 +116,22 @@ re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	/* update avail to what the kernel knows */
 	ring->avail = kring->nr_hwavail;
 
-	j = kring->nr_hwcur;
-	if (j != k) {	/* we have new packets to send */
-		l = sc->rl_ldata.rl_tx_prodidx;
-		for (n = 0; j != k; n++) {
-			struct netmap_slot *slot = &ring->slot[j];
-			struct rl_desc *desc = &sc->rl_ldata.rl_tx_list[l];
-			int cmd = slot->len | RL_TDESC_CMD_EOF |
-				RL_TDESC_CMD_OWN | RL_TDESC_CMD_SOF ;
+	nm_i = kring->nr_hwcur;
+	if (nm_i != cur) {	/* we have new packets to send */
+		nic_i = sc->rl_ldata.rl_tx_prodidx;
+		for (n = 0; nm_i != cur; n++) {
+			struct netmap_slot *slot = &ring->slot[nm_i];
+			int len = slot->len;
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
-			int len = slot->len;
 
-			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
-				// XXX what about prodidx ?
-				return netmap_ring_reinit(kring);
-			}
+			struct rl_desc *desc = &sc->rl_ldata.rl_tx_list[nic_i];
+			int cmd = slot->len | RL_TDESC_CMD_EOF |
+				RL_TDESC_CMD_OWN | RL_TDESC_CMD_SOF ;
 
-			if (l == lim)	/* mark end of ring */
+			NM_CHECK_ADDR_LEN(addr, len);
+
+			if (nic_i == lim)	/* mark end of ring */
 				cmd |= RL_TDESC_CMD_EOR;
 
 			if (slot->flags & NS_BUF_CHANGED) {
@@ -148,18 +139,18 @@ re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 				desc->rl_bufaddr_hi = htole32(RL_ADDR_HI(paddr));
 				/* buffer has changed, unload and reload map */
 				netmap_reload_map(sc->rl_ldata.rl_tx_mtag,
-					txd[l].tx_dmamap, addr);
+					txd[nic_i].tx_dmamap, addr);
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
 			slot->flags &= ~NS_REPORT;
 			desc->rl_cmdstat = htole32(cmd);
 			bus_dmamap_sync(sc->rl_ldata.rl_tx_mtag,
-				txd[l].tx_dmamap, BUS_DMASYNC_PREWRITE);
-			j = (j == lim) ? 0 : j + 1;
-			l = (l == lim) ? 0 : l + 1;
+				txd[nic_i].tx_dmamap, BUS_DMASYNC_PREWRITE);
+			nm_i = nm_next(nm_i, lim);
+			nic_i = nm_next(nic_i, lim);
 		}
-		sc->rl_ldata.rl_tx_prodidx = l;
-		kring->nr_hwcur = k; /* the saved ring->cur */
+		sc->rl_ldata.rl_tx_prodidx = nic_i;
+		kring->nr_hwcur = cur; /* the saved ring->cur */
 		ring->avail -= n; // XXX see others
 		kring->nr_hwavail = ring->avail;
 
@@ -227,8 +218,8 @@ re_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			/*  sync was in re_newbuf() */
 			bus_dmamap_sync(sc->rl_ldata.rl_rx_mtag,
 			    rxd[l].rx_dmamap, BUS_DMASYNC_POSTREAD);
-			j = (j == lim) ? 0 : j + 1;
-			l = (l == lim) ? 0 : l + 1;
+			j = nm_next(j, lim);
+			l = nm_next(l, lim);
 		}
 		if (n != kring->nr_hwavail) {
 			sc->rl_ldata.rl_rx_prodidx = l;
@@ -274,8 +265,8 @@ re_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			desc->rl_cmdstat = htole32(cmd);
 			bus_dmamap_sync(sc->rl_ldata.rl_rx_mtag,
 				rxd[l].rx_dmamap, BUS_DMASYNC_PREREAD);
-			j = (j == lim) ? 0 : j + 1;
-			l = (l == lim) ? 0 : l + 1;
+			j = nm_next(j, lim);
+			l = nm_next(l, lim);
 		}
 		kring->nr_hwavail -= n;
 		kring->nr_hwcur = k;

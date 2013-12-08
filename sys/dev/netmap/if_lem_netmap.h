@@ -49,9 +49,6 @@ lem_netmap_reg(struct netmap_adapter *na, int onoff)
 	struct adapter *adapter = ifp->if_softc;
 	int error = 0;
 
-	if (na == NULL)
-		return EINVAL;
-
 	EM_CORE_LOCK(adapter);
 
 	lem_disable_intr(adapter);
@@ -65,12 +62,7 @@ lem_netmap_reg(struct netmap_adapter *na, int onoff)
 	taskqueue_drain(adapter->tq, &adapter->link_task);
 #endif /* !EM_LEGCY_IRQ */
 	if (onoff) {
-		ifp->if_capenable |= IFCAP_NETMAP;
-		na->na_flags |= NAF_NATIVE_ON;
-
-		na->if_transmit = ifp->if_transmit;
-		ifp->if_transmit = netmap_transmit;
-
+		nm_set_native_flags(na);
 		lem_init_locked(adapter);
 		if ((ifp->if_drv_flags & (IFF_DRV_RUNNING | IFF_DRV_OACTIVE)) == 0) {
 			error = ENOMEM;
@@ -78,10 +70,7 @@ lem_netmap_reg(struct netmap_adapter *na, int onoff)
 		}
 	} else {
 fail:
-		/* return to non-netmap mode */
-		ifp->if_transmit = na->if_transmit;
-		ifp->if_capenable &= ~IFCAP_NETMAP;
-		na->na_flags &= ~NAF_NATIVE_ON;
+		nm_clear_native_flags(na);
 		lem_init_locked(adapter);	/* also enable intr */
 	}
 
@@ -105,49 +94,37 @@ lem_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct adapter *adapter = ifp->if_softc;
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	u_int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
+	u_int nm_i;
+	u_int nic_i;
+	u_int n;
+	u_int const cur = ring->cur;
+	u_int const lim = kring->nkr_num_slots - 1;
 
 	/* generate an interrupt approximately every half ring */
 	int report_frequency = kring->nkr_num_slots >> 1;
 
-	ND("%s: hwofs %d, hwcur %d hwavail %d lease %d cur %d avail %d",
-		ifp->if_xname,
-		kring->nkr_hwofs, kring->nr_hwcur, kring->nr_hwavail,
-		kring->nkr_hwlease,
-		ring->cur, ring->avail);
-	/* take a copy of ring->cur now, and never read it again */
-	k = ring->cur;
-	if (k > lim)
+	if (cur > lim)
 		return netmap_ring_reinit(kring);
 
 	bus_dmamap_sync(adapter->txdma.dma_tag, adapter->txdma.dma_map,
 			BUS_DMASYNC_POSTREAD);
-	/*
-	 * Process new packets to send. j is the current index in the
-	 * netmap ring, l is the corresponding index in the NIC ring.
-	 */
-	j = kring->nr_hwcur;
-	if (netmap_verbose > 255)
-		RD(5, "device %s send %d->%d", ifp->if_xname, j, k);
-	if (j != k) {	/* we have new packets to send */
-		l = netmap_idx_k2n(kring, j);
-		for (n = 0; j != k; n++) {
-			/* slot is the current slot in the netmap ring */
-			struct netmap_slot *slot = &ring->slot[j];
-			/* curr is the current slot in the nic ring */
-			struct e1000_tx_desc *curr = &adapter->tx_desc_base[l];
-			struct em_buffer *txbuf = &adapter->tx_buffer_area[l];
-			int flags = ((slot->flags & NS_REPORT) ||
-				j == 0 || j == report_frequency) ?
-					E1000_TXD_CMD_RS : 0;
+
+	nm_i = kring->nr_hwcur;
+	if (nm_i != cur) {	/* we have new packets to send */
+		nic_i = netmap_idx_k2n(kring, nm_i);
+		for (n = 0; nm_i != cur; n++) {
+			struct netmap_slot *slot = &ring->slot[nm_i];
+			u_int len = slot->len;
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
-			u_int len = slot->len;
 
-			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
-				return netmap_ring_reinit(kring);
-			}
-			ND("slot %d NIC %d %s", j, l, nm_dump_buf(addr, len, 128, NULL));
+			struct e1000_tx_desc *curr = &adapter->tx_desc_base[nic_i];
+			struct em_buffer *txbuf = &adapter->tx_buffer_area[nic_i];
+			int flags = (slot->flags & NS_REPORT ||
+				nic_i == 0 || nic_i == report_frequency) ?
+					E1000_TXD_CMD_RS : 0;
+
+			NM_CHECK_ADDR_LEN(addr, len);
 
 			slot->flags &= ~NS_REPORT;
 			if (1 || slot->flags & NS_BUF_CHANGED) {
@@ -161,33 +138,32 @@ lem_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			    htole32( adapter->txd_cmd | len |
 				(E1000_TXD_CMD_EOP | flags) );
 
-			ND("len %d kring %d nic %d", len, j, l);
 			bus_dmamap_sync(adapter->txtag, txbuf->map,
 			    BUS_DMASYNC_PREWRITE);
-			j = (j == lim) ? 0 : j + 1;
-			l = (l == lim) ? 0 : l + 1;
+			nm_i = nm_next(nm_i, lim);
+			nic_i = nm_next(nic_i, lim);
 		}
 		ND("sent %d packets from %d, TDT now %d", n, kring->nr_hwcur, l);
-		kring->nr_hwcur = k; /* the saved ring->cur */
+		kring->nr_hwcur = cur; /* the saved ring->cur */
 		kring->nr_hwavail -= n;
 
 		bus_dmamap_sync(adapter->txdma.dma_tag, adapter->txdma.dma_map,
 		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 
-		E1000_WRITE_REG(&adapter->hw, E1000_TDT(0), l);
+		E1000_WRITE_REG(&adapter->hw, E1000_TDT(0), nic_i);
 	}
 
-	if (n == 0 || kring->nr_hwavail < 1) {
+	if (flags & NAF_FORCE_RECLAIM || kring->nr_hwavail < 1) {
 		int delta;
 
 		/* record completed transmissions using TDH */
-		l = E1000_READ_REG(&adapter->hw, E1000_TDH(0));
+		nic_i = E1000_READ_REG(&adapter->hw, E1000_TDH(0));
 		ND("tdh is now %d", l);
-		if (l >= kring->nkr_num_slots) { /* XXX can it happen ? */
-			D("bad TDH %d", l);
-			l -= kring->nkr_num_slots;
+		if (nic_i >= kring->nkr_num_slots) { /* XXX can it happen ? */
+			D("bad TDH %d", nic_i);
+			nic_i -= kring->nkr_num_slots;
 		}
-		delta = l - adapter->next_tx_to_clean;
+		delta = nic_i - adapter->next_tx_to_clean;
 		if (delta) {
 			/* some tx completed, increment hwavail. */
 			if (delta < 0)
@@ -195,7 +171,7 @@ lem_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			if (netmap_verbose > 255)
 				RD(5, "%s tx recover %d bufs",
 					ifp->if_xname, delta);
-			adapter->next_tx_to_clean = l;
+			adapter->next_tx_to_clean = nic_i;
 			kring->nr_hwavail += delta;
 		}
 	}
@@ -260,8 +236,8 @@ lem_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			bus_dmamap_sync(adapter->rxtag,
 				adapter->rx_buffer_area[l].map,
 				    BUS_DMASYNC_POSTREAD);
-			j = (j == lim) ? 0 : j + 1;
-			l = (l == lim) ? 0 : l + 1;
+			j = nm_next(j, lim);
+			l = nm_next(l, lim);
 		}
 		if (n) { /* update the state variables */
 			adapter->next_rx_desc_to_check = l;
@@ -303,8 +279,8 @@ lem_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			bus_dmamap_sync(adapter->rxtag, rxbuf->map,
 			    BUS_DMASYNC_PREREAD);
 
-			j = (j == lim) ? 0 : j + 1;
-			l = (l == lim) ? 0 : l + 1;
+			j = nm_next(j, lim);
+			l = nm_next(l, lim);
 		}
 		kring->nr_hwavail -= n;
 		kring->nr_hwcur = k;

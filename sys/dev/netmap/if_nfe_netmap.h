@@ -142,27 +142,15 @@ nfe_netmap_reg(struct netmap_adapter *na, int onoff)
 	struct ifnet *ifp = na->ifp;
 	struct nfe_softc *sc = ifp->if_softc;
 
-	if (na == NULL)
-		return EINVAL;	/* no netmap support here */
-
 	/* Tell the stack that the interface is no longer active */
 	ifp->if_drv_flags &= ~(IFF_DRV_RUNNING | IFF_DRV_OACTIVE);
 
 	if (onoff) {
-		ifp->if_capenable |= IFCAP_NETMAP;
-		na->na_flags |= NAF_NATIVE_ON;
-
-		na->if_transmit = ifp->if_transmit;
-		ifp->if_transmit = netmap_transmit;
-
-		nfe_init_locked(sc);
+		nm_set_native_flags(na);
 	} else {
-		/* return to non-netmap mode */
-		ifp->if_transmit = na->if_transmit;
-		ifp->if_capenable &= ~IFCAP_NETMAP;
-		na->na_flags &= ~NAF_NATIVE_ON;
-		nfe_init_locked(sc);	/* also enable intr */
+		nm_clear_native_flags(na);
 	}
+	nfe_init_locked(sc);	/* also enable intr */
 	return (0);
 }
 
@@ -208,9 +196,8 @@ nfe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			void *addr = PNMB(slot, &paddr);
 			u_int len = slot->len;
 
-			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
-				return netmap_ring_reinit(kring);
-			}
+			NM_CHECK_ADDR_LEN(addr, len);
+
 			slot->flags &= ~NS_REPORT;
 			if (slot->flags & NS_BUF_CHANGED) {
 				/* buffer has changed, reload map */
@@ -236,8 +223,8 @@ nfe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 
 			bus_dmamap_sync(sc->txq.tx_data_tag,
 			    sc->txq.data[l].tx_data_map, BUS_DMASYNC_PREWRITE);
-			j = (j == lim) ? 0 : j + 1;
-			l = (l == lim) ? 0 : l + 1;
+			j = nm_next(j, lim);
+			l = nm_next(l, lim);
 		}
 		kring->nr_hwcur = k; /* the saved ring->cur */
 		kring->nr_hwavail -= n;
@@ -335,8 +322,8 @@ nfe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			bus_dmamap_sync(sc->rxq.rx_data_tag,
 				sc->rxq.data[l].rx_data_map,
 				BUS_DMASYNC_POSTREAD);
-			j = (j == lim) ? 0 : j + 1;
-			l = (l == lim) ? 0 : l + 1;
+			j = nm_next(j, lim);
+			l = nm_next(l, lim);
 		}
 		if (n) { /* update the state variables */
 			sc->rxq.cur = l;
@@ -390,8 +377,8 @@ nfe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			bus_dmamap_sync(sc->rxq.rx_data_tag,
 			    sc->rxq.data[l].rx_data_map,
 			    BUS_DMASYNC_PREREAD);
-			j = (j == lim) ? 0 : j + 1;
-			l = (l == lim) ? 0 : l + 1;
+			j = nm_next(j, lim);
+			l = nm_next(l, lim);
 		}
 		kring->nr_hwavail -= n;
 		kring->nr_hwcur = k;
