@@ -120,8 +120,6 @@ bnx2x_netmap_reg(struct netmap_adapter *na, int onoff)
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	int error = 0, need_load = 0;
 
-	if (na == NULL)
-		return EINVAL;	/* no netmap support here */
 	/*
 	 * On enable, flush pending ops, set flag and reinit rings.
 	 * On disable, flush again, and restart the interface.
@@ -140,17 +138,12 @@ if (0) // only load/unload
 	error = EINVAL;
 else
 	if (onoff) { /* enable netmap mode */
-		ifp->if_capenable |= IFCAP_NETMAP;
-                na->na_flags |= NAF_NATIVE_ON;
-		/* save if_transmit and replace with our routine */
-		na->if_transmit = (void *)ifp->netdev_ops;
+		nm_set_native_flags(na);
 		ifp->netdev_ops = na->nm_ndo_p;
 		D("-------------- set the SKIP_INTR flag");
 		// XXX na->na_flags |= NAF_SKIP_INTR; /* during load, use regular interrupts */
 	} else { /* reset normal mode */
-		ifp->netdev_ops = (void *)na->if_transmit;
-		ifp->if_capenable &= ~IFCAP_NETMAP;
-                na->na_flags &= ~NAF_NATIVE_ON;
+		nm_clear_native_flags(na);
 	}
 	if (need_load) {
 		D("loading the NIC");

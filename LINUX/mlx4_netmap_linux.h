@@ -117,8 +117,6 @@ mlx4_netmap_reg(struct netmap_adapter *na, int onoff)
 	int error = 0, need_load = 0;
 	struct mlx4_en_dev *mdev = priv->mdev;
 
-	if (na == NULL)
-		return EINVAL;	/* no netmap support here */
 	/*
 	 * On enable, flush pending ops, set flag and reinit rings.
 	 * On disable, flush again, and restart the interface.
@@ -156,15 +154,9 @@ mlx4_netmap_reg(struct netmap_adapter *na, int onoff)
 
 retry:
 	if (onoff) { /* enable netmap mode */
-		ifp->if_capenable |= IFCAP_NETMAP;
-                na->na_flags |= NAF_NATIVE_ON;
-		/* save if_transmit and replace with our routine */
-		na->if_transmit = (void *)ifp->netdev_ops;
-		ifp->netdev_ops = na->nm_ndo_p;
+		nm_set_native_flags(na);
 	} else { /* reset normal mode */
-		ifp->netdev_ops = (void *)na->if_transmit;
-		ifp->if_capenable &= ~IFCAP_NETMAP;
-                na->na_flags &= ~NAF_NATIVE_ON;
+		nm_clear_native_flags(na);
 	}
 	if (need_load) {
 		D("loading %s", ifp->if_xname);
