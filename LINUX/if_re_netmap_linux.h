@@ -50,7 +50,6 @@ re_netmap_reg(struct netmap_adapter *na, int onoff)
 {
         struct ifnet *ifp = na->ifp;
 	int error = 0;
-	struct netmap_hw_adapter *hwna = (struct netmap_hw_adapter*)na;
 
 	rtnl_lock();
 	rtl8169_wait_for_quiescence(ifp);
