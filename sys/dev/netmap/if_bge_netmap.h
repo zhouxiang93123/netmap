@@ -28,23 +28,13 @@ bge_netmap_reg(struct netmap_adapter *na, int onoff)
 	struct bge_softc *adapter = ifp->if_softc;
 	int error = 0;
 
-	if (!na)
-		return (EINVAL);	/* not attached */
-
 	/* Tell the stack that the interface is no longer active */
 	ifp->if_drv_flags &= ~(IFF_DRV_RUNNING | IFF_DRV_OACTIVE);
 
 	bge_stop(adapter);
 
         if (onoff) {
-		ifp->if_capenable |= IFCAP_NETMAP;
-                na->na_flags |= NAF_NATIVE_ON;
-
-		/* save if_transmit and restore it */
-		na->if_transmit = ifp->if_transmit;
-		/* XXX if_start and if_qflush ??? */
-		ifp->if_transmit = netmap_transmit;
-
+		na_set_native_flags(na);
 		bge_init_locked(adapter);
 
 		if ((ifp->if_drv_flags & (IFF_DRV_RUNNING | IFF_DRV_OACTIVE)) == 0) {
@@ -53,10 +43,7 @@ bge_netmap_reg(struct netmap_adapter *na, int onoff)
 		}
 	} else {
 fail:
-		/* restore if_transmit */
-		ifp->if_transmit = na->if_transmit;
-		ifp->if_capenable &= ~IFCAP_NETMAP;
-                na->na_flags &= ~NAF_NATIVE_ON;
+		na_clear_native_flags(na);
 		bge_init_locked(adapter);	/* also enables intr */
 	}
 	return (error);
@@ -114,9 +101,7 @@ bge_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			void *addr = NMB(slot);
 			int len = slot->len;
 
-			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
-				return netmap_ring_reinit(kring);
-			}
+			NM_CHECK_ADDR_LEN(addr, len);
 
 			if (slot->flags & NS_BUF_CHANGED) {
 				uint64_t paddr = vtophys(addr);
@@ -132,8 +117,8 @@ bge_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			d->bge_flags = BGE_TXBDFLAG_END;
 			bus_dmamap_sync(sc->bge_cdata.bge_tx_mtag,
 				txmap[l], BUS_DMASYNC_PREWRITE);
-			j = (j == lim) ? 0 : j + 1;
-			l = (l == lim) ? 0 : l + 1;
+			j = nm_next(j, lim);
+			l = nm_next(l, lim);
 			n++;
 		}
 		kring->nr_hwcur = k; /* the saved ring->cur */
@@ -222,8 +207,8 @@ bge_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			bus_dmamap_sync(sc->bge_cdata.bge_rx_mtag,
 				sc->bge_cdata.bge_rx_std_dmamap[l],
 				BUS_DMASYNC_POSTREAD);
-			j = j == lim ? 0 : j + 1;
-			l = l == lim ? 0 : l + 1;
+			j = nm_next(j, lim);
+			l = nm_next(l, lim);
 		}
 		sc->bge_rx_saved_considx = end;
 		bge_writembx(sc, BGE_MBX_RX_CONS0_LO, end);
@@ -268,8 +253,8 @@ bge_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			bus_dmamap_sync(sc->bge_cdata.bge_rx_mtag,
 				sc->bge_cdata.bge_rx_std_dmamap[l],
 				BUS_DMASYNC_PREREAD);
-			j = (j == lim) ? 0 : j + 1;
-			l = (l == lim) ? 0 : l + 1;
+			j = nm_next(j, lim);
+			l = nm_next(l, lim);
 			n++;
 		}
 		kring->nr_hwcur = k; /* the saved ring->cur */

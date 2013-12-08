@@ -25,6 +25,8 @@
 
 
 /*
+ * $FreeBSD$
+ *
  * This module supports memory mapped access to network devices,
  * see netmap(4).
  *
@@ -130,8 +132,6 @@ ports attached to the switch)
 
 #if defined(__FreeBSD__)
 #include <sys/cdefs.h> /* prerequisite */
-__FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z glebius $");
-
 #include <sys/types.h>
 #include <sys/errno.h>
 #include <sys/param.h>	/* defines used in kernel.h */
@@ -152,13 +152,11 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z gle
 #include <sys/endian.h>
 #include <sys/refcount.h>
 
-//#define prefetch(x)	__builtin_prefetch(x)
 
 /* reduce conditional code */
 #define init_waitqueue_head(x)	// only needed in linux
 
 
-extern struct cdevsw netmap_cdevsw;
 
 #elif defined(linux)
 
@@ -633,7 +631,7 @@ netmap_do_unregif(struct netmap_priv_d *priv, struct netmap_if *nifp)
 		 * syscall is running.
 		 */
 		if (ifp)
-			na->nm_register(na, 0); /* off, clear IFCAP_NETMAP */
+			na->nm_register(na, 0); /* off, clear flags */
 		/* Wake up any sleeping threads. netmap_poll will
 		 * then return POLLERR
 		 * XXX The wake up now must happen during *_down(), when
@@ -2012,8 +2010,7 @@ netmap_detach(struct ifnet *ifp)
  * We rely on the OS to make sure that the ifp and na do not go
  * away (typically the caller checks for IFF_DRV_RUNNING or the like).
  * In nm_register() or whenever there is a reinitialization,
- * we make sure to access the core lock and per-ring locks
- * so that IFCAP_NETMAP is visible here.
+ * we make sure to make the mode change visible here.
  */
 int
 netmap_transmit(struct ifnet *ifp, struct mbuf *m)
@@ -2158,27 +2155,17 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
 
 
 /*
- * Default functions to handle rx/tx interrupts from a physical device.
+ * Dispatch rx/tx interrupts to the netmap rings.
+ *
  * "work_done" is non-null on the RX path, NULL for the TX path.
- * "generic" is 0 when we are called by a device driver, and 1 when we
- * are called by the generic netmap adapter layer.
  * We rely on the OS to make sure that there is only one active
  * instance per queue, and that there is appropriate locking.
  *
- * If the card is not in netmap mode, simply return 0,
- * so that the caller proceeds with regular processing.
- *
- * We return 0 also when the card is in netmap mode but the current
- * netmap adapter is the generic one, because this function will be
- * called by the generic layer.
- *
- * If the card is connected to a netmap file descriptor,
- * do a selwakeup on the individual queue, plus one on the global one
- * if needed (multiqueue card _and_ there are multiqueue listeners),
- * and return 1.
- *
- * Finally, if called on rx from an interface connected to a switch,
- * calls the proper forwarding routine, and return 1.
+ * The 'notify' routine depends on what the ring is attached to.
+ * - for a netmap file descriptor, do a selwakeup on the individual
+ *   waitqueue, plus one on the global one if needed
+ * - for a switch, call the proper forwarding routine
+ * - XXX more ?
  */
 void
 netmap_common_irq(struct ifnet *ifp, u_int q, u_int *work_done)
@@ -2212,13 +2199,10 @@ netmap_common_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 /*
  * Default functions to handle rx/tx interrupts from a physical device.
  * "work_done" is non-null on the RX path, NULL for the TX path.
- * "generic" is 0 when we are called by a device driver, and 1 when we
- * are called by the generic netmap adapter layer.
- * We rely on the OS to make sure that there is only one active
- * instance per queue, and that there is appropriate locking.
  *
  * If the card is not in netmap mode, simply return 0,
  * so that the caller proceeds with regular processing.
+ * Otherwise call netmap_common_irq() and return 1.
  *
  * If the card is connected to a netmap file descriptor,
  * do a selwakeup on the individual queue, plus one on the global one
@@ -2245,17 +2229,30 @@ netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 }
 
 
-static struct cdev *netmap_dev; /* /dev/netmap character device. */
-
-
 /*
- * Module loader.
+ * Module loader and unloader
  *
- * Create the /dev/netmap device and initialize all global
- * variables.
+ * netmap_init() creates the /dev/netmap device and initializes
+ * all global variables. Returns 0 on success, errno on failure
+ * (but there is no chance)
  *
- * Return 0 on success, errno on failure.
+ * netmap_fini() destroys everything.
  */
+
+static struct cdev *netmap_dev; /* /dev/netmap character device. */
+extern struct cdevsw netmap_cdevsw;
+
+void
+netmap_fini(void)
+{
+	// XXX destroy_bridges() ?
+	if (netmap_dev)
+		destroy_dev(netmap_dev);
+	netmap_mem_fini();
+	NMG_LOCK_DESTROY();
+	printf("netmap: unloaded module.\n");
+}
+
 int
 netmap_init(void)
 {
@@ -2264,29 +2261,18 @@ netmap_init(void)
 	NMG_LOCK_INIT();
 
 	error = netmap_mem_init();
-	if (error != 0) {
-		printf("netmap: unable to initialize the memory allocator.\n");
-		return (error);
-	}
-	printf("netmap: loaded module\n");
+	if (error != 0)
+		goto fail;
+	/* XXX could use make_dev_credv() to get error number */
 	netmap_dev = make_dev(&netmap_cdevsw, 0, UID_ROOT, GID_WHEEL, 0660,
 			      "netmap");
+	if (!netmap_dev)
+		goto fail;
 
 	netmap_init_bridges();
-	return (error);
-}
-
-
-/*
- * Module unloader.
- *
- * Free all the memory, and destroy the ``/dev/netmap`` device.
- */
-void
-netmap_fini(void)
-{
-	destroy_dev(netmap_dev);
-	netmap_mem_fini();
-	NMG_LOCK_DESTROY();
-	printf("netmap: unloaded module.\n");
+	printf("netmap: loaded module\n");
+	return (0);
+fail:
+	netmap_fini();
+	return (EINVAL); /* may be incorrect */
 }
