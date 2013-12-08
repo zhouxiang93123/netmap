@@ -139,7 +139,6 @@ if (0) // only load/unload
 else
 	if (onoff) { /* enable netmap mode */
 		nm_set_native_flags(na);
-		ifp->netdev_ops = na->nm_ndo_p;
 		D("-------------- set the SKIP_INTR flag");
 		// XXX na->na_flags |= NAF_SKIP_INTR; /* during load, use regular interrupts */
 	} else { /* reset normal mode */
