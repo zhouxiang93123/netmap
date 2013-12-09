@@ -309,13 +309,13 @@ enum txrx { NR_RX = 0, NR_TX = 1 };
 struct netmap_adapter {
 	/*
 	 * On linux we do not have a good way to tell if an interface
-	 * is netmap-capable. So we use the following trick:
+	 * is netmap-capable. So we always use the following trick:
 	 * NA(ifp) points here, and the first entry (which hopefully
 	 * always exists and is at least 32 bits) contains a magic
 	 * value which we can use to detect that the interface is good.
 	 */
 	uint32_t magic;
-	uint32_t na_flags;	/* future place for IFCAP_NETMAP */
+	uint32_t na_flags;	/* enabled, and other flags */
 #define NAF_SKIP_INTR	1	/* use the regular interrupt handler.
 				 * useful during initialization
 				 */
@@ -329,6 +329,10 @@ struct netmap_adapter {
 				 */
 #define NAF_NATIVE_ON   16      /* the adapter is native and the attached
 				 * interface is in netmap mode
+				 */
+#define	NAF_NETMAP_ON	32	/* netmap is active (either native or
+				 * emulated. Where possible (e.g. FreeBSD)
+				 * IFCAP_NETMAP also mirrors this flag.
 				 */
 	int active_fds; /* number of user-space descriptors using this
 			 interface, which is equal to the number of
@@ -661,6 +665,57 @@ struct netmap_slot *netmap_reset(struct netmap_adapter *na,
 	enum txrx tx, u_int n, u_int new_cur);
 int netmap_ring_reinit(struct netmap_kring *);
 
+/* set/clear native flags. XXX maybe also if_transmit ? */
+static inline void
+nm_set_native_flags(struct netmap_adapter *na)
+{
+	struct ifnet *ifp = na->ifp;
+
+	na->na_flags |= (NAF_NATIVE_ON | NAF_NETMAP_ON);
+#ifdef IFCAP_NETMAP /* or FreeBSD ? */
+	ifp->if_capenable |= IFCAP_NETMAP;
+#endif
+#ifdef __FreeBSD__
+	na->if_transmit = ifp->if_transmit;
+	ifp->if_transmit = netmap_transmit;
+#else
+	na->if_transmit = (void *)ifp->netdev_ops;
+	ifp->netdev_ops = &((struct netmap_hw_adapter *)na)->nm_ndo;
+#endif
+}
+
+static inline void
+nm_clear_native_flags(struct netmap_adapter *na)
+{
+	struct ifnet *ifp = na->ifp;
+
+#ifdef __FreeBSD__
+	ifp->if_transmit = na->if_transmit;
+#else
+	ifp->netdev_ops = (void *)na->if_transmit;
+#endif
+	na->na_flags &= ~(NAF_NATIVE_ON | NAF_NETMAP_ON);
+#ifdef IFCAP_NETMAP /* or FreeBSD ? */
+	ifp->if_capenable &= ~IFCAP_NETMAP;
+#endif
+}
+
+/* check/fix address and len in tx rings */
+#if 1 /* debug version */
+#define	NM_CHECK_ADDR_LEN(_a, _l)	do {				\
+	if (_a == netmap_buffer_base || _l > NETMAP_BUF_SIZE) {		\
+		RD(5, "bad addr/len ring %d slot %d idx %d len %d",	\
+			ring_nr, nm_i, slot->buf_idx, len);		\
+		if (_l > NETMAP_BUF_SIZE)				\
+			_l = NETMAP_BUF_SIZE;				\
+	} } while (0)
+#else /* no debug version */
+#define	NM_CHECK_ADDR_LEN(_a, _l)	do {				\
+		if (_l > NETMAP_BUF_SIZE)				\
+			_l = NETMAP_BUF_SIZE;				\
+	} while (0)
+#endif
+
 
 /*
  * Support routines to be used with the VALE switch
@@ -970,7 +1025,7 @@ BDG_NMB(struct netmap_adapter *na, struct netmap_slot *slot)
 /* default functions to handle rx/tx interrupts */
 int netmap_rx_irq(struct ifnet *, u_int, u_int *);
 #define netmap_tx_irq(_n, _q) netmap_rx_irq(_n, _q, NULL)
-int netmap_common_irq(struct ifnet *, u_int, u_int *work_done);
+void netmap_common_irq(struct ifnet *, u_int, u_int *work_done);
 
 
 void netmap_txsync_to_host(struct netmap_adapter *na);

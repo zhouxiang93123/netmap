@@ -244,7 +244,7 @@ nm_close(struct nm_desc_t *d)
 		return EINVAL;
 	if (d->mem)
 		munmap(d->mem, d->memsize);
-	if (d->fd)
+	if (d->fd != -1)
 		close(d->fd);
 	bzero(d, sizeof(*d));
 	free(d);

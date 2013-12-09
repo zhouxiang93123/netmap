@@ -46,11 +46,7 @@ e1000_netmap_reg(struct netmap_adapter *na, int onoff)
 {
         struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
-	struct netmap_hw_adapter *hwna = (struct netmap_hw_adapter*)na;
 	int error = 0;
-
-	if (na == NULL)
-		return EINVAL;
 
 	rtnl_lock();
 
@@ -61,14 +57,9 @@ e1000_netmap_reg(struct netmap_adapter *na, int onoff)
 		e1000_down(adapter);
 
 	if (onoff) { /* enable netmap mode */
-		ifp->if_capenable |= IFCAP_NETMAP;
-                na->na_flags |= NAF_NATIVE_ON;
-		na->if_transmit = (void *)ifp->netdev_ops;
-		ifp->netdev_ops = &hwna->nm_ndo;
+		nm_set_native_flags(na);
 	} else {
-		ifp->if_capenable &= ~IFCAP_NETMAP;
-                na->na_flags &= ~NAF_NATIVE_ON;
-		ifp->netdev_ops = (void *)na->if_transmit;
+		nm_clear_native_flags(na);
 	}
 
 	if (netif_running(adapter->netdev))

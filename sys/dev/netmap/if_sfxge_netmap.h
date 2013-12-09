@@ -108,22 +108,13 @@ sfxge_netmap_reg(struct netmap_adapter *na, int onoff)
 	struct sfxge_softc *sc = ifp->if_softc;
 	int error = 0;
 
-	if (na == NULL)
-		return EINVAL; /* no netmap support here */
-
 	sfxge_stop(sc);
 
 	/* Tell the stack that the interface is no longer active */
 	ifp->if_drv_flags &= ~(IFF_DRV_RUNNING | IFF_DRV_OACTIVE);
 
 	if (onoff) { /* enable netmap mode */
-		ifp->if_capenable |= IFCAP_NETMAP;
-		na->na_flags |= NAF_NATIVE_ON;
-
-		/* save if_transmit and replace with our routine */
-		na->if_transmit = ifp->if_transmit;
-		ifp->if_transmit = netmap_transmit;
-
+		nm_set_native_flags(na);
 		/*
 		 * reinitialize the adapter, now with netmap flag set,
 		 * so the rings will be set accordingly.
@@ -135,10 +126,7 @@ sfxge_netmap_reg(struct netmap_adapter *na, int onoff)
 		}
 	} else { /* reset normal mode (explicit request or netmap failed) */
 fail:
-		/* restore if_transmit */
-		ifp->if_transmit = na->if_transmit;
-		ifp->if_capenable &= ~IFCAP_NETMAP;
-		na->na_flags &= ~NAF_NATIVE_ON;
+		nm_clear_native_flags(na);
 		/* initialize the card, this time in standard mode */
 		sfxge_start(sc);	/* also enables intr */
 	}
@@ -205,14 +193,10 @@ sfxge_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			efx_buffer_t *desc;
 			void *addr = PNMB(slot, &paddr);
 
-			j = (j == lim) ? 0 : j + 1;
-			l = (l == lim) ? 0 : l + 1;
+			j = nm_next(j, lim);
+			l = nm_next(l, lim);
 
-			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
-ring_reset:
-
-				return netmap_ring_reinit(kring);
-			}
+			NM_CHECK_ADDR_LEN(addr, len);
 
 			if (slot->flags & NS_BUF_CHANGED) {
 				/* buffer has changed, unload and reload map */
@@ -343,8 +327,8 @@ sfxge_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			ring->slot[j].flags = slot_flags;
 //			bus_dmamap_sync(rxq->ptag,
 //			    rxq->rx_buffers[l].pmap, BUS_DMASYNC_POSTREAD);
-			j = (j == lim) ? 0 : j + 1;
-			l = (l == lim) ? 0 : l + 1;
+			j = nm_next(j, lim);
+			l = nm_next(l, lim);
 		}
 		if (n) { /* update the state variables */
 //			rxq->next_to_check = l;
@@ -394,8 +378,8 @@ sfxge_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 //			curr->read.pkt_addr = htole64(paddr);
 //			bus_dmamap_sync(rxq->ptag, rxbuf->pmap,
 //			    BUS_DMASYNC_PREREAD);
-			j = (j == lim) ? 0 : j + 1;
-			l = (l == lim) ? 0 : l + 1;
+			j = nm_next(j, lim);
+			l = nm_next(l, lim);
 		}
 		kring->nr_hwavail -= n;
 		kring->nr_hwcur = k;

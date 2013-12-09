@@ -46,10 +46,6 @@
 #include <netmap/netmap_kern.h>
 #define SOFTC_T	ixgbe_adapter
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 36)
-#define usleep_range(a, b)	msleep((a)+(b)+999)
-#endif /* up to 2.6.35 */
-
 /*
  * Adaptation to various version of the driver.
  * Recent drivers (3.4 and above) redefine some macros
@@ -68,11 +64,7 @@ ixgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 {
         struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
-	struct netmap_hw_adapter *hwna = (struct netmap_hw_adapter*)na;
 	int error = 0;
-
-	if (na == NULL)
-		return EINVAL;	/* no netmap support here */
 
 	/* Tell the stack that the interface is no longer active */
 	while (test_and_set_bit(__IXGBE_RESETTING, &adapter->state))
@@ -82,18 +74,11 @@ ixgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 		ixgbe_down(adapter);
 
 	if (onoff) { /* enable netmap mode */
-		ifp->if_capenable |= IFCAP_NETMAP;
-                na->na_flags |= NAF_NATIVE_ON;
-
-		/* save if_transmit and replace with our routine */
-		na->if_transmit = (void *)ifp->netdev_ops;
-		ifp->netdev_ops = &hwna->nm_ndo;
+		nm_set_native_flags(na);
 
 	} else { /* reset normal mode (explicit request or netmap failed) */
 		/* restore if_transmit */
-		ifp->netdev_ops = (void *)na->if_transmit;
-		ifp->if_capenable &= ~IFCAP_NETMAP;
-                na->na_flags &= ~NAF_NATIVE_ON;
+		nm_clear_native_flags(na);
 	}
 	if (netif_running(adapter->netdev))
 		ixgbe_up(adapter);	/* also enables intr */

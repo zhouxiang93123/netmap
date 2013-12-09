@@ -68,14 +68,11 @@ This makes sure that there is always a free slot.
 static int
 forcedeth_netmap_reg(struct netmap_adapter *na, int onoff)
 {
-	struct netmap_hw_adapter *hwna = (struct netmap_hw_adapter *)na;
         struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *np = netdev_priv(ifp);
 	int error = 0;
 	u8 __iomem *base = get_hwbase(ifp);
 
-	if (na == NULL)
-		return EINVAL;
 	// first half of nv_change_mtu() - down
 	nv_disable_irq(ifp);
 	nv_napi_disable(ifp);
@@ -89,15 +86,10 @@ forcedeth_netmap_reg(struct netmap_adapter *na, int onoff)
 	nv_drain_rxtx(ifp);
 
 	if (onoff) {
-		ifp->if_capenable |= IFCAP_NETMAP;
-                na->na_flags |= NAF_NATIVE_ON;
-		na->if_transmit = (void *)ifp->netdev_ops;
-		ifp->netdev_ops = &hwna->nm_ndo;
+		nm_set_native_flags(na);
 	} else {
 		/* restore if_transmit */
-		ifp->netdev_ops = (void *)na->if_transmit;
-		ifp->if_capenable &= ~IFCAP_NETMAP;
-                na->na_flags &= ~NAF_NATIVE_ON;
+		nm_clear_native_flags(na);
 	}
 	// second half of nv_change_mtu() -- up
 	if (nv_init_ring(ifp)) {

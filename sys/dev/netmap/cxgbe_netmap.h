@@ -84,7 +84,7 @@ cxgbe_netmap_attach(struct port_info *pi)
 	/*
 	 * adapter->rx_mbuf_sz is set by SIOCSETMTU, but in netmap mode
 	 * we allocate the buffers on the first register. So we must
-	 * disallow a SIOCSETMTU when if_capenable & IFCAP_NETMAP is set.
+	 * disallow a SIOCSETMTU in netmap mode
 	 */
 	na.num_tx_rings = na->num_rx_rings = pi->ntxq;
 	na.buff_size = NETMAP_BUF_SIZE;
@@ -103,9 +103,6 @@ cxgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 	struct adapter *adapter = ifp->if_softc;
 	int error = 0;
 
-	if (!na)
-		return EINVAL;
-
 #if 0
 	ixgbe_disable_intr(adapter);
 
@@ -113,12 +110,7 @@ cxgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 	ifp->if_drv_flags &= ~(IFF_DRV_RUNNING | IFF_DRV_OACTIVE);
 
 	if (onoff) {
-		ifp->if_capenable |= IFCAP_NETMAP;
-                na->na_flags |= NAF_NATIVE_ON;
-
-		/* save if_transmit to restore it later */
-		na->if_transmit = ifp->if_transmit;
-		ifp->if_transmit = netmap_transmit;
+		nm_set_native_flags(na);
 
 		ixgbe_init_locked(adapter);
 		if ((ifp->if_drv_flags & (IFF_DRV_RUNNING | IFF_DRV_OACTIVE)) == 0) {
@@ -128,9 +120,7 @@ cxgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 	} else {
 fail:
 		/* restore if_transmit */
-		ifp->if_transmit = na->if_transmit;
-		ifp->if_capenable &= ~IFCAP_NETMAP;
-                na->na_flags &= ~NAF_NATIVE_ON;
+		nm_clear_native_flags(na);
 		ixgbe_init_locked(adapter);	/* also enables intr */
 	}
 #endif
@@ -194,11 +184,7 @@ cxgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 					IXGBE_TXD_CMD_RS : 0;
 			int len = slot->len;
 
-			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
-				if (do_lock)
-					IXGBE_TX_UNLOCK(txr);
-				return netmap_ring_reinit(kring);
-			}
+			NM_CHECK_ADDR_LEN(addr, len);
 
 			slot->flags &= ~NS_REPORT;
 			curr->read.buffer_addr = htole64(vtophys(addr));
@@ -217,7 +203,7 @@ cxgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 
 			bus_dmamap_sync(txr->txtag, txbuf->map,
 				BUS_DMASYNC_PREWRITE);
-			j = (j == lim) ? 0 : j + 1;
+			j = nm_next(j, lim);
 			n++;
 		}
 		kring->nr_hwcur = k; /* the saved ring->cur */
@@ -311,7 +297,7 @@ cxgbe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		ring->slot[j].flags = kring->nkr_slot_flags;
 		bus_dmamap_sync(rxr->ptag,
 			rxr->rx_buffers[j].pmap, BUS_DMASYNC_POSTREAD);
-		j = (j == lim) ? 0 : j + 1;
+		j = nm_next(j, lim);
 	}
 	if (n) {
 		rxr->next_to_check = j;
@@ -353,7 +339,7 @@ cxgbe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			bus_dmamap_sync(rxr->ptag, rxbuf->pmap,
 				BUS_DMASYNC_PREREAD);
 
-			j = (j == lim) ? 0 : j + 1;
+			j = nm_next(j, lim);
 			n++;
 		}
 		kring->nr_hwavail -= n;

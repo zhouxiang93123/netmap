@@ -191,13 +191,13 @@ static struct rate_context rate_ctx;
  * the poller threads. Differently from netmap_rx_irq(), we check
  * only IFCAP_NETMAP instead of NAF_NATIVE_ON to enable the irq.
  */
-static int
+static void
 netmap_generic_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 {
 	if (unlikely(!(ifp->if_capenable & IFCAP_NETMAP)))
-		return 0;
+		return;
 
-        return netmap_common_irq(ifp, q, work_done);
+        netmap_common_irq(ifp, q, work_done);
 }
 
 

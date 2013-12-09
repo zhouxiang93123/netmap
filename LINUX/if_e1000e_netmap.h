@@ -42,10 +42,6 @@
 #include <netmap/netmap_kern.h>
 #define SOFTC_T	e1000_adapter
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 36)
-#define usleep_range(a, b)	msleep((a)+(b)+999)
-#endif /* up to 2.6.35 */
-
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 2, 0)
 #warning this driver uses extended descriptors
 #define NM_E1K_RX_DESC_T	union e1000_rx_desc_extended
@@ -79,11 +75,7 @@ e1000_netmap_reg(struct netmap_adapter *na, int onoff)
 {
         struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
-	struct netmap_hw_adapter *hwna = (struct netmap_hw_adapter*)na;
 	int error = 0;
-
-	if (na == NULL)
-		return EINVAL;
 
 	rtnl_lock();
 
@@ -94,14 +86,9 @@ e1000_netmap_reg(struct netmap_adapter *na, int onoff)
 		e1000e_down(adapter);
 
 	if (onoff) { /* enable netmap mode */
-		ifp->if_capenable |= IFCAP_NETMAP;
-                na->na_flags |= NAF_NATIVE_ON;
-		na->if_transmit = (void *)ifp->netdev_ops;
-		ifp->netdev_ops = &hwna->nm_ndo;
+		nm_set_native_flags(na);
 	} else {
-		ifp->if_capenable &= ~IFCAP_NETMAP;
-                na->na_flags &= ~NAF_NATIVE_ON;
-		ifp->netdev_ops = (void *)na->if_transmit;
+		nm_clear_native_flags(na);
 	}
 
 	if (netif_running(adapter->netdev))

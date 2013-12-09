@@ -50,19 +50,13 @@ re_netmap_reg(struct netmap_adapter *na, int onoff)
 {
         struct ifnet *ifp = na->ifp;
 	int error = 0;
-	struct netmap_hw_adapter *hwna = (struct netmap_hw_adapter*)na;
 
-	if (na == NULL)
-		return EINVAL;
 	rtnl_lock();
 	rtl8169_wait_for_quiescence(ifp);
 	rtl8169_close(ifp);
 
 	if (onoff) { /* enable netmap mode */
-		ifp->if_capenable |= IFCAP_NETMAP;
-                na->na_flags |= NAF_NATIVE_ON;
-		na->if_transmit = (void *)ifp->netdev_ops;
-		ifp->netdev_ops = &hwna->nm_ndo;
+		nm_set_native_flags(na);
 
 		if (rtl8169_open(ifp) < 0) {
 			error = ENOMEM;
@@ -70,9 +64,7 @@ re_netmap_reg(struct netmap_adapter *na, int onoff)
 		}
 	} else {
 fail:
-		ifp->if_capenable &= ~IFCAP_NETMAP;
-                na->na_flags &= ~NAF_NATIVE_ON;
-		ifp->netdev_ops = (void *)na->if_transmit;
+		nm_clear_native_flags(na);
 		error = rtl8169_open(ifp) ? EINVAL : 0;
 	}
 	rtnl_unlock();
