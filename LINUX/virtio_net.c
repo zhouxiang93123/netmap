@@ -613,16 +613,16 @@ static int virtnet_poll(struct napi_struct *napi, int budget)
 	unsigned int r, len, received = 0;
 #ifdef DEV_NETMAP
         int work_done = 0;
-#endif
 
-again:
-#ifdef DEV_NETMAP
-        D("call netmap_rx_irq");
         if (netmap_rx_irq(vi->dev, 0, &work_done)) {
-                received = work_done;
-                goto out;
+		virtqueue_enable_cb(rq->vq);
+		napi_complete(napi);
+		D("called netmap_rx_irq");
+
+                return 1;
         }
 #endif
+again:
 	while (received < budget &&
 	       (buf = virtqueue_get_buf(rq->vq, &len)) != NULL) {
 		receive_buf(rq, buf, len);
@@ -635,9 +635,6 @@ again:
 			schedule_delayed_work(&vi->refill, 0);
 	}
 
-#ifdef DEV_NETMAP
-out:
-#endif
 	/* Out of packets? */
 	if (received < budget) {
 		r = virtqueue_enable_cb_prepare(rq->vq);

@@ -59,7 +59,8 @@ virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	u_int j, k, l, n, lim = kring->nkr_num_slots - 1;
 	int new_slots;
 
-        D("[A] %d %d %d %d", ring->cur, kring->nr_hwcur, kring->nr_hwavail, kring->nr_hwreserved);
+        ND("[A] %d %d %d %d", ring->cur, kring->nr_hwcur,
+			      kring->nr_hwavail, kring->nr_hwreserved);
 
         /* Free used slots. */
         n = 0;
@@ -71,7 +72,8 @@ virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
                         n++;
         }
         kring->nr_hwavail += n;
-        D("[B] %d %d %d %d", ring->cur, kring->nr_hwcur, kring->nr_hwavail, kring->nr_hwreserved);
+        ND("[B] %d %d %d %d", ring->cur, kring->nr_hwcur,
+			      kring->nr_hwavail, kring->nr_hwreserved);
 
 	/* Take a copy of ring->cur now, and never read it again. */
 	k = ring->cur;
@@ -139,7 +141,8 @@ out:
 	ring->avail = kring->nr_hwavail;
 	ring->reserved = kring->nr_hwreserved;
 
-        D("[C] %d %d %d %d", ring->cur, kring->nr_hwcur, kring->nr_hwavail, kring->nr_hwreserved);
+        ND("[C] %d %d %d %d", ring->cur, kring->nr_hwcur,
+			      kring->nr_hwavail, kring->nr_hwreserved);
 
         return 0;
 }
