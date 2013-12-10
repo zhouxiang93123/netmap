@@ -159,7 +159,7 @@ SYSCTL_DECL(_dev_netmap);
 SYSCTL_INT(_dev_netmap, OID_AUTO, bridge_batch, CTLFLAG_RW, &bridge_batch, 0 , "");
 
 
-static int bdg_netmap_attach(struct netmap_adapter *);
+static int bdg_netmap_attach(struct nmreq *nmr, struct ifnet *ifp);
 static int bdg_netmap_reg(struct netmap_adapter *na, int onoff);
 static int netmap_bwrap_attach(struct ifnet *, struct ifnet *);
 static int netmap_bwrap_register(struct netmap_adapter *, int onoff);
@@ -566,6 +566,8 @@ netmap_get_bdg_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 			netmap_adapter_get(&vpna->up);
 			ND("found existing if %s refs %d", name,
 				vpna->na_bdg_refcount);
+			nmr->nr_arg1 = vpna->offset; /* writeback */
+			D("writeback na->offset %d", nmr->nr_arg1);
 			*na = (struct netmap_adapter *)vpna;
 			return 0;
 		}
@@ -591,30 +593,10 @@ netmap_get_bdg_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 	 */
 	ifp = ifunit_ref(name + b->bdg_namelen + 1);
 	if (!ifp) { /* this is a virtual port */
-		/* Create a temporary NA with arguments, then
-		 * bdg_netmap_attach() will allocate the real one
-		 * and attach it to the ifp
-		 */
-		struct netmap_adapter tmp_na;
-
 		if (nmr->nr_cmd) {
 			/* nr_cmd must be 0 for a virtual port */
 			return EINVAL;
 		}
-		bzero(&tmp_na, sizeof(tmp_na));
-		/* bound checking */
-		tmp_na.num_tx_rings = nmr->nr_tx_rings;
-		nm_bound_var(&tmp_na.num_tx_rings, 1, 1, NM_BDG_MAXRINGS, NULL);
-		nmr->nr_tx_rings = tmp_na.num_tx_rings; // write back
-		tmp_na.num_rx_rings = nmr->nr_rx_rings;
-		nm_bound_var(&tmp_na.num_rx_rings, 1, 1, NM_BDG_MAXRINGS, NULL);
-		nmr->nr_rx_rings = tmp_na.num_rx_rings; // write back
-		nm_bound_var(&nmr->nr_tx_slots, NM_BRIDGE_RINGSIZE,
-				1, NM_BDG_MAXSLOTS, NULL);
-		tmp_na.num_tx_desc = nmr->nr_tx_slots;
-		nm_bound_var(&nmr->nr_rx_slots, NM_BRIDGE_RINGSIZE,
-				1, NM_BDG_MAXSLOTS, NULL);
-		tmp_na.num_rx_desc = nmr->nr_rx_slots;
 
 	 	/* create a struct ifnet for the new port.
 		 * need M_NOWAIT as we are under nma_lock
@@ -624,9 +606,8 @@ netmap_get_bdg_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 			return ENOMEM;
 
 		strcpy(ifp->if_xname, name);
-		tmp_na.ifp = ifp;
 		/* bdg_netmap_attach creates a struct netmap_adapter */
-		error = bdg_netmap_attach(&tmp_na);
+		error = bdg_netmap_attach(nmr, ifp);
 		if (error) {
 			D("error %d", error);
 			free(ifp, M_DEVBUF);
@@ -1179,10 +1160,22 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_vp_adapter *na,
 		uint8_t dst_ring = ring_nr; /* default, same ring as origin */
 		uint16_t dst_port, d_i;
 		struct nm_bdg_q *d;
+		uint8_t *buf = ft[i].ft_buf;
+		u_int len = ft[i].ft_len;
 
 		ND("slot %d frags %d", i, ft[i].ft_frags);
-		dst_port = b->nm_bdg_lookup(ft[i].ft_buf, ft[i].ft_len,
-			&dst_ring, na);
+		/* Drop the packet if the offset is not into the first
+		   fragment nor at the very beginning of the second. */
+		if (unlikely(na->offset > len))
+			continue;
+		if (len == na->offset) {
+			buf = ft[i+1].ft_buf;
+			len = ft[i+1].ft_len;
+		} else {
+			buf += na->offset;
+			len -= na->offset;
+		}
+		dst_port = b->nm_bdg_lookup(buf, len, &dst_ring, na);
 		if (netmap_verbose > 255)
 			RD(5, "slot %d port %d -> %d", i, me, dst_port);
 		if (dst_port == NM_BDG_NOPORT)
@@ -1245,6 +1238,7 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_vp_adapter *na,
 		struct nm_bdg_q *d;
 		uint32_t my_start = 0, lease_idx = 0;
 		int nrings;
+		int offset_mismatch;
 
 		d_i = dsts[i];
 		ND("second pass %d port %d", i, d_i);
@@ -1268,6 +1262,8 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_vp_adapter *na,
 			ND("not in netmap mode!");
 			goto cleanup;
 		}
+
+		offset_mismatch = (dst_na->offset != na->offset);
 
 		/* there is at least one either unicast or broadcast packet */
 		brd_next = brddst->bq_head;
@@ -1321,6 +1317,7 @@ retry:
 			struct netmap_slot *slot;
 			struct nm_bdg_fwd *ft_p, *ft_end;
 			u_int cnt;
+			int fix_mismatch = offset_mismatch;
 
 			/* find the queue from which we pick next packet.
 			 * NM_FT_NULL is always higher than valid indexes
@@ -1344,24 +1341,44 @@ retry:
 			ft_end = ft_p + cnt;
 			do {
 			    void *dst, *src = ft_p->ft_buf;
-			    size_t len = (ft_p->ft_len + 63) & ~63;
+			    size_t copy_len = ft_p->ft_len, dst_len = copy_len;
 
 			    slot = &ring->slot[j];
 			    dst = BDG_NMB(&dst_na->up, slot);
+
+			    if (unlikely(fix_mismatch)) {
+				if (na->offset > dst_na->offset) {
+					src += na->offset - dst_na->offset;
+					copy_len -= na->offset - dst_na->offset;
+					dst_len = copy_len;
+				} else {
+					bzero(dst, dst_na->offset - na->offset);
+					dst_len += dst_na->offset - na->offset;
+					dst += dst_na->offset - na->offset;
+				}
+				/* fix the first fragment only */
+				fix_mismatch = 0;
+				/* completely skip an header only fragment */
+				if (copy_len == 0) {
+					ft_p++;
+					continue;
+				}
+			    }
 			    /* round to a multiple of 64 */
+			    copy_len = (copy_len + 63) & ~63;
 
 			    ND("send %d %d bytes at %s:%d",
 				i, ft_p->ft_len, NM_IFPNAME(dst_ifp), j);
 			    if (ft_p->ft_flags & NS_INDIRECT) {
-				if (copyin(src, dst, len)) {
+				if (copyin(src, dst, copy_len)) {
 					// invalid user pointer, pretend len is 0
-					ft_p->ft_len = 0;
+					dst_len = 0;
 				}
 			    } else {
-				//memcpy(dst, src, len);
-				pkt_copy(src, dst, (int)len);
+				//memcpy(dst, src, copy_len);
+				pkt_copy(src, dst, (int)copy_len);
 			    }
-			    slot->len = ft_p->ft_len;
+			    slot->len = dst_len;
 			    slot->flags = (cnt << 8)| NS_MOREFRAG;
 			    j = nm_next(j, lim);
 			    ft_p++;
@@ -1552,7 +1569,7 @@ done:
 }
 
 static int
-bdg_netmap_attach(struct netmap_adapter *arg)
+bdg_netmap_attach(struct nmreq *nmr, struct ifnet *ifp)
 {
 	struct netmap_vp_adapter *vpna;
 	struct netmap_adapter *na;
@@ -1561,8 +1578,29 @@ bdg_netmap_attach(struct netmap_adapter *arg)
 	vpna = malloc(sizeof(*vpna), M_DEVBUF, M_NOWAIT | M_ZERO);
 	if (vpna == NULL)
 		return ENOMEM;
+
  	na = &vpna->up;
-	*na = *arg;
+
+	na->ifp = ifp;
+
+	/* bound checking */
+	na->num_tx_rings = nmr->nr_tx_rings;
+	nm_bound_var(&na->num_tx_rings, 1, 1, NM_BDG_MAXRINGS, NULL);
+	nmr->nr_tx_rings = na->num_tx_rings; // write back
+	na->num_rx_rings = nmr->nr_rx_rings;
+	nm_bound_var(&na->num_rx_rings, 1, 1, NM_BDG_MAXRINGS, NULL);
+	nmr->nr_rx_rings = na->num_rx_rings; // write back
+	nm_bound_var(&nmr->nr_tx_slots, NM_BRIDGE_RINGSIZE,
+			1, NM_BDG_MAXSLOTS, NULL);
+	na->num_tx_desc = nmr->nr_tx_slots;
+	nm_bound_var(&nmr->nr_rx_slots, NM_BRIDGE_RINGSIZE,
+			1, NM_BDG_MAXSLOTS, NULL);
+	na->num_rx_desc = nmr->nr_rx_slots;
+	if (nmr->nr_arg1 > NETMAP_BDG_MAX_OFFSET)
+		nmr->nr_arg1 = NETMAP_BDG_MAX_OFFSET;
+	vpna->offset = nmr->nr_arg1;
+	D("Using offset %d", vpna->offset);
+
 	na->na_flags |= NAF_BDG_MAYSLEEP | NAF_MEM_OWNER;
 	na->nm_txsync = bdg_netmap_txsync;
 	na->nm_rxsync = bdg_netmap_rxsync;
@@ -1570,7 +1608,7 @@ bdg_netmap_attach(struct netmap_adapter *arg)
 	na->nm_dtor = netmap_adapter_vp_dtor;
 	na->nm_krings_create = netmap_vp_krings_create;
 	na->nm_krings_delete = netmap_vp_krings_delete;
-	na->nm_mem = netmap_mem_private_new(NM_IFPNAME(arg->ifp),
+	na->nm_mem = netmap_mem_private_new(NM_IFPNAME(na->ifp),
 			na->num_tx_rings, na->num_tx_desc,
 			na->num_rx_rings, na->num_rx_desc);
 	/* other nmd fields are set in the common routine */

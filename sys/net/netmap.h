@@ -346,6 +346,7 @@ struct nmreq {
 #define NETMAP_BDG_LIST		4	/* get bridge's info */
 	uint16_t	nr_arg1;
 #define NETMAP_BDG_HOST		1	/* attach the host stack on ATTACH */
+#define NETMAP_BDG_MAX_OFFSET	12
 	uint16_t	nr_arg2;
 	uint32_t	spare2[3];
 };
