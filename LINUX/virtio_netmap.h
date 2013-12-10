@@ -118,6 +118,7 @@ virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
                                 D("virtqueue_add_outbuf failed");
                                 break;
                         }
+			virtqueue_kick(sq->vq);
 
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
@@ -128,7 +129,8 @@ virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		/* The new slots are reported as unavailable. */
 		kring->nr_hwavail -= new_slots;
 
-                virtqueue_kick(sq->vq);
+		if (kring->nr_hwavail == 0)
+			virtqueue_enable_cb_delayed(sq->vq);
 	}
 out:
 	/* recompute hwreserved */
