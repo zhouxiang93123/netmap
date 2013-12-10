@@ -214,12 +214,12 @@ static void skb_xmit_done(struct virtqueue *vq)
 	/* Suppress further interrupts. */
 	virtqueue_disable_cb(vq);
 
+#ifdef DEV_NETMAP
+        if (netmap_tx_irq(vi->dev, 0))
+		return;
+#endif
 	/* We were probably waiting for more output buffers. */
 	netif_wake_subqueue(vi->dev, vq2txq(vq));
-#ifdef DEV_NETMAP
-        D("call netmap_tx_irq");
-        netmap_tx_irq(vi->dev, 0);
-#endif
 }
 
 static void set_skb_frag(struct sk_buff *skb, struct page *page,
