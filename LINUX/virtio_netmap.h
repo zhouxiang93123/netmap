@@ -163,7 +163,8 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 	u_int k = ring->cur, resvd = ring->reserved;
 
-        D("[A] %d %d %d %d", ring->cur, ring->reserved, kring->nr_hwcur, kring->nr_hwavail);
+        ND("[A] %d %d %d %d", ring->cur, ring->reserved, kring->nr_hwcur,
+			      kring->nr_hwavail);
 
 	if (k > lim)
 		return netmap_ring_reinit(kring);
@@ -195,7 +196,8 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		kring->nr_hwavail += n;
 		kring->nr_kflags &= ~NKR_PENDINTR;
 	}
-        D("[B] %d %d %d %d", ring->cur, ring->reserved, kring->nr_hwcur, kring->nr_hwavail);
+        ND("[B] %d %d %d %d", ring->cur, ring->reserved, kring->nr_hwcur,
+			      kring->nr_hwavail);
 
 	/* skip past packets that userspace has released */
 	j = kring->nr_hwcur; /* netmap ring index */
@@ -235,7 +237,8 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	/* Tell userspace that there are new packets. */
 	ring->avail = kring->nr_hwavail - resvd;
 
-        D("[C] %d %d %d %d", ring->cur, ring->reserved, kring->nr_hwcur, kring->nr_hwavail);
+        ND("[C] %d %d %d %d", ring->cur, ring->reserved, kring->nr_hwcur,
+			      kring->nr_hwavail);
 
 	return 0;
 }
@@ -266,7 +269,7 @@ static int virtio_netmap_init_buffers(struct SOFTC_T *vi)
 			return 0;
 		}
 
-		for (i = 0; i < na->num_rx_desc; i++) {
+		for (i = 0; rq->vq->num_free && i < na->num_rx_desc; i++) {
                         void *addr;
                         int err;
 
