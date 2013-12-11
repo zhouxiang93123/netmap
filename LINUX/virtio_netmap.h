@@ -243,13 +243,14 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
                             D("virtqueue_add_inbuf failed");
                             return err;
                         }
+                        virtqueue_kick(rq->vq);
 			j = (j == lim) ? 0 : j + 1;
 		}
 		kring->nr_hwavail -= n;
 		kring->nr_hwcur = k;
-
-                virtqueue_kick(rq->vq);
 	}
+
+        virtqueue_enable_cb(rq->vq);
 
 	/* Tell userspace that there are new packets. */
 	ring->avail = kring->nr_hwavail - resvd;

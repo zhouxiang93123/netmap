@@ -615,7 +615,6 @@ static int virtnet_poll(struct napi_struct *napi, int budget)
         int work_done = 0;
 
         if (netmap_rx_irq(vi->dev, 0, &work_done)) {
-		virtqueue_enable_cb(rq->vq);
 		napi_complete(napi);
 		ND("called netmap_rx_irq");
 
