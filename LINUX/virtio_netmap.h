@@ -193,6 +193,18 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
                             ring->slot[j].flags = slot_flags;
                             j = (j == lim) ? 0 : j + 1;
                             n++;
+                        } else {
+                            struct netmap_slot *slot = &ring->slot[kring->nr_ntc];
+                            void *addr = NMB(slot);
+                            int err;
+
+                            sg_set_buf(rq->sg, addr, ring->nr_buf_size);
+                            err = virtqueue_add_inbuf(rq->vq, rq->sg, 1, na, GFP_ATOMIC);
+                            if (err < 0) {
+                                D("virtqueue_add_inbuf failed");
+                                return err;
+                            }
+                            kring->nr_ntc = (kring->nr_ntc == lim) ? 0 : kring->nr_ntc + 1;
                         }
 		}
 		kring->nr_hwavail += n;
