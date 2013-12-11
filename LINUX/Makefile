@@ -9,13 +9,13 @@ netmap_lin-objs := netmap.o netmap_mem2.o netmap_linux.o \
 	netmap_generic.o netmap_mbq.o netmap_vale.o
 
 obj-$(CONFIG_NETMAP) = netmap_lin.o
-obj-$(CONFIG_NETMAP) += virtio_net.o
 
 ifndef NODRIVERS
 # list of modules to be built (actually also forcedeth and r8169)
 MOD_LIST:=	CONFIG_E1000=m CONFIG_E1000E=m	\
 		CONFIG_IXGBE=m CONFIG_IGB=m	\
-		CONFIG_BNX2X=m CONFIG_MLX4=m 
+		CONFIG_BNX2X=m CONFIG_MLX4=m	\
+		CONFIG_VIRTIO_NET=m
 obj-m += $(O_DRIVERS)
 GET_DRIVERS := get-drivers
 else
@@ -25,7 +25,7 @@ endif
 # DRIVER_SRCS names of the driver sources is only used to
 # clean files that we copied.
 DRIVER_SRCS = r8169.c forcedeth.c e1000/ e1000e/ ixgbe/ igb/
-DRIVER_SRCS += bnx2x/ mellanox/ mlx4/
+DRIVER_SRCS += bnx2x/ mellanox/ mlx4/ virtio_net.c
 
 # _DRV_SUBDIRS contains the subdirs with driver sources.
 # In old linuxes everything is under drivers/net, newer versions
