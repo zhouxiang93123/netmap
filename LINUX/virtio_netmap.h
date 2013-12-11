@@ -21,6 +21,13 @@ virtio_netmap_reg(struct netmap_adapter *na, int onoff)
 	if (na == NULL)
 		return EINVAL;
 
+        /* It's important to deny the registration if the interface is
+           not up, otherwise the virtnet_close() is not matched by a
+           virtnet_open(), and so a napi_disable() is not matched by
+           a napi_enable(), which results in a deadlock. */
+        if (!netif_running(ifp))
+                return EBUSY;
+
 	rtnl_lock();
 
         virtnet_close(ifp);
