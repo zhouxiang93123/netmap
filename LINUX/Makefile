@@ -31,7 +31,7 @@ DRIVER_SRCS += bnx2x/ mellanox/ mlx4/
 # In old linuxes everything is under drivers/net, newer versions
 # have them in source/drivers/net/ethernet/$(manufacturer)
 
-_DRV_SUBDIRS= nvidia realtek intel broadcom .
+_DRV_SUBDIRS= nvidia realtek intel broadcom . ..
 
 # The following commands are needed to build the modules as out-of-tree,
 # in fact the kernel sources path must be specified.
