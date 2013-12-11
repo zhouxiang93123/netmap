@@ -2095,7 +2095,7 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
 		D("NULL na, should not happen");
 		return NULL;	/* no netmap support here */
 	}
-	if (!(na->ifp->if_capenable & IFCAP_NETMAP) || nma_is_generic(na)) {
+	if (!(na->ifp->if_capenable & IFCAP_NETMAP)) {
 		ND("interface not in netmap mode");
 		return NULL;	/* nothing to reinitialize */
 	}
