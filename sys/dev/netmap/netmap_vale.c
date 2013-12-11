@@ -566,8 +566,6 @@ netmap_get_bdg_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 			netmap_adapter_get(&vpna->up);
 			ND("found existing if %s refs %d", name,
 				vpna->na_bdg_refcount);
-			nmr->nr_arg1 = vpna->offset; /* writeback */
-			D("writeback na->offset %d", nmr->nr_arg1);
 			*na = (struct netmap_adapter *)vpna;
 			return 0;
 		}
@@ -789,7 +787,8 @@ int
 netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func)
 {
 	struct nm_bridge *b;
-	struct netmap_vp_adapter *na;
+	struct netmap_adapter *na;
+	struct netmap_vp_adapter *vpna;
 	struct ifnet *iter;
 	char *name = nmr->nr_name;
 	int cmd = nmr->nr_cmd, namelen = strlen(name);
@@ -822,12 +821,12 @@ netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func)
 			error = ENOENT;
 			for (j = 0; j < b->bdg_active_ports; j++) {
 				i = b->bdg_port_index[j];
-				na = b->bdg_ports[i];
-				if (na == NULL) {
+				vpna = b->bdg_ports[i];
+				if (vpna == NULL) {
 					D("---AAAAAAAAARGH-------");
 					continue;
 				}
-				iter = na->up.ifp;
+				iter = vpna->up.ifp;
 				/* the former and the latter identify a
 				 * virtual port and a NIC, respectively
 				 */
@@ -861,8 +860,8 @@ netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func)
 				nmr->nr_arg1 = i;
 				nmr->nr_arg2 = j;
 				j = b->bdg_port_index[j];
-				na = b->bdg_ports[j];
-				iter = na->up.ifp;
+				vpna = b->bdg_ports[j];
+				iter = vpna->up.ifp;
 				strncpy(name, iter->if_xname, (size_t)IFNAMSIZ);
 				error = 0;
 				break;
@@ -886,6 +885,19 @@ netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func)
 			error = EINVAL;
 		} else {
 			b->nm_bdg_lookup = func;
+		}
+		NMG_UNLOCK();
+		break;
+
+	case NETMAP_BDG_OFFSET:
+		NMG_LOCK();
+		error = netmap_get_bdg_na(nmr, &na, 0);
+		if (!error) {
+			vpna = (struct netmap_vp_adapter *)na;
+			if (nmr->nr_arg1 > NETMAP_BDG_MAX_OFFSET)
+				nmr->nr_arg1 = NETMAP_BDG_MAX_OFFSET;
+			vpna->offset = nmr->nr_arg1;
+			D("Using offset %d for %p", vpna->offset, vpna);
 		}
 		NMG_UNLOCK();
 		break;
@@ -1596,10 +1608,7 @@ bdg_netmap_attach(struct nmreq *nmr, struct ifnet *ifp)
 	nm_bound_var(&nmr->nr_rx_slots, NM_BRIDGE_RINGSIZE,
 			1, NM_BDG_MAXSLOTS, NULL);
 	na->num_rx_desc = nmr->nr_rx_slots;
-	if (nmr->nr_arg1 > NETMAP_BDG_MAX_OFFSET)
-		nmr->nr_arg1 = NETMAP_BDG_MAX_OFFSET;
-	vpna->offset = nmr->nr_arg1;
-	D("Using offset %d", vpna->offset);
+	vpna->offset = 0;
 
 	na->na_flags |= NAF_BDG_MAYSLEEP | NAF_MEM_OWNER;
 	na->nm_txsync = bdg_netmap_txsync;

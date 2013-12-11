@@ -344,6 +344,7 @@ struct nmreq {
 #define NETMAP_BDG_DETACH	2	/* detach the NIC */
 #define NETMAP_BDG_LOOKUP_REG	3	/* register lookup function */
 #define NETMAP_BDG_LIST		4	/* get bridge's info */
+#define NETMAP_BDG_OFFSET       5       /* set the port offset */
 	uint16_t	nr_arg1;
 #define NETMAP_BDG_HOST		1	/* attach the host stack on ATTACH */
 #define NETMAP_BDG_MAX_OFFSET	12
