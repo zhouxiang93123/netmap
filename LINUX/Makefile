@@ -4,11 +4,14 @@
 #       make oldconfig; make scripts; make prepare
 #
 
+CONFIG_V1000:=m
+
 # list of objects for this module
 netmap_lin-objs := netmap.o netmap_mem2.o netmap_linux.o \
 	netmap_generic.o netmap_mbq.o netmap_vale.o
 
 obj-$(CONFIG_NETMAP) = netmap_lin.o
+obj-$(CONFIG_V1000) += vhost-port/
 
 ifndef NODRIVERS
 # list of modules to be built (actually also forcedeth and r8169)

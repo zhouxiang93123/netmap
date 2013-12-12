@@ -814,7 +814,6 @@ int netmap_adapter_put(struct netmap_adapter *na);
 #endif /* !NM_DEBUG_PUTGET */
 
 
-
 extern u_int netmap_buf_size;
 #define NETMAP_BUF_SIZE	netmap_buf_size	// XXX remove
 extern int netmap_mitigate;
