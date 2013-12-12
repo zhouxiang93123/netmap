@@ -430,6 +430,8 @@ struct netmap_vp_adapter {	/* VALE software port */
 	int bdg_port;
 	struct nm_bridge *na_bdg;
 	int retry;
+
+	u_int offset;   /* Offset of ethernet header for each packet. */
 };
 
 struct netmap_hw_adapter {	/* physical device */

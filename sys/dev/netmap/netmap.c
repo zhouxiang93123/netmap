@@ -1394,7 +1394,8 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		}
 		/* possibly attach/detach NIC and VALE switch */
 		i = nmr->nr_cmd;
-		if (i == NETMAP_BDG_ATTACH || i == NETMAP_BDG_DETACH) {
+		if (i == NETMAP_BDG_ATTACH || i == NETMAP_BDG_DETACH
+				|| i == NETMAP_BDG_OFFSET) {
 			error = netmap_bdg_ctl(nmr, NULL);
 			break;
 		} else if (i != 0) {
