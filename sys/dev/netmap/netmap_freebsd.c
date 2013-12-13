@@ -181,7 +181,6 @@ void netmap_mitigation_cleanup(struct netmap_generic_adapter *na)
 	ND("called");
 }
 
-
 /*
  * In order to track whether pages are still mapped, we hook into
  * the standard cdev_pager and intercept the constructor and

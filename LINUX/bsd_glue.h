@@ -50,6 +50,8 @@
 #include <linux/etherdevice.h>	// eth_type_trans
 #include <linux/module.h>
 #include <linux/moduleparam.h>
+#include <linux/virtio.h>	// virt_to_phys
+#include <net/sock.h>
 #include <linux/delay.h>	// msleep
 #include <linux/skbuff.h>		// skb_copy_to_linear_data_offset
 

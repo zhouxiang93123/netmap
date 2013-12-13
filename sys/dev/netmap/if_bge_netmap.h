@@ -136,6 +136,7 @@ bge_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
                         bge_writembx(sc, BGE_MBX_TX_HOST_PROD0_LO, l);
                 sc->bge_timer = 5;
 	}
+	nm_txsync_finalize(kring, cur);
 	return 0;
 }
 

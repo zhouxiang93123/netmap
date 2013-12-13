@@ -430,6 +430,8 @@ struct netmap_vp_adapter {	/* VALE software port */
 	int bdg_port;
 	struct nm_bridge *na_bdg;
 	int retry;
+
+	u_int offset;   /* Offset of ethernet header for each packet. */
 };
 
 struct netmap_hw_adapter {	/* physical device */
@@ -700,6 +702,36 @@ nm_clear_native_flags(struct netmap_adapter *na)
 #endif
 }
 
+/*
+ * validates parameters in the ring/kring, returns a value for cur,
+ * and the 'new_slots' value in the argument.
+ * If any error, returns cur > lim to force a reinit.
+ */
+u_int nm_txsync_prologue(struct netmap_kring *, u_int *);
+
+/*
+ * validates parameters in the ring/kring, returns a value for cur,
+ * and the 'reserved' value in the argument.
+ * If any error, returns cur > lim to force a reinit.
+ */
+u_int nm_rxsync_prologue(struct netmap_kring *, u_int *);
+
+/*
+ * update kring and ring at the end of txsync
+ */
+static inline void
+nm_txsync_finalize(struct netmap_kring *kring, u_int cur)
+{
+	/* recompute hwreserved */
+	kring->nr_hwreserved = cur - kring->nr_hwcur;
+	if (kring->nr_hwreserved < 0)
+		kring->nr_hwreserved += kring->nkr_num_slots;
+
+	/* update avail and reserved to what the kernel knows */
+	kring->ring->avail = kring->nr_hwavail;
+	kring->ring->reserved = kring->nr_hwreserved;
+}
+
 /* check/fix address and len in tx rings */
 #if 1 /* debug version */
 #define	NM_CHECK_ADDR_LEN(_a, _l)	do {				\
@@ -717,6 +749,7 @@ nm_clear_native_flags(struct netmap_adapter *na)
 #endif
 
 
+/*---------------------------------------------------------------*/
 /*
  * Support routines to be used with the VALE switch
  */
@@ -810,7 +843,6 @@ void netmap_adapter_get(struct netmap_adapter *na);
 int netmap_adapter_put(struct netmap_adapter *na);
 
 #endif /* !NM_DEBUG_PUTGET */
-
 
 
 extern u_int netmap_buf_size;

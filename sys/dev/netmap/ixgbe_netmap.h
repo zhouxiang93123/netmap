@@ -38,7 +38,6 @@
 
 #include <net/netmap.h>
 #include <sys/selinfo.h>
-
 /*
  * Some drivers may need the following headers. Others
  * already include them by default
@@ -49,7 +48,10 @@
  */
 #include <dev/netmap/netmap_kern.h>
 
+
 /*
+ * device-specific sysctl variables:
+ *
  * ix_crcstrip: 0: keep CRC in rx frames (default), 1: strip it.
  *	During regular operations the CRC is stripped, but on some
  *	hardware reception of frames not multiple of 64 is slower,
@@ -57,17 +59,11 @@
  *
  * ix_rx_miss, ix_rx_miss_bufs:
  *	count packets that might be missed due to lost interrupts.
- *
- * ix_use_dd
- *	use the dd bit for completed tx transmissions.
- *	This is tricky, much better to use TDH for now.
  */
 SYSCTL_DECL(_dev_netmap);
-static int ix_rx_miss, ix_rx_miss_bufs, ix_use_dd, ix_crcstrip;
+static int ix_rx_miss, ix_rx_miss_bufs, ix_crcstrip;
 SYSCTL_INT(_dev_netmap, OID_AUTO, ix_crcstrip,
     CTLFLAG_RW, &ix_crcstrip, 0, "strip CRC on rx frames");
-SYSCTL_INT(_dev_netmap, OID_AUTO, ix_use_dd,
-    CTLFLAG_RW, &ix_use_dd, 0, "use dd instead of tdh to detect tx frames");
 SYSCTL_INT(_dev_netmap, OID_AUTO, ix_rx_miss,
     CTLFLAG_RW, &ix_rx_miss, 0, "potentially missed rx intr");
 SYSCTL_INT(_dev_netmap, OID_AUTO, ix_rx_miss_bufs,
@@ -177,10 +173,10 @@ ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct ifnet *ifp = na->ifp;
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	u_int nm_i;	/* index in the netmap ring */
-	u_int nic_i;	/* index in the NIC ring */
-	u_int n;
-	u_int const cur = ring->cur; /* read only once */
+	u_int nm_i;	/* index into the netmap ring */
+	u_int nic_i;	/* index into the NIC ring */
+	u_int n, new_slots;
+	u_int const cur = nm_txsync_prologue(kring, &new_slots);
 	u_int const lim = kring->nkr_num_slots - 1;
 	/*
 	 * interrupts on every tx packet are expensive so request
@@ -263,9 +259,8 @@ ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			if (slot->flags & NS_BUF_CHANGED) {
 				/* buffer has changed, reload map */
 				netmap_reload_map(txr->txtag, txbuf->map, addr);
-				slot->flags &= ~NS_BUF_CHANGED;
 			}
-			slot->flags &= ~NS_REPORT;
+			slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
 
 			/* Fill the slot in the NIC ring. */
 			/* Use legacy descriptor, they are faster? */
@@ -353,8 +348,8 @@ ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			}
 		}
 	}
-	/* update avail to what the kernel knows */
-	ring->avail = kring->nr_hwavail;
+
+	nm_txsync_finalize(kring, cur);
 
 	return 0;
 }
@@ -385,11 +380,10 @@ ixgbe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int nm_i;	/* index into the netmap ring */
-	u_int nic_i;	/* index into the nic ring */
-	u_int n;
+	u_int nic_i;	/* index into the NIC ring */
+	u_int n, resvd;
 	u_int const lim = kring->nkr_num_slots - 1;
-	u_int cur = ring->cur; /* note, excludes reserved */
-	u_int resvd = ring->reserved;
+	u_int const cur = nm_rxsync_prologue(kring, &resvd); /* cur + res */
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 
 	/* device specific */
@@ -458,13 +452,6 @@ ixgbe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	 * nic_i is the index in the NIC ring, and
 	 * nm_i == (nic_i + kring->nkr_hwofs) % ring_size
 	 */
-	if (resvd > 0) {
-		if (resvd + ring->avail >= lim + 1) {
-			D("XXX invalid reserve/avail %d %d", resvd, ring->avail);
-			ring->reserved = resvd = 0; // XXX panic...
-		}
-		cur = (cur >= resvd) ? cur - resvd : cur + lim + 1 - resvd;
-	}
 	nm_i = kring->nr_hwcur;
 	if (nm_i != cur) {
 		nic_i = netmap_idx_k2n(kring, nm_i);
