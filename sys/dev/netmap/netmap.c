@@ -1135,9 +1135,7 @@ nm_txsync_prologue(struct netmap_kring *kring, u_int *new_slots)
 	u_int cur = ring->cur; /* read only once */
 	u_int avail = ring->avail; /* read only once */
 	u_int n = kring->nkr_num_slots;
-	u_int kstart = kring->nr_hwcur + kring->nr_hwreserved;
-	u_int kend = kstart + kring->nr_hwavail;
-	u_int a;
+	u_int kstart, kend, a;
 
 #if 1 /* kernel sanity checks */
 	if (kring->nr_hwcur >= n ||
@@ -1145,19 +1143,23 @@ nm_txsync_prologue(struct netmap_kring *kring, u_int *new_slots)
 	    kring->nr_hwreserved + kring->nr_hwavail >= n)
 		goto error;
 #endif /* kernel sanity checks */
-	/* user sanity checks */
+	kstart = kring->nr_hwcur + kring->nr_hwreserved;
+	if (kstart >= n)
+		kstart -= n;
+	kend = kstart + kring->nr_hwavail;
+	/* user sanity checks. a is the expected avail */
 	if (cur < kstart) {
 		/* too low, but maybe wraparound */
 		if (cur + n > kend)
 			goto error;
 		*new_slots = cur + n - kstart;
+		a = kend - cur - n;
 	} else {
 		if (cur > kend)
 			goto error;
 		*new_slots = cur - kstart;
+		a = kend - cur;
 	}
-	/* a is the expected value of avail */
-	a = (cur <= kend) ? kend - cur : n + kend - cur;
 	if (a != avail) {
 		RD(5, "wrong but fixable avail have %d need %d",
 			avail, a);
@@ -1212,16 +1214,17 @@ nm_rxsync_prologue(struct netmap_kring *kring, u_int *resvd)
 	/* user sanity checks */
 	if (res >= n)
 		goto error;
-	/* first check that cur is valid */
+	/* check that cur is valid, a is the expected value of avail */
 	if (cur < kring->nr_hwcur) {
 		/* too low, but maybe wraparound */
 		if (cur + n > kend)
 			goto error;
-	} else if (cur > kend) {
-		goto error;
+		a = kend - (cur + n);
+	} else  {
+		if (cur > kend)
+			goto error;
+		a = kend - cur;
 	}
-	/* a is the expected value of avail */
-	a = (cur <= kend) ? kend - cur : n + kend - cur;
 	if (a != avail) {
 		RD(5, "wrong but fixable avail have %d need %d",
 			avail, a);

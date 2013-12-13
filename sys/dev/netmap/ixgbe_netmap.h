@@ -175,8 +175,8 @@ ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct netmap_ring *ring = kring->ring;
 	u_int nm_i;	/* index into the netmap ring */
 	u_int nic_i;	/* index into the NIC ring */
-	u_int n;
-	u_int const cur = ring->cur; /* read only once */
+	u_int n, new_slots;
+	u_int const cur = nm_txsync_prologue(kring, &new_slots);
 	u_int const lim = kring->nkr_num_slots - 1;
 	/*
 	 * interrupts on every tx packet are expensive so request
@@ -381,10 +381,9 @@ ixgbe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct netmap_ring *ring = kring->ring;
 	u_int nm_i;	/* index into the netmap ring */
 	u_int nic_i;	/* index into the NIC ring */
-	u_int n;
+	u_int n, resvd;
 	u_int const lim = kring->nkr_num_slots - 1;
-	u_int cur = ring->cur; /* note, excludes reserved */
-	u_int resvd = ring->reserved;
+	u_int const cur = nm_rxsync_prologue(kring, &resvd); /* cur + res */
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 
 	/* device specific */
@@ -453,13 +452,6 @@ ixgbe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	 * nic_i is the index in the NIC ring, and
 	 * nm_i == (nic_i + kring->nkr_hwofs) % ring_size
 	 */
-	if (resvd > 0) {
-		if (resvd + ring->avail >= lim + 1) {
-			D("XXX invalid reserve/avail %d %d", resvd, ring->avail);
-			ring->reserved = resvd = 0; // XXX panic...
-		}
-		cur = (cur >= resvd) ? cur - resvd : cur + lim + 1 - resvd;
-	}
 	nm_i = kring->nr_hwcur;
 	if (nm_i != cur) {
 		nic_i = netmap_idx_k2n(kring, nm_i);
