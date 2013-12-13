@@ -1681,6 +1681,8 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	 * We start with a lock free round which is cheap if we have
 	 * slots available. If this fails, then lock and call the sync
 	 * routines.
+	 * XXX rather than ring->avail >0 should check that
+	 * ring->cur has not reached hwcur+hwavail
 	 */
 	for (i = priv->np_qfirst; want_rx && i < lim_rx; i++) {
 		kring = &na->rx_rings[i];
@@ -1735,7 +1737,15 @@ flush_tx:
 			if (na->nm_txsync(na, i, 0))
 				revents |= POLLERR;
 
-			/* Check avail/call selrecord only if called with POLLOUT */
+			/* Check avail and call selrecord only if
+			 * called with POLLOUT and run out of bufs.
+			 * XXX Note, we cannot trust much ring->avail
+			 * as it is exposed to userspace (even though
+			 * just updated by txsync). We should really
+			 * check kring->nr_hwavail or better have
+			 * txsync set a flag telling if we need
+			 * to do a selrecord().
+			 */
 			if (want_tx) {
 				if (kring->ring->avail > 0) {
 					/* stop at the first ring. We don't risk
