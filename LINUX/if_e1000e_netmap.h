@@ -111,8 +111,8 @@ e1000_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct ifnet *ifp = na->ifp;
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	u_int nm_i;	/* index in the netmap ring */
-	u_int nic_i;	/* index in the NIC ring */
+	u_int nm_i;	/* index into the netmap ring */
+	u_int nic_i;	/* index into the NIC ring */
 	u_int n;
 	u_int const cur = ring->cur; /* read only once */
 	u_int const lim = kring->nkr_num_slots - 1;
@@ -205,15 +205,7 @@ e1000_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		}
 	}
 out:
-	/* recompute hwreserved */
-	kring->nr_hwreserved = cur - nm_i;
-	if (kring->nr_hwreserved < 0) {
-		kring->nr_hwreserved += kring->nkr_num_slots;
-	}
-
-	/* update avail and reserved to what the kernel knows */
-	ring->avail = kring->nr_hwavail;
-	ring->reserved = kring->nr_hwreserved;
+	nm_txsync_finalize(kring, cur);
 
 	return 0;
 }

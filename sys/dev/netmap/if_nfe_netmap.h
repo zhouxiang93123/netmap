@@ -119,7 +119,7 @@ nfe_netmap_init_buffers(struct nfe_softc *sc)
 
 
 /*
- * Register/unregister
+ * Register/unregister. We are already under netmap lock.
  */
 static int
 nfe_netmap_reg(struct netmap_adapter *na, int onoff)
@@ -149,8 +149,8 @@ nfe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct ifnet *ifp = na->ifp;
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	u_int nm_i;	/* index in the netmap ring */
-	u_int nic_i;	/* index in the NIC ring */
+	u_int nm_i;	/* index into the netmap ring */
+	u_int nic_i;	/* index into the NIC ring */
 	u_int n;
 	u_int const cur = ring->cur; /* read only once */
 	u_int const lim = kring->nkr_num_slots - 1;
@@ -187,9 +187,10 @@ nfe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 				/* buffer has changed, reload map */
 				netmap_reload_map(sc->txq.tx_data_tag,
 				    sc->txq.data[l].tx_data_map, addr);
-				slot->flags &= ~NS_BUF_CHANGED;
 			}
-			slot->flags &= ~NS_REPORT;
+
+			slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
+
 			if (sc->nfe_flags & NFE_40BIT_ADDR) {
 			    desc64 = &sc->txq.desc64[l];
 			    desc64->physaddr[0] = htole32(NFE_ADDR_HI(paddr));
@@ -224,7 +225,7 @@ nfe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	}
 
 	/*
-	 * Second part: Reclaim buffers for completed transmissions.
+	 * Second part: reclaim buffers for completed transmissions.
 	 */
 	if (flags & NAF_FORCE_RECLAIM || kring->nr_hwavail < 1) {
 		u_int nic_cur = sc->txq.cur;
@@ -263,7 +264,7 @@ nfe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int nm_i;	/* index into the netmap ring */
-	u_int nic_i;	/* index into the nic ring */
+	u_int nic_i;	/* index into the NIC ring */
 	u_int n;
 	u_int const lim = kring->nkr_num_slots - 1;
 	u_int cur = ring->cur; /* note, excludes reserved */
@@ -283,7 +284,7 @@ nfe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 
 	/*
-	 * First part, import newly received packets.
+	 * First part: import newly received packets.
 	 */
 	if (netmap_no_pendintr || force_update) {
 		uint16_t flags, len;
@@ -321,7 +322,7 @@ nfe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	}
 
 	/*
-	 * Second, skip past packets that userspace has released
+	 * Second part: skip past packets that userspace has released
 	 */
 	if (resvd > 0) {
 		if (resvd + ring->avail >= lim + 1) {
@@ -330,7 +331,7 @@ nfe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		}
 		k = (k >= resvd) ? k - resvd : k + lim + 1 - resvd;
 	}
-	nm_i = kring->nr_hwcur;	/* netmap ring index */
+	nm_i = kring->nr_hwcur;
 	if (nm_i != cur) { /* userspace has released some packets. */
 		nic_i = netmap_idx_k2n(kring, nm_i);
 		for (n = 0; nm_i != cur; n++) {

@@ -288,15 +288,7 @@ ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		}
 	}
 out:
-	/* recompute hwreserved */
-	kring->nr_hwreserved = cur - kring->nr_hwcur;
-	if (kring->nr_hwreserved < 0) {
-		kring->nr_hwreserved += kring->nkr_num_slots;
-	}
-
-	/* update avail and reserved to what the kernel knows */
-	ring->avail = kring->nr_hwavail;
-	ring->reserved = kring->nr_hwreserved;
+	nm_txsync_finalize(kring, cur);
 
 	return 0;
 }

@@ -40,7 +40,7 @@
 
 
 /*
- * Register/unregister
+ * Register/unregister. We are already under netmap lock.
  */
 static int
 re_netmap_reg(struct netmap_adapter *na, int onoff)
@@ -95,31 +95,14 @@ re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	    sc->rl_ldata.rl_tx_list_map,
 	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 
-	/* XXX move after the transmissions */
-	/* record completed transmissions */
-	for (n = 0, nic_i = sc->rl_ldata.rl_tx_considx;
-	    nic_i != sc->rl_ldata.rl_tx_prodidx;
-	    n++, nic_i = RL_TX_DESC_NXT(sc, nic_i)) {
-		uint32_t cmdstat =
-			le32toh(sc->rl_ldata.rl_tx_list[nic_i].rl_cmdstat);
-		if (cmdstat & RL_TDESC_STAT_OWN)
-			break;
-	}
-	if (n > 0) {
-		sc->rl_ldata.rl_tx_considx = nic_i;
-		sc->rl_ldata.rl_tx_free += n;
-		kring->nr_hwavail += n;
-	}
-
-	/* update avail to what the kernel knows */
-	ring->avail = kring->nr_hwavail;
-
 	/*
 	 * First part: process new packets to send.
 	 */
 	nm_i = kring->nr_hwcur;
 	if (nm_i != cur) {	/* we have new packets to send */
-		nic_i = sc->rl_ldata.rl_tx_prodidx; /* netmap_idx_k2n(kring, nm_i); */
+		nic_i = sc->rl_ldata.rl_tx_prodidx;
+		// XXX or netmap_idx_k2n(kring, nm_i);
+
 		for (n = 0; nm_i != cur; n++) {
 			struct netmap_slot *slot = &ring->slot[nm_i];
 			u_int len = slot->len;
@@ -141,9 +124,8 @@ re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 				desc->rl_bufaddr_hi = htole32(RL_ADDR_HI(paddr));
 				netmap_reload_map(sc->rl_ldata.rl_tx_mtag,
 					txd[nic_i].tx_dmamap, addr);
-				slot->flags &= ~NS_BUF_CHANGED;
 			}
-			slot->flags &= ~NS_REPORT;
+			slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
 
 			desc->rl_cmdstat = htole32(cmd);
 
@@ -168,23 +150,26 @@ re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	}
 
 	/*
-	 * Second part: Reclaim buffers for completed transmissions.
+	 * Second part: reclaim buffers for completed transmissions.
 	 */
-	for (n = 0, nic_i = sc->rl_ldata.rl_tx_considx;
-	    nic_i != sc->rl_ldata.rl_tx_prodidx;
-	    n++, nic_i = RL_TX_DESC_NXT(sc, nic_i)) {
-		uint32_t cmdstat =
-			le32toh(sc->rl_ldata.rl_tx_list[nic_i].rl_cmdstat);
-		if (cmdstat & RL_TDESC_STAT_OWN)
-			break;
-	}
-	if (n > 0) {
-		sc->rl_ldata.rl_tx_considx = nic_i;
-		sc->rl_ldata.rl_tx_free += n;
-		kring->nr_hwavail += n;
+	if (flags & NAF_FORCE_RECLAIM || kring->nr_hwavail < 1) {
+		nic_i = sc->rl_ldata.rl_tx_considx;
+		for (n = 0; nic_i != sc->rl_ldata.rl_tx_prodidx;
+		    n++, nic_i = RL_TX_DESC_NXT(sc, nic_i)) {
+			uint32_t cmdstat =
+				le32toh(sc->rl_ldata.rl_tx_list[nic_i].rl_cmdstat);
+			if (cmdstat & RL_TDESC_STAT_OWN)
+				break;
+		}
+		if (n > 0) {
+			sc->rl_ldata.rl_tx_considx = nic_i;
+			sc->rl_ldata.rl_tx_free += n;
+			kring->nr_hwavail += n;
+		}
 	}
 	/* update avail to what the kernel knows */
 	ring->avail = kring->nr_hwavail;
+
 	return 0;
 }
 
@@ -199,7 +184,7 @@ re_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int nm_i;	/* index into the netmap ring */
-	u_int nic_i;	/* index into the nic ring */
+	u_int nic_i;	/* index into the NIC ring */
 	u_int n;
 	u_int const lim = kring->nkr_num_slots - 1;
 	u_int cur = ring->cur; /* note, excludes reserved */
@@ -218,7 +203,7 @@ re_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 
 	/*
-	 * First part, import newly received packets.
+	 * First part: import newly received packets.
 	 *
 	 * This device uses all the buffers in the ring, so we need
 	 * another termination condition in addition to RL_RDESC_STAT_OWN
@@ -259,7 +244,7 @@ re_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	}
 
 	/*
-	 * Second, skip past packets that userspace has released
+	 * Second part: skip past packets that userspace has released.
 	 */
 	if (resvd > 0) {
 		if (resvd + ring->avail >= lim + 1) {
@@ -270,7 +255,7 @@ re_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	}
 	nm_i = kring->nr_hwcur; /* netmap ring index */
 	if (nm_i != cur) { /* userspace has released some packets. */
-		nic_i = netmap_idx_k2n(kring, nm_i); /* the NIC index */
+		nic_i = netmap_idx_k2n(kring, nm_i);
 		for (n = 0; nm_i != cur; n++) {
 			struct netmap_slot *slot = &ring->slot[nm_i];
 			uint64_t paddr;

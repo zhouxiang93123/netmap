@@ -177,8 +177,8 @@ ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct ifnet *ifp = na->ifp;
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	u_int nm_i;	/* index in the netmap ring */
-	u_int nic_i;	/* index in the NIC ring */
+	u_int nm_i;	/* index into the netmap ring */
+	u_int nic_i;	/* index into the NIC ring */
 	u_int n;
 	u_int const cur = ring->cur; /* read only once */
 	u_int const lim = kring->nkr_num_slots - 1;
@@ -263,9 +263,8 @@ ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			if (slot->flags & NS_BUF_CHANGED) {
 				/* buffer has changed, reload map */
 				netmap_reload_map(txr->txtag, txbuf->map, addr);
-				slot->flags &= ~NS_BUF_CHANGED;
 			}
-			slot->flags &= ~NS_REPORT;
+			slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
 
 			/* Fill the slot in the NIC ring. */
 			/* Use legacy descriptor, they are faster? */
@@ -353,8 +352,8 @@ ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			}
 		}
 	}
-	/* update avail to what the kernel knows */
-	ring->avail = kring->nr_hwavail;
+
+	nm_txsync_finalize(kring, cur);
 
 	return 0;
 }
@@ -385,7 +384,7 @@ ixgbe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int nm_i;	/* index into the netmap ring */
-	u_int nic_i;	/* index into the nic ring */
+	u_int nic_i;	/* index into the NIC ring */
 	u_int n;
 	u_int const lim = kring->nkr_num_slots - 1;
 	u_int cur = ring->cur; /* note, excludes reserved */
