@@ -62,11 +62,11 @@ ixgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 {
 	struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
-	int error = 0;
 
 	/* Tell the stack that the interface is no longer active */
 	while (test_and_set_bit(__IXGBE_RESETTING, &adapter->state))
 		usleep_range(1000, 2000);
+
 	rtnl_lock();
 	if (netif_running(adapter->netdev))
 		ixgbe_down(adapter);
@@ -74,14 +74,14 @@ ixgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 	if (onoff) { /* enable netmap mode */
 		nm_set_native_flags(na);
 	} else { /* reset normal mode (explicit request or netmap failed) */
-		/* restore if_transmit */
 		nm_clear_native_flags(na);
 	}
 	if (netif_running(adapter->netdev))
 		ixgbe_up(adapter);	/* also enables intr */
 	rtnl_unlock();
+
 	clear_bit(__IXGBE_RESETTING, &adapter->state);
-	return (error);
+	return (0);
 }
 
 
@@ -106,8 +106,8 @@ ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct ifnet *ifp = na->ifp;
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	u_int nm_i;	/* index in the netmap ring */
-	u_int nic_i;	/* index in the NIC ring */
+	u_int nm_i;	/* index into the netmap ring */
+	u_int nic_i;	/* index into the NIC ring */
 	u_int n;
 	u_int const cur = ring->cur; /* read only once */
 	u_int const lim = kring->nkr_num_slots - 1;
@@ -204,9 +204,8 @@ ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			if (slot->flags & NS_BUF_CHANGED) {
 				/* buffer has changed, reload map */
 				// netmap_reload_map(pdev, DMA_TO_DEVICE, old_addr, addr);
-				slot->flags &= ~NS_BUF_CHANGED;
 			}
-			slot->flags &= ~NS_REPORT;
+			slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
 
 			/* Fill the slot in the NIC ring. */
 			curr->read.buffer_addr = htole64(paddr);
@@ -296,7 +295,6 @@ out:
 
 /*
  * Reconcile kernel and user view of the receive ring.
- * Same as for the txsync, this routine must be efficient.
  * Same as for the txsync, this routine must be efficient.
  * The caller guarantees a single invocations, but races against
  * the rest of the driver should be handled here.

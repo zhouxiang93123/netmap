@@ -38,7 +38,6 @@
 
 #include <net/netmap.h>
 #include <sys/selinfo.h>
-
 /*
  * Some drivers may need the following headers. Others
  * already include them by default
@@ -49,7 +48,10 @@
  */
 #include <dev/netmap/netmap_kern.h>
 
+
 /*
+ * device-specific sysctl variables:
+ *
  * ix_crcstrip: 0: keep CRC in rx frames (default), 1: strip it.
  *	During regular operations the CRC is stripped, but on some
  *	hardware reception of frames not multiple of 64 is slower,
@@ -57,17 +59,11 @@
  *
  * ix_rx_miss, ix_rx_miss_bufs:
  *	count packets that might be missed due to lost interrupts.
- *
- * ix_use_dd
- *	use the dd bit for completed tx transmissions.
- *	This is tricky, much better to use TDH for now.
  */
 SYSCTL_DECL(_dev_netmap);
-static int ix_rx_miss, ix_rx_miss_bufs, ix_use_dd, ix_crcstrip;
+static int ix_rx_miss, ix_rx_miss_bufs, ix_crcstrip;
 SYSCTL_INT(_dev_netmap, OID_AUTO, ix_crcstrip,
     CTLFLAG_RW, &ix_crcstrip, 0, "strip CRC on rx frames");
-SYSCTL_INT(_dev_netmap, OID_AUTO, ix_use_dd,
-    CTLFLAG_RW, &ix_use_dd, 0, "use dd instead of tdh to detect tx frames");
 SYSCTL_INT(_dev_netmap, OID_AUTO, ix_rx_miss,
     CTLFLAG_RW, &ix_rx_miss, 0, "potentially missed rx intr");
 SYSCTL_INT(_dev_netmap, OID_AUTO, ix_rx_miss_bufs,

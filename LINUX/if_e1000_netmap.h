@@ -135,9 +135,8 @@ e1000_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			if (slot->flags & NS_BUF_CHANGED) {
 				// netmap_reload_map(pdev, DMA_TO_DEVICE, old_addr, paddr);
 				curr->buffer_addr = htole64(paddr);
-				slot->flags &= ~NS_BUF_CHANGED;
 			}
-			slot->flags &= ~NS_REPORT;
+			slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
 
 			curr->upper.data = 0;
 			curr->lower.data = htole32(adapter->txd_cmd |
@@ -248,7 +247,6 @@ e1000_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	/*
 	 * Second part: skip past packets that userspace has released.
 	 */
-	nm_i = kring->nr_hwcur; /* netmap ring index */
 	if (resvd > 0) {
 		if (resvd + ring->avail >= lim + 1) {
 			D("XXX invalid reserve/avail %d %d", resvd, ring->avail);
@@ -256,6 +254,7 @@ e1000_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		}
 		cur = (cur >= resvd) ? cur - resvd : cur + lim + 1 - resvd;
 	}
+	nm_i = kring->nr_hwcur; /* netmap ring index */
 	if (nm_i != cur) {
 		nic_i = netmap_idx_k2n(kring, nm_i);
 		for (n = 0; nm_i != cur; n++) {
