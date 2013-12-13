@@ -27,7 +27,7 @@
 /*
  * $Id: if_re_netmap_linux.h 10679 2012-02-28 13:42:18Z luigi $
  *
- * netmap support for "r8169" (re) (UNTESTED)
+ * netmap support for: r8169 (re, linux version)
  * For details on netmap support please see ixgbe_netmap.h
  * 1 tx ring, 1 rx ring, 1 lock, crcstrip ? reinit tx addr,
  */
@@ -48,14 +48,15 @@ static void rtl8169_wait_for_quiescence(struct ifnet *);
 static int
 re_netmap_reg(struct netmap_adapter *na, int onoff)
 {
-        struct ifnet *ifp = na->ifp;
+	struct ifnet *ifp = na->ifp;
 	int error = 0;
 
 	rtnl_lock();
 	rtl8169_wait_for_quiescence(ifp);
 	rtl8169_close(ifp);
 
-	if (onoff) { /* enable netmap mode */
+	/* enable or disable flags and callbacks in na and ifp */
+	if (onoff) {
 		nm_set_native_flags(na);
 
 		if (rtl8169_open(ifp) < 0) {
@@ -78,21 +79,20 @@ fail:
 static int
 re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
-        struct ifnet *ifp = na->ifp;
+	struct ifnet *ifp = na->ifp;
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int nm_i;	/* index into the netmap ring */
 	u_int nic_i;	/* index into the NIC ring */
 	u_int n, new_slots;
-	u_int const cur = nm_txsync_prologue(kring, &new_slots);
 	u_int const lim = kring->nkr_num_slots - 1;
-	/* interrupts every half ring */
-	u_int report_frequency = kring->nkr_num_slots >> 1;
+	u_int const cur = nm_txsync_prologue(kring, &new_slots);
 
+	/* device-specific */
 	struct SOFTC_T *sc = netdev_priv(ifp);
 	void __iomem *ioaddr = sc->mmio_addr;
 
-	if (cur > lim)
+	if (cur > lim)	/* error checking in nm_txsync_prologue() */
 		return netmap_ring_reinit(kring);
 
 	rmb();
@@ -101,22 +101,20 @@ re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	 * First part: process new packets to send.
 	 */
 	if (!netif_carrier_ok(ifp)) {
-		/* All the new slots are now unavailable. */
 		kring->nr_hwavail -= new_slots;
 		goto out;
 	}
+
 	nm_i = kring->nr_hwcur;
 	if (nm_i != cur) {	/* we have new packets to send */
 		nic_i = sc->cur_tx; // XXX use internal macro ?
-
 		for (n = 0; nm_i != cur; n++) {
-			/* slot is the current slot in the netmap ring */
 			struct netmap_slot *slot = &ring->slot[nm_i];
 			int len = slot->len;
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
 
-			/* curr is the current slot in the nic ring */
+			/* device specific */
 			struct TxDesc *curr = &sc->TxDescArray[nic_i];
 			uint32_t flags = slot->len | LastFrag | DescOwn | FirstFrag ;
 
@@ -126,7 +124,7 @@ re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 				flags |= RingEnd;
 
 			if (slot->flags & NS_BUF_CHANGED) {
-				/* buffer has changed, unload and reload map */
+				/* buffer has changed, reload map */
 				// netmap_reload_map(pdev, DMA_TO_DEVICE, old_paddr, addr);
 				curr->addr = htole64(paddr);
 			}
@@ -136,15 +134,16 @@ re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			nic_i = nm_next(nic_i, lim);
 		}
 		kring->nr_hwcur = cur; /* the saved ring->cur */
-		kring->nr_hwavail -= new_slots
-;
+		/* decrease avail by # of packets sent minus previous ones */
+		kring->nr_hwavail -= new_slots;
+
 		sc->cur_tx = nic_i;
 		wmb(); /* synchronize writes to the NIC ring */
 		RTL_W8(TxPoll, NPQ);	/* start ? */
 	}
 
 	/*
-	 * Second part: reclaim completed transmissions.
+	 * Second part: reclaim buffers for completed transmissions.
 	 */
 	if (flags & NAF_FORCE_RECLAIM || kring->nr_hwavail < 1) {
 		for (n = 0, nic_i = sc->dirty_tx; nic_i != sc->cur_tx; n++) {
@@ -159,7 +158,7 @@ re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		}
 	}
 out:
-	nm_kring_finalize(kring, k);
+	nm_txsync_finalize(kring, cur);
 	return 0;
 }
 
@@ -170,7 +169,7 @@ out:
 static int
 re_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
-        struct ifnet *ifp = na->ifp;
+	struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *sc = netdev_priv(ifp);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
@@ -181,15 +180,18 @@ re_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	u_int const cur = nm_rxsync_prologue(kring, &resvd); /* cur + res */
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 
+	if (!netif_carrier_ok(ifp))
+		return 0;
+
 	if (cur > lim)
 		return netmap_ring_reinit(kring);
 
 	rmb();
 	/*
-	 * First part: reclaim packets that userspace has freed.
+	 * First part: import newly received packets.
 	 *
-	 * The device uses all the buffers in the ring, so we need
-	 * another termination condition in addition to DescOwn
+	 * NOTE: This device uses all the buffers in the ring, so we
+	 * need another termination condition in addition to DescOwn
 	 * cleared (all buffers could have it cleared. The easiest one
 	 * is to limit the amount of data reported up to 'lim'
 	 */
@@ -209,8 +211,8 @@ re_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			total_len = rxstat & 0x00001FFF;
 			/* XXX subtract crc */
 			total_len = (total_len < 4) ? 0 : total_len - 4;
-			kring->ring->slot[j].len = total_len;
-			kring->ring->slot[j].flags = slot_flags;
+			ring->slot[nm_i].len = total_len;
+			ring->slot[nm_i].flags = slot_flags;
 			nm_i = nm_next(nm_i, lim);
 			nic_i = nm_next(nic_i, lim);
 		}
@@ -228,9 +230,10 @@ re_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	if (nm_i != cur) {
 		nic_i = netmap_idx_k2n(kring, nm_i);
 		for (n = 0; nm_i != cur; n++) {
-			struct netmap_slot *slot = ring->slot + nm_i;
+			struct netmap_slot *slot = &ring->slot[nm_i];
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
+
 			struct RxDesc *curr = &sc->RxDescArray[nic_i];
 			uint32_t flags = NETMAP_BUF_SIZE | DescOwn;
 
@@ -241,10 +244,11 @@ re_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 				flags |= RingEnd;
 
 			if (slot->flags & NS_BUF_CHANGED) {
+				/* buffer has changed, reload map */
 				// netmap_reload_map(pdev, DMA_TO_DEVICE, old_paddr, addr);
 				curr->addr = htole64(paddr);
+				slot->flags &= ~NS_BUF_CHANGED;
 			}
-			slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
 			curr->opts1 = htole32(flags);
 			nm_i = nm_next(nm_i, lim);
 			nic_i = nm_next(nic_i, lim);
@@ -253,7 +257,8 @@ re_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		kring->nr_hwcur = cur;
 		wmb(); // XXX needed ?
 	}
-	/* tell userspace that there are new packets */
+
+	/* tell userspace that there might be new packets */
 	ring->avail = kring->nr_hwavail - resvd;
 	return 0;
 
@@ -348,4 +353,5 @@ re_netmap_attach(struct SOFTC_T *sc)
 	na.num_tx_rings = na.num_rx_rings = 1;
 	netmap_attach(&na);
 }
+
 /* end of file */

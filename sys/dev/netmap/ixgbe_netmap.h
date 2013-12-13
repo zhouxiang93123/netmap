@@ -119,31 +119,25 @@ ixgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 	struct adapter *adapter = ifp->if_softc;
 	int error = 0;
 
-
 	IXGBE_CORE_LOCK(adapter);
-	ixgbe_disable_intr(adapter);
+	ixgbe_disable_intr(adapter); // XXX maybe ixgbe_stop ?
 
 	/* Tell the stack that the interface is no longer active */
 	ifp->if_drv_flags &= ~(IFF_DRV_RUNNING | IFF_DRV_OACTIVE);
 
 	set_crcstrip(&adapter->hw, onoff);
-	if (onoff) { /* enable netmap mode */
-		/* set flags, save and replace if_transmit */
+	/* enable or disable flags and callbacks in na and ifp */
+	if (onoff) {
 		nm_set_native_flags(na);
-		/*
-		 * reinitialize the adapter, now with netmap flag set,
-		 * so the rings will be set accordingly.
-		 */
 		ixgbe_init_locked(adapter);
-		if ((ifp->if_drv_flags & (IFF_DRV_RUNNING | IFF_DRV_OACTIVE)) == 0) {
+		/* should set IFF_DRV_RUNNING on successful completion */
+		if (!(ifp->if_drv_flags & IFF_DRV_RUNNING)) {
 			error = ENOMEM;
 			goto fail;
 		}
-	} else { /* reset normal mode (explicit request or netmap failed) */
+	} else {
 fail:
-		/* clear flags, restore if_transmit */
 		nm_clear_native_flags(na);
-		/* initialize the card, this time in standard mode */
 		ixgbe_init_locked(adapter);	/* also enables intr */
 	}
 	set_crcstrip(&adapter->hw, onoff); // XXX why twice ?
@@ -176,8 +170,8 @@ ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	u_int nm_i;	/* index into the netmap ring */
 	u_int nic_i;	/* index into the NIC ring */
 	u_int n, new_slots;
-	u_int const cur = nm_txsync_prologue(kring, &new_slots);
 	u_int const lim = kring->nkr_num_slots - 1;
+	u_int const cur = nm_txsync_prologue(kring, &new_slots);
 	/*
 	 * interrupts on every tx packet are expensive so request
 	 * them every half ring, or where NS_REPORT is set
@@ -189,7 +183,7 @@ ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct tx_ring *txr = &adapter->tx_rings[ring_nr];
 	int reclaim_tx;
 
-	if (cur > lim)
+	if (cur > lim)	/* error checking in nm_txsync_prologue() */
 		return netmap_ring_reinit(kring);
 
 	bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
@@ -232,7 +226,7 @@ ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 
 	nm_i = kring->nr_hwcur;
 	if (nm_i != cur) {	/* we have new packets to send */
-		nic_i = netmap_idx_k2n(kring, nm_i); /* NIC index */
+		nic_i = netmap_idx_k2n(kring, nm_i);
 
 		prefetch(&ring->slot[nm_i]);
 		prefetch(&txr->tx_buffers[nic_i]);
@@ -277,8 +271,8 @@ ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			nic_i = nm_next(nic_i, lim);
 		}
 		kring->nr_hwcur = cur; /* the saved ring->cur */
-		/* decrease avail by number of packets  sent */
-		kring->nr_hwavail -= n;
+		/* decrease avail by # of packets sent minus previous ones */
+		kring->nr_hwavail -= new_slots;
 
 		/* synchronize the NIC ring */
 		bus_dmamap_sync(txr->txdma.dma_tag, txr->txdma.dma_map,
@@ -289,7 +283,7 @@ ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	}
 
 	/*
-	 * Second part: Reclaim buffers for completed transmissions.
+	 * Second part: reclaim buffers for completed transmissions.
 	 * Because this is expensive (we read a NIC register etc.)
 	 * we only do it in specific cases (see below).
 	 */
@@ -398,7 +392,7 @@ ixgbe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 
 	/*
-	 * First part, import newly received packets.
+	 * First part: import newly received packets.
 	 *
 	 * nm_i is the index of the next free slot in the netmap ring,
 	 * nic_i is the index of the next received packet in the NIC ring,

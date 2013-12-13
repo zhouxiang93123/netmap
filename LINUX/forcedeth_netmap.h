@@ -26,7 +26,7 @@
 /*
  * $Id: forcedeth_netmap.h 10670 2012-02-27 21:15:38Z luigi $
  *
- * netmap support for 'forcedeth' (nfe) driver
+ * netmap support for: forcedeth (nfe, linux)
  * For details on netmap support see ixgbe_netmap.h
 
 The driver supports ORIGinal and EXtended descriptors through unions.
@@ -59,7 +59,7 @@ This makes sure that there is always a free slot.
 
 
 /*
- * support for netmap register/unregisted. We are already under core lock.
+ * Register/unregister. We are already under netmap lock.
  * only called on the first register or the last unregister.
  * The "forcedeth" driver is poorly written, the reinit routine
  * is replicated multiple times and one way to achieve it is to
@@ -70,7 +70,6 @@ forcedeth_netmap_reg(struct netmap_adapter *na, int onoff)
 {
         struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *np = netdev_priv(ifp);
-	int error = 0;
 	u8 __iomem *base = get_hwbase(ifp);
 
 	// first half of nv_change_mtu() - down
@@ -88,7 +87,6 @@ forcedeth_netmap_reg(struct netmap_adapter *na, int onoff)
 	if (onoff) {
 		nm_set_native_flags(na);
 	} else {
-		/* restore if_transmit */
 		nm_clear_native_flags(na);
 	}
 	// second half of nv_change_mtu() -- up
@@ -112,7 +110,7 @@ forcedeth_netmap_reg(struct netmap_adapter *na, int onoff)
 	nv_napi_enable(ifp);
 	nv_enable_irq(ifp);
 
-	return (error);
+	return (0);
 }
 
 
@@ -127,72 +125,52 @@ forcedeth_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct netmap_ring *ring = kring->ring;
 	u_int nm_i;	/* index into the netmap ring */
 	u_int nic_i;	/* index into the NIC ring */
-	u_int n;
-	u_int const cur = ring->cur; /* read only once */
+	u_int n, new_slots;
 	u_int const lim = kring->nkr_num_slots - 1;
+	u_int const cur = nm_txsync_prologue(kring, &new_slots);
 	/* interrupt every half ring */
-	u_int report_frequency = kring->nkr_num_slots >> 1;
 
+	/* device specific */
 	struct SOFTC_T *np = netdev_priv(ifp);
 	struct ring_desc_ex *txr = np->tx_ring.ex;
 	uint32_t lastpkt = (np->desc_ver == DESC_VER_1 ? NV_TX_LASTPACKET : NV_TX2_LASTPACKET);
-	int new_slots;
 	u_int k;
 
-	if (cur > lim)
+	if (cur > lim)	/* error checking in nm_txsync_prologue() */
 		return netmap_ring_reinit(kring);
 
+	/*
+	 * First part: process new packets to send.
+	 */
 
-	/* Sync the TX descriptor list */
-	rmb();
-	/* XXX (move after tx) record completed transmissions */
-	// l is the current pointer, k is the last pointer
-	nic_i =  np->get_tx.ex - txr;
-	k = np->put_tx.ex - txr;
-        for (n = 0; nic_i != k; n++) {
-		uint32_t cmdstat = le32toh(txr[nic_i].flaglen);
-		if (cmdstat & NV_TX2_VALID)
-			break;
-		if (++nic_i == np->tx_ring_size)
-			nic_i = 0;
-	}
-	if (n > 0) {
-		np->get_tx.ex = txr + nic_i;
-		kring->nr_hwavail += n;
-	}
-
-	/* now deal with new transmissions */
-	nm_i = kring->nr_hwcur;
-	new_slots = cur - nm_i - kring->nr_hwreserved;
-	if (new_slots < 0)
-		new_slots += kring->nkr_num_slots;
-	if (new_slots > kring->nr_hwavail) {
-		RD(5, "=== nm_i %d cur %d d %d hwavail %d hwreserved %d",
-			nm_i, cur, new_slots, kring->nr_hwavail, kring->nr_hwreserved);
-		return netmap_ring_reinit(kring);
-	}
 	if (!netif_carrier_ok(ifp)) {
 		kring->nr_hwavail -= new_slots;
 		goto out;
 	}
+
+	nm_i = kring->nr_hwcur;
 	if (nm_i != cur) {	/* we have new packets to send */
 		nic_i = np->put_tx.ex - txr; // NIC pointer
 		for (n = 0; nm_i != cur; n++) {
 			struct netmap_slot *slot = &ring->slot[nm_i];
-			int len = slot->len;
+			u_int len = slot->len;
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
 
+			/* device specific */
 			struct ring_desc_ex *put_tx = txr + nic_i;
+			// XXX check who needs lastpkt
 			int cmd = (len - 1) | NV_TX2_VALID | lastpkt;
 
 			NM_CHECK_ADDR_LEN(addr, len);
 
 			if (slot->flags & NS_BUF_CHANGED) {
-				/* buffer has changed, unload and reload map */
+				/* buffer has changed, reload map */
 				// netmap_reload_map(pdev, DMA_TO_DEVICE, old_paddr, addr);
 			}
 			slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
+
+			/* Fill the slot in the NIC ring. */
 			put_tx->bufhigh = htole32(dma_high(paddr));
 			put_tx->buflow = htole32(dma_low(paddr));
 			put_tx->flaglen = htole32(cmd);
@@ -201,14 +179,36 @@ forcedeth_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			nic_i = nm_next(nic_i, lim);
 		}
 		np->put_tx.ex = txr + nic_i;
-		kring->nr_hwcur = cur;
-		/* decrease avail by number of new slots */
+		kring->nr_hwcur = cur; /* the saved ring->cur */
+		/* decrease avail by # of packets sent minus previous ones */
 		kring->nr_hwavail -= new_slots;
-		wmb();
-		/* start ? where is the new index ? */
+		wmb();	/* synchronize writes to the NIC ring */
+		/* restart tx unit where is the new index ? */
 		writel(NVREG_TXRXCTL_KICK|np->txrxctl_bits,
 			get_hwbase(ifp) + NvRegTxRxControl);
 	}
+
+	/*
+	 * Second part: reclaim buffers for completed transmissions
+	 */
+	/* Sync the TX descriptor list */
+	rmb();
+	nic_i =  np->get_tx.ex - txr;
+	k = np->put_tx.ex - txr;
+	if (nic_i != k) {
+		for (n = 0; nic_i != k; n++) {
+			uint32_t cmdstat = le32toh(txr[nic_i].flaglen);
+			if (cmdstat & NV_TX2_VALID)
+				break;
+			if (++nic_i == np->tx_ring_size)
+				nic_i = 0;
+		}
+		if (n > 0) {
+			np->get_tx.ex = txr + nic_i;
+			kring->nr_hwavail += n;
+		}
+	}
+
 out:
 	nm_txsync_finalize(kring, cur);
 
@@ -222,17 +222,17 @@ out:
 static int
 forcedeth_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
-        struct ifnet *ifp = na->ifp;
+	struct ifnet *ifp = na->ifp;
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int nm_i;	/* index into the netmap ring */
 	u_int nic_i;	/* index into the NIC ring */
-	u_int n;
+	u_int n, resvd;
 	u_int const lim = kring->nkr_num_slots - 1;
-	u_int cur = ring->cur; /* note, excludes reserved */
-	u_int resvd = ring->reserved;
+	u_int const cur = nm_rxsync_prologue(kring, &resvd); /* cur + res */
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 
+	/* device specific */
 	struct SOFTC_T *np = netdev_priv(ifp);
 	struct ring_desc_ex *rxr = np->rx_ring.ex;
 	u_int refill;	// refill position
@@ -240,6 +240,9 @@ forcedeth_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	if (cur > lim)
 		return netmap_ring_reinit(kring);
 
+	/*
+	 * First part: import newly received packets.
+	 */
 	rmb();
 	if (netmap_no_pendintr || force_update) {
 		uint16_t slot_flags = kring->nkr_slot_flags;
@@ -271,32 +274,26 @@ forcedeth_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	/*
 	 * Second part: skip past packets that userspace has released.
 	 */
-
-	if (resvd > 0) {
-		if (resvd + ring->avail >= lim) {
-			D("XXX invalid reserve/avail %d %d", resvd, ring->avail);
-			ring->reserved = resvd = 0; // XXX panic...
-		}
-		cur = (cur >= resvd) ? cur - resvd : cur + lim + 1 - resvd;
-	}
 	nm_i = kring->nr_hwcur; // refill is one before nic_i
 	if (nm_i != cur) {
 		nic_i = netmap_idx_k2n(kring, nm_i);
 		refill = np->put_rx.ex - rxr; /* refill position */
 
 		for (n = 0; nm_i != cur; n++) {
-			struct netmap_slot *slot = ring->slot + nm_i;
-			struct ring_desc_ex *desc = rxr + nic_i;
+			struct netmap_slot *slot = &ring->slot[nm_i];
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
+
+			struct ring_desc_ex *desc = rxr + nic_i;
 
 			if (addr == netmap_buffer_base) /* bad buf */
 				goto ring_reset;
 
 			if (slot->flags & NS_BUF_CHANGED) {
+				/* buffer has changed, reload map */
 				// netmap_reload_map(pdev, DMA_TO_DEVICE, old_paddr, addr);
+				slot->flags &= ~NS_BUF_CHANGED;
 			}
-			slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
 
 			desc->flaglen = htole32(NETMAP_BUF_SIZE);
 			desc->bufhigh = htole32(dma_high(paddr));
@@ -313,8 +310,10 @@ forcedeth_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		/* Flush the RX DMA ring */
 		wmb();
 	}
-	/* tell userspace that there are new packets */
+
+	/* tell userspace that there are might be new packets */
 	ring->avail = kring->nr_hwavail - resvd;
+
 	return 0;
 
 ring_reset:

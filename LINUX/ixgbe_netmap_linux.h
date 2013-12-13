@@ -28,7 +28,6 @@
  *
  * netmap support for: ixgbe (LINUX version)
  *
- *
  * This file is meant to be a reference on how to implement
  * netmap support for a network driver.
  * This file contains code but only static or inline functions used
@@ -44,7 +43,7 @@
 #define SOFTC_T	ixgbe_adapter
 
 /*
- * Adaptation to various version of the driver.
+ * Adaptation to different versions of the driver.
  * Recent drivers (3.4 and above) redefine some macros
  */
 #ifndef	IXGBE_TX_DESC_ADV
@@ -63,7 +62,8 @@ ixgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 	struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 
-	/* Tell the stack that the interface is no longer active */
+	// adapter->netdev->trans_start = jiffies; // disable watchdog ?
+	/* protect against other reinit */
 	while (test_and_set_bit(__IXGBE_RESETTING, &adapter->state))
 		usleep_range(1000, 2000);
 
@@ -71,11 +71,13 @@ ixgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 	if (netif_running(adapter->netdev))
 		ixgbe_down(adapter);
 
-	if (onoff) { /* enable netmap mode */
+	/* enable or disable flags and callbacks in na and ifp */
+	if (onoff) {
 		nm_set_native_flags(na);
-	} else { /* reset normal mode (explicit request or netmap failed) */
+	} else {
 		nm_clear_native_flags(na);
 	}
+	/* XXX SRIOV migth need another 2sec wait */
 	if (netif_running(adapter->netdev))
 		ixgbe_up(adapter);	/* also enables intr */
 	rtnl_unlock();
@@ -109,8 +111,8 @@ ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	u_int nm_i;	/* index into the netmap ring */
 	u_int nic_i;	/* index into the NIC ring */
 	u_int n, new_slots;
-	u_int const cur = nm_txsync_prologue(kring, &new_slots);
 	u_int const lim = kring->nkr_num_slots - 1;
+	u_int const cur = nm_txsync_prologue(kring, &new_slots);
 	/*
 	 * interrupts on every tx packet are expensive so request
 	 * them every half ring, or where NS_REPORT is set
@@ -158,15 +160,6 @@ ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	 *
 	 * Finally, on 10G and faster drivers, it might be useful
 	 * to prefetch the next slot and txr entry.
-	 *
-	 * XXX to fix:
-	 * nr_hwreserved accounts for packets that were acknowledged
-	 * in previous calls but not actually sent because the device
-	 * was not ready. In this case nr_hwcur is not incremented,
-	 * but nr_hwavail is decremented by nr_hwreserved so it can
-	 * eventually become 0 causing poll() to block when all slots
-	 * are exhausted. Since this is the only actual use, we might
-	 * as well just set a flag to tell whether we should suspend.
 	 */
 
 	if (!netif_carrier_ok(ifp)) {
@@ -176,8 +169,7 @@ ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 
 	nm_i = kring->nr_hwcur;
 	if (nm_i != cur) {	/* we have new packets to send */
-		nic_i = netmap_idx_k2n(kring, nm_i); /* NIC index */
-
+		nic_i = netmap_idx_k2n(kring, nm_i);
 		for (n = 0; nm_i != cur; n++) {
 			struct netmap_slot *slot = &ring->slot[nm_i];
 			u_int len = slot->len;
@@ -217,7 +209,7 @@ ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	}
 
 	/*
-	 * Second part: Reclaim buffers for completed transmissions.
+	 * Second part: reclaim buffers for completed transmissions.
 	 * Because this is expensive (we read a NIC register etc.)
 	 * we only do it in specific cases (see below).
 	 */
@@ -309,10 +301,10 @@ ixgbe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int nm_i;	/* index into the netmap ring */
-	u_int nic_i;	/* index into the nic ring */
+	u_int nic_i;	/* index into the NIC ring */
 	u_int n, resvd;
 	u_int const lim = kring->nkr_num_slots - 1;
-	u_int const cur = nm_rxsync_prologue(kring, &resvd); /* cur+res */
+	u_int const cur = nm_rxsync_prologue(kring, &resvd); /* cur + res */
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 
 	/* device specific */
@@ -328,7 +320,7 @@ ixgbe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	rmb();
 
 	/*
-	 * First part, import newly received packets.
+	 * First part: import newly received packets.
 	 *
 	 * nm_i is the index of the next free slot in the netmap ring,
 	 * nic_i is the index of the next received packet in the NIC ring,
@@ -367,7 +359,7 @@ ixgbe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	}
 
 	/*
-	 * Second, skip past packets that userspace has released
+	 * Second part: skip past packets that userspace has released.
 	 * (kring->nr_hwcur to ring->cur - ring->reserved excluded),
 	 * and make the buffers available for reception.
 	 * As usual nm_i is the index in the netmap ring,
