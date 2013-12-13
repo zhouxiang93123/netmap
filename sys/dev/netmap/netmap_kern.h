@@ -702,6 +702,22 @@ nm_clear_native_flags(struct netmap_adapter *na)
 #endif
 }
 
+/*
+ * update kring and ring at the end of txsync
+ */
+static inline void
+nm_txsync_finalize(struct netmap_kring *kring, u_int cur)
+{
+	/* recompute hwreserved */
+	kring->nr_hwreserved = cur - kring->nr_hwcur;
+	if (kring->nr_hwreserved < 0)
+		kring->nr_hwreserved += kring->nkr_num_slots;
+
+	/* update avail and reserved to what the kernel knows */
+	kring->ring->avail = kring->nr_hwavail;
+	kring->ring->reserved = kring->nr_hwreserved;
+}
+
 /* check/fix address and len in tx rings */
 #if 1 /* debug version */
 #define	NM_CHECK_ADDR_LEN(_a, _l)	do {				\
@@ -719,6 +735,7 @@ nm_clear_native_flags(struct netmap_adapter *na)
 #endif
 
 
+/*---------------------------------------------------------------*/
 /*
  * Support routines to be used with the VALE switch
  */

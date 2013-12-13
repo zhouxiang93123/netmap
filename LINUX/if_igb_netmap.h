@@ -101,8 +101,8 @@ igb_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct ifnet *ifp = na->ifp;
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	u_int nm_i;	/* index in the netmap ring */
-	u_int nic_i;	/* index in the NIC ring */
+	u_int nm_i;	/* index into the netmap ring */
+	u_int nic_i;	/* index into the NIC ring */
 	u_int n;
 	u_int const cur = ring->cur; /* read only once */
 	u_int const lim = kring->nkr_num_slots - 1;
@@ -181,7 +181,7 @@ igb_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	}
 
 	/*
-	 * Second part: Reclaim buffers for completed transmissions.
+	 * Second part: reclaim buffers for completed transmissions.
 	 */
 	if (flags & NAF_FORCE_RECLAIM || kring->nr_hwavail < 1) {
 		int delta;
@@ -209,15 +209,7 @@ igb_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		}
 	}
 out:
-	/* recompute hwreserved */
-	kring->nr_hwreserved = cur - nm_i;
-	if (kring->nr_hwreserved < 0) {
-		kring->nr_hwreserved += kring->nkr_num_slots;
-	}
-
-	/* update avail and reserved to what the kernel knows */
-	ring->avail = kring->nr_hwavail;
-	ring->reserved = kring->nr_hwreserved;
+	nm_txsync_finalize(kring, cur);
 
 	return 0;
 }
@@ -253,7 +245,7 @@ igb_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	rmb();
 
 	/*
-	 * First part, import newly received packets.
+	 * First part: import newly received packets.
 	 */
 	if (netmap_no_pendintr || force_update) {
 		uint16_t slot_flags = kring->nkr_slot_flags;
@@ -280,9 +272,9 @@ igb_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	}
 
 	/*
-	 * Second, skip past packets that userspace has released
+	 * Second part: skip past packets that userspace has released.
 	 */
-	nm_i = kring->nr_hwcur; /* netmap ring index */
+	nm_i = kring->nr_hwcur;
 	if (resvd > 0) {
 		if (resvd + ring->avail >= lim + 1) {
 			D("XXX invalid reserve/avail %d %d", resvd, ring->avail);
@@ -291,7 +283,7 @@ igb_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		cur = (cur >= resvd) ? cur - resvd : cur + lim + 1 - resvd;
 	}
 	if (nm_i != cur) {
-		nic_i = netmap_idx_k2n(kring, nm_i); /* NIC ring index */
+		nic_i = netmap_idx_k2n(kring, nm_i);
 		for (n = 0; nm_i != cur; n++) {
 			struct netmap_slot *slot = &ring->slot[nm_i];
 			uint64_t paddr;

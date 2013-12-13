@@ -396,18 +396,8 @@ bnx2x_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		DOORBELL(adapter, ring_nr, txdata->tx_db.raw);
 	}
 out:
-	/* recompute hwreserved */
-	kring->nr_hwreserved = k - j;
-	if (kring->nr_hwreserved < 0) {
-		kring->nr_hwreserved += kring->nkr_num_slots;
-	}
-	if (ring->avail == 0 && kring->nr_hwavail >0)
-		ND(3,"txring %d restarted", ring_nr);
-	/* update avail and reserved to what the kernel knows */
-	ring->avail = kring->nr_hwavail;
-	ring->reserved = kring->nr_hwreserved;
-	if (ring->avail == 0)
-		ND(3,"txring %d full", ring_nr);
+	nm_txsync_finalize(kring, cur);
+	return 0;
 err:
 	if (error)
 		return netmap_ring_reinit(kring);

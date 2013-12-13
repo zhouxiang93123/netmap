@@ -91,9 +91,9 @@ re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		return netmap_ring_reinit(kring);
 
 	rmb();
+
 	/*
-	 * Process new packets to send. j is the current index in the
-	 * netmap ring, l is the corresponding index in the NIC ring.
+	 * First part: process new packets to send.
 	 */
 	j = kring->nr_hwcur;
 	new_slots = k - j - kring->nr_hwreserved;
@@ -111,15 +111,17 @@ re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	}
 	if (j != k) {	/* we have new packets to send */
 		l = sc->cur_tx; // XXX use internal macro ?
+
 		for (n = 0; j != k; n++) {
 			/* slot is the current slot in the netmap ring */
 			struct netmap_slot *slot = &ring->slot[j];
+			int len = slot->len;
+			uint64_t paddr;
+			void *addr = PNMB(slot, &paddr);
+
 			/* curr is the current slot in the nic ring */
 			struct TxDesc *curr = &sc->TxDescArray[l];
 			uint32_t flags = slot->len | LastFrag | DescOwn | FirstFrag ;
-			uint64_t paddr;
-			void *addr = PNMB(slot, &paddr);
-			int len = slot->len;
 
 			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
 				sc->cur_tx = l; // XXX fix
@@ -148,8 +150,10 @@ re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		RTL_W8(TxPoll, NPQ);	/* start ? */
 	}
 
+	/*
+	 * Second part: reclaim completed transmissions.
+	 */
 	if (n == 0 || kring->nr_hwavail < 1) {
-		/* record completed transmissions */
 		for (n = 0, l = sc->dirty_tx; l != sc->cur_tx; n++) {
 			if (le32toh(sc->TxDescArray[l].opts1) & DescOwn)
 				break;
@@ -162,16 +166,7 @@ re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		}
 	}
 out:
-	/* recompute hwreserved */
-	kring->nr_hwreserved = k - j;
-	if (kring->nr_hwreserved < 0) {
-		kring->nr_hwreserved += kring->nkr_num_slots;
-	}
-
-	/* update avail and reserved to what the kernel knows */
-	ring->avail = kring->nr_hwavail;
-	ring->reserved = kring->nr_hwreserved;
-
+	nm_kring_finalize(kring, k);
 	return 0;
 }
 
