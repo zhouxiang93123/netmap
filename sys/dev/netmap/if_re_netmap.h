@@ -167,8 +167,8 @@ re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			kring->nr_hwavail += n;
 		}
 	}
-	/* update avail to what the kernel knows */
-	ring->avail = kring->nr_hwavail;
+
+	nm_txsync_finalize(kring, cur);
 
 	return 0;
 }
