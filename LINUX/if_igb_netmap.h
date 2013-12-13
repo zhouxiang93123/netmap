@@ -103,8 +103,8 @@ igb_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct netmap_ring *ring = kring->ring;
 	u_int nm_i;	/* index into the netmap ring */
 	u_int nic_i;	/* index into the NIC ring */
-	u_int n;
-	u_int const cur = ring->cur; /* read only once */
+	u_int n, new_slots;
+	u_int const cur = nm_txsync_prologue(kring, &new_slots);
 	u_int const lim = kring->nkr_num_slots - 1;
 	/* generate an interrupt approximately every half ring */
 	u_int report_frequency = kring->nkr_num_slots >> 1;
@@ -112,7 +112,6 @@ igb_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	/* device-specific */
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct igb_ring* txr = adapter->tx_ring[ring_nr];
-	int new_slots;
 
 	if (cur > lim)
 		return netmap_ring_reinit(kring);
@@ -121,20 +120,12 @@ igb_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	/*
 	 * First part: process new packets to send.
 	 */
-	nm_i = kring->nr_hwcur;
-	new_slots = cur - nm_i - kring->nr_hwreserved;
-	if (new_slots < 0)
-		new_slots += kring->nkr_num_slots;
-	if (new_slots > kring->nr_hwavail) {
-		RD(5, "=== nm_i %d cur %d d %d hwavail %d hwreserved %d",
-			nm_i, cur, new_slots, kring->nr_hwavail, kring->nr_hwreserved);
-		return netmap_ring_reinit(kring);
-	}
 	if (!netif_carrier_ok(ifp)) {
 		kring->nr_hwavail -= new_slots;
 		goto out;
 	}
 
+	nm_i = kring->nr_hwcur;
 	if (nm_i != cur) {	/* we have new packets to send */
 		uint32_t olinfo_status=0;
 		nic_i = netmap_idx_k2n(kring, nm_i);
@@ -154,9 +145,8 @@ igb_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 
 			if (slot->flags & NS_BUF_CHANGED) {
 				// netmap_reload_map(pdev, DMA_TO_DEVICE, old_paddr, addr);
-				slot->flags &= ~NS_BUF_CHANGED;
 			}
-			slot->flags &= ~NS_REPORT;
+			slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
 
 			curr->read.buffer_addr = htole64(paddr);
 			// XXX check olinfo and cmd_type_len
@@ -226,10 +216,9 @@ igb_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct netmap_ring *ring = kring->ring;
 	u_int nm_i;	/* index into the netmap ring */
 	u_int nic_i;	/* index into the NIC ring */
-	u_int n;
-	u_int cur = ring->cur; /* note, excludes reserved */
+	u_int n, resvd;
+	u_int const cur = nm_rxsync_prologue(kring, &resvd); /* cur + res */
 	u_int const lim = kring->nkr_num_slots - 1;
-	u_int resvd = ring->reserved;
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 
 	/* device specific */
@@ -275,13 +264,6 @@ igb_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	 * Second part: skip past packets that userspace has released.
 	 */
 	nm_i = kring->nr_hwcur;
-	if (resvd > 0) {
-		if (resvd + ring->avail >= lim + 1) {
-			D("XXX invalid reserve/avail %d %d", resvd, ring->avail);
-			ring->reserved = resvd = 0; // XXX panic...
-		}
-		cur = (cur >= resvd) ? cur - resvd : cur + lim + 1 - resvd;
-	}
 	if (nm_i != cur) {
 		nic_i = netmap_idx_k2n(kring, nm_i);
 		for (n = 0; nm_i != cur; n++) {

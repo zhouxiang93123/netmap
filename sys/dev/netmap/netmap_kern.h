@@ -703,6 +703,20 @@ nm_clear_native_flags(struct netmap_adapter *na)
 }
 
 /*
+ * validates parameters in the ring/kring, returns a value for cur,
+ * and the 'new_slots' value in the argument.
+ * If any error, returns cur > lim to force a reinit.
+ */
+u_int nm_txsync_prologue(struct netmap_kring *, u_int *);
+
+/*
+ * validates parameters in the ring/kring, returns a value for cur,
+ * and the 'reserved' value in the argument.
+ * If any error, returns cur > lim to force a reinit.
+ */
+u_int nm_rxsync_prologue(struct netmap_kring *, u_int *);
+
+/*
  * update kring and ring at the end of txsync
  */
 static inline void

@@ -253,11 +253,9 @@ sfxge_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			kring->nr_hwavail += n;
 		}
 	}
-	/* update avail to what the kernel knows */
-	ring->avail = kring->nr_hwavail;
 
-	if (kring->nr_hwavail > lim)
-		return netmap_ring_reinit(kring);
+	nm_txsync_finalize(kring, k);
+
 	return 0;
 }
 

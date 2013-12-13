@@ -1110,6 +1110,149 @@ out:
 
 
 /*
+ * validate parameters on entry for *_txsync()
+ * Returns ring->cur if ok, or something >= kring->nkr_num_slots
+ * in case of error. The extra argument is a pointer to
+ * 'new_bufs'. XXX this may be deprecated at some point.
+ *
+ * Below is a correct configuration on input. ring->cur
+ * must be in the region covered by kring->hwavail,
+ * and ring->avail and kring->avail should end at the same slot.
+ *
+ *         +-hwcur
+ *         |
+ *         v<--hwres-->|<-----hwavail---->
+ *   ------+------------------------------+-------- ring
+ *                          |
+ *                          |<---avail--->
+ *                          +--cur
+ *
+ */
+u_int
+nm_txsync_prologue(struct netmap_kring *kring, u_int *new_slots)
+{
+	struct netmap_ring *ring = kring->ring;
+	u_int cur = ring->cur; /* read only once */
+	u_int avail = ring->avail; /* read only once */
+	u_int n = kring->nkr_num_slots;
+	u_int kstart, kend, a;
+
+#if 1 /* kernel sanity checks */
+	if (kring->nr_hwcur >= n ||
+	    kring->nr_hwreserved >= n || kring->nr_hwavail >= n ||
+	    kring->nr_hwreserved + kring->nr_hwavail >= n)
+		goto error;
+#endif /* kernel sanity checks */
+	kstart = kring->nr_hwcur + kring->nr_hwreserved;
+	if (kstart >= n)
+		kstart -= n;
+	kend = kstart + kring->nr_hwavail;
+	/* user sanity checks. a is the expected avail */
+	if (cur < kstart) {
+		/* too low, but maybe wraparound */
+		if (cur + n > kend)
+			goto error;
+		*new_slots = cur + n - kstart;
+		a = kend - cur - n;
+	} else {
+		if (cur > kend)
+			goto error;
+		*new_slots = cur - kstart;
+		a = kend - cur;
+	}
+	if (a != avail) {
+		RD(5, "wrong but fixable avail have %d need %d",
+			avail, a);
+		ring->avail = avail = a;
+	}
+	return cur;
+
+error:
+	RD(5, "kring error: hwcur %d hwres %d hwavail %d cur %d av %d",
+		kring->nr_hwcur,
+		kring->nr_hwreserved, kring->nr_hwavail,
+		cur, avail);
+	return n;
+}
+
+
+/*
+ * validate parameters on entry for *_rxsync()
+ * Returns ring->cur - ring->reserved if ok,
+ * or something >= kring->nkr_num_slots
+ * in case of error. The extra argument is a pointer to
+ * 'resvd'. XXX this may be deprecated at some point.
+ *
+ * Below is a correct configuration on input. ring->cur and
+ * ring->reserved must be in the region covered by kring->hwavail,
+ * and ring->avail and kring->avail should end at the same slot.
+ *
+ *            +-hwcur
+ *            |
+ *            v<-------hwavail---------->
+ *   ---------+--------------------------+-------- ring
+ *               |<--res-->|
+ *                         |<---avail--->
+ *                         +--cur
+ *
+ */
+u_int
+nm_rxsync_prologue(struct netmap_kring *kring, u_int *resvd)
+{
+	struct netmap_ring *ring = kring->ring;
+	u_int cur = ring->cur; /* read only once */
+	u_int avail = ring->avail; /* read only once */
+	u_int res = ring->reserved; /* read only once */
+	u_int n = kring->nkr_num_slots;
+	u_int kend = kring->nr_hwcur + kring->nr_hwavail;
+	u_int a;
+
+#if 1 /* kernel sanity checks */
+	if (kring->nr_hwcur >= n || kring->nr_hwavail >= n)
+		goto error;
+#endif /* kernel sanity checks */
+	/* user sanity checks */
+	if (res >= n)
+		goto error;
+	/* check that cur is valid, a is the expected value of avail */
+	if (cur < kring->nr_hwcur) {
+		/* too low, but maybe wraparound */
+		if (cur + n > kend)
+			goto error;
+		a = kend - (cur + n);
+	} else  {
+		if (cur > kend)
+			goto error;
+		a = kend - cur;
+	}
+	if (a != avail) {
+		RD(5, "wrong but fixable avail have %d need %d",
+			avail, a);
+		ring->avail = avail = a;
+	}
+	if (res != 0) {
+		/* then repeat the check for cur + res */
+		cur = (cur >= res) ? cur - res : n + cur - res;
+		if (cur < kring->nr_hwcur) {
+			/* too low, but maybe wraparound */
+			if (cur + n > kend)
+				goto error;
+		} else if (cur > kend) {
+			goto error;
+		}
+	}
+	*resvd = res;
+	return cur;
+
+error:
+	RD(5, "kring error: hwcur %d hwres %d hwavail %d cur %d av %d res %d",
+		kring->nr_hwcur,
+		kring->nr_hwreserved, kring->nr_hwavail,
+		ring->cur, avail, res);
+	return n;
+}
+
+/*
  * Error routine called when txsync/rxsync detects an error.
  * Can't do much more than resetting cur = hwcur, avail = hwavail.
  * Return 1 on reinit.

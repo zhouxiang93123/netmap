@@ -295,12 +295,11 @@ mlx4_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 				goto err;
 			}
 
-			slot->flags &= ~NS_REPORT;
 			if (slot->flags & NS_BUF_CHANGED) {
 				/* buffer has changed, unload and reload map */
 				// netmap_reload_map(pdev, DMA_TO_DEVICE, old_addr, addr);
-				slot->flags &= ~NS_BUF_CHANGED;
 			}
+			slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
 			/*
 			 * Fill the slot in the NIC ring.
 			 */
