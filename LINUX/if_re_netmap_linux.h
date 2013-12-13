@@ -79,19 +79,18 @@ static int
 re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
         struct ifnet *ifp = na->ifp;
-	struct SOFTC_T *sc = netdev_priv(ifp);
-	void __iomem *ioaddr = sc->mmio_addr;
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int nm_i;	/* index into the netmap ring */
 	u_int nic_i;	/* index into the NIC ring */
-	u_int n;
-	u_int const cur = ring->cur; /* read only once */
+	u_int n, new_slots;
+	u_int const cur = nm_txsync_prologue(kring, &new_slots);
 	u_int const lim = kring->nkr_num_slots - 1;
 	/* interrupts every half ring */
 	u_int report_frequency = kring->nkr_num_slots >> 1;
 
-	int new_slots;
+	struct SOFTC_T *sc = netdev_priv(ifp);
+	void __iomem *ioaddr = sc->mmio_addr;
 
 	if (cur > lim)
 		return netmap_ring_reinit(kring);
@@ -101,20 +100,12 @@ re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	/*
 	 * First part: process new packets to send.
 	 */
-	nm_i = kring->nr_hwcur;
-	new_slots = cur - nm_i - kring->nr_hwreserved;
-	if (new_slots < 0)
-		new_slots += kring->nkr_num_slots;
-	if (new_slots > kring->nr_hwavail) {
-		RD(5, "=== nm_i %d cur %d d %d hwavail %d hwreserved %d",
-			nm_i, cur, new_slots, kring->nr_hwavail, kring->nr_hwreserved);
-		return netmap_ring_reinit(kring);
-	}
 	if (!netif_carrier_ok(ifp)) {
 		/* All the new slots are now unavailable. */
 		kring->nr_hwavail -= new_slots;
 		goto out;
 	}
+	nm_i = kring->nr_hwcur;
 	if (nm_i != cur) {	/* we have new packets to send */
 		nic_i = sc->cur_tx; // XXX use internal macro ?
 

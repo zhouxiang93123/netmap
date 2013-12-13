@@ -85,8 +85,8 @@ e1000_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct netmap_ring *ring = kring->ring;
 	u_int nm_i;	/* index into the netmap ring */
 	u_int nic_i;	/* index into the NIC ring */
-	u_int n;
-	u_int const cur = ring->cur; /* read only once */
+	u_int n, new_slots;
+	u_int const cur = nm_txsync_prologue(kring, &new_slots);
 	u_int const lim = kring->nkr_num_slots - 1;
 	/* generate an interrupt approximately every half ring */
 	u_int report_frequency = kring->nkr_num_slots >> 1;
@@ -94,7 +94,6 @@ e1000_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	/* device-specific */
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct e1000_tx_ring* txr = &adapter->tx_ring[ring_nr];
-	int new_slots;
 
 	if (cur > lim)
 		return netmap_ring_reinit(kring);
@@ -103,20 +102,12 @@ e1000_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	/*
 	 * First part: process new packets to send.
 	 */
-	nm_i = kring->nr_hwcur;
-	new_slots = cur - nm_i - kring->nr_hwreserved;
-	if (new_slots < 0)
-		new_slots += kring->nkr_num_slots;
-	if (new_slots > kring->nr_hwavail) {
-		RD(5, "=== nm_i %d cur %d d %d hwavail %d hwreserved %d",
-			nm_i, cur, new_slots, kring->nr_hwavail, kring->nr_hwreserved);
-		return netmap_ring_reinit(kring);
-	}
 	if (!netif_carrier_ok(ifp)) {
 		kring->nr_hwavail -= new_slots;
 		goto out;
 	}
 
+	nm_i = kring->nr_hwcur;
 	if (nm_i != cur) {	/* we have new packets to send */
 		nic_i = netmap_idx_k2n(kring, nm_i);
 		for (n = 0; nm_i != cur; n++) {

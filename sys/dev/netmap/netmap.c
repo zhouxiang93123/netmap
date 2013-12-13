@@ -1110,6 +1110,69 @@ out:
 
 
 /*
+ * validate parameters on entry for *_txsync()
+ * Returns ring->cur if ok, or something >= kring->nkr_num_slots
+ * in case of error. The extra argument is a pointer to
+ * 'new_bufs'. XXX this may be deprecated at some point.
+ *
+ * Below is a correct configuration on input. ring->cur
+ * must be in the region covered by kring->hwavail,
+ * and ring->avail and kring->avail should end at the same slot.
+ *
+ *         +-hwcur
+ *         |
+ *         v<--hwres-->|<-----hwavail---->
+ *   ------+------------------------------+-------- ring
+ *                          |
+ *                          |<---avail--->
+ *                          +--cur
+ *
+ */
+u_int
+nm_txsync_prologue(struct netmap_kring *kring, u_int *new_slots)
+{
+	struct netmap_ring *ring = kring->ring;
+	u_int cur = ring->cur; /* read only once */
+	u_int avail = ring->avail; /* read only once */
+	u_int n = kring->nkr_num_slots;
+	u_int kstart = kring->nr_hwcur + kring->nr_hwreserved;
+	u_int kend = kstart + kring->nr_hwavail;
+	u_int a;
+
+#if 1 /* kernel sanity checks */
+	if (kring->nr_hwreserved >= n || kring->nr_hwavail >= n ||
+	    kring->nr_hwreserved + kring->nr_hwavail >= n)
+		goto error;
+#endif /* kernel sanity checks */
+	/* user sanity checks */
+	if (cur < kstart) {
+		/* too low, but maybe wraparound */
+		if (cur + n > kend)
+			goto error;
+		*new_slots = cur + n - kstart;
+	} else {
+		if (cur > kend)
+			goto error;
+		*new_slots = cur - kstart;
+	}
+	/* a is the expected value of avail */
+	a = (cur <= kend) ? kend - cur : n + kend - cur;
+	if (a != avail) {
+		RD(5, "wrong but fixable avail have %d need %d",
+			avail, a);
+		ring->avail = avail = a;
+	}
+	return cur;
+
+error:
+	RD(5, "kring error: hwcur %d hwres %d hwavail %d cur %d av %d",
+		kring->nr_hwcur,
+		kring->nr_hwreserved, kring->nr_hwavail,
+		cur, avail);
+	return n;
+}
+
+/*
  * Error routine called when txsync/rxsync detects an error.
  * Can't do much more than resetting cur = hwcur, avail = hwavail.
  * Return 1 on reinit.
