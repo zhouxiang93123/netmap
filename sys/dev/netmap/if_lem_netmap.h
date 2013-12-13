@@ -62,10 +62,13 @@ lem_netmap_reg(struct netmap_adapter *na, int onoff)
 	taskqueue_drain(adapter->tq, &adapter->rxtx_task);
 	taskqueue_drain(adapter->tq, &adapter->link_task);
 #endif /* !EM_LEGCY_IRQ */
+
+	/* enable or disable flags and callbacks in na and ifp */
 	if (onoff) {
 		nm_set_native_flags(na);
 		lem_init_locked(adapter);
-		if ((ifp->if_drv_flags & (IFF_DRV_RUNNING | IFF_DRV_OACTIVE)) == 0) {
+		/* should set IFF_DRV_RUNNING on successful completion */
+		if (!(ifp->if_drv_flags & IFF_DRV_RUNNING)) {
 			error = ENOMEM;
 			goto fail;
 		}
@@ -97,14 +100,15 @@ lem_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	u_int nm_i;	/* index into the netmap ring */
 	u_int nic_i;	/* index into the NIC ring */
 	u_int n, new_slots;
-	u_int const cur = nm_txsync_prologue(kring, &new_slots);
 	u_int const lim = kring->nkr_num_slots - 1;
+	u_int const cur = nm_txsync_prologue(kring, &new_slots);
 	/* generate an interrupt approximately every half ring */
 	u_int report_frequency = kring->nkr_num_slots >> 1;
 
+	/* device-specific */
 	struct adapter *adapter = ifp->if_softc;
 
-	if (cur > lim)
+	if (cur > lim)	/* error checking in nm_txsync_prologue() */
 		return netmap_ring_reinit(kring);
 
 	bus_dmamap_sync(adapter->txdma.dma_tag, adapter->txdma.dma_map,
@@ -123,6 +127,7 @@ lem_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
 
+			/* device-specific */
 			struct e1000_tx_desc *curr = &adapter->tx_desc_base[nic_i];
 			struct em_buffer *txbuf = &adapter->tx_buffer_area[nic_i];
 			int flags = (slot->flags & NS_REPORT ||
@@ -149,9 +154,10 @@ lem_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			nic_i = nm_next(nic_i, lim);
 		}
 		kring->nr_hwcur = cur; /* the saved ring->cur */
-		/* decrease avail by number of packets  sent */
-		kring->nr_hwavail -= n;
+		/* decrease avail by # of packets sent minus previous ones */
+		kring->nr_hwavail -= new_slots;
 
+		 /* synchronize the NIC ring */
 		bus_dmamap_sync(adapter->txdma.dma_tag, adapter->txdma.dma_map,
 			BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 
@@ -197,12 +203,13 @@ lem_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int nm_i;	/* index into the netmap ring */
-	u_int nic_i;	/* index into the nic ring */
+	u_int nic_i;	/* index into the NIC ring */
 	u_int n, resvd;
 	u_int const lim = kring->nkr_num_slots - 1;
 	u_int const cur = nm_rxsync_prologue(kring, &resvd); /* cur + res */
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 
+	/* device-specific */
 	struct adapter *adapter = ifp->if_softc;
 
 	if (cur > lim)
@@ -252,13 +259,14 @@ lem_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	/*
 	 * Second part: skip past packets that userspace has released.
 	 */
-	nm_i = kring->nr_hwcur;	/* netmap ring index */
-	if (nm_i != cur) { /* userspace has released some packets. */
+	nm_i = kring->nr_hwcur;
+	if (nm_i != cur) {
 		nic_i = netmap_idx_k2n(kring, nm_i);
 		for (n = 0; nm_i != cur; n++) {
 			struct netmap_slot *slot = &ring->slot[nm_i];
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
+
 			struct e1000_rx_desc *curr = &adapter->rx_desc_base[nic_i];
 			struct em_buffer *rxbuf = &adapter->rx_buffer_area[nic_i];
 
@@ -272,10 +280,8 @@ lem_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
 			curr->status = 0;
-
 			bus_dmamap_sync(adapter->rxtag, rxbuf->map,
 			    BUS_DMASYNC_PREREAD);
-
 			nm_i = nm_next(nm_i, lim);
 			nic_i = nm_next(nic_i, lim);
 		}
@@ -290,6 +296,7 @@ lem_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		nic_i = (nic_i == 0) ? lim : nic_i - 1;
 		E1000_WRITE_REG(&adapter->hw, E1000_RDT(0), nic_i);
 	}
+
 	/* tell userspace that there might be new packets */
 	ring->avail = kring->nr_hwavail - resvd;
 

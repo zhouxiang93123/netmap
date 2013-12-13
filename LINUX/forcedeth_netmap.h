@@ -130,7 +130,7 @@ forcedeth_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	u_int const cur = nm_txsync_prologue(kring, &new_slots);
 	/* interrupt every half ring */
 
-	/* device specific */
+	/* device-specific */
 	struct SOFTC_T *np = netdev_priv(ifp);
 	struct ring_desc_ex *txr = np->tx_ring.ex;
 	uint32_t lastpkt = (np->desc_ver == DESC_VER_1 ? NV_TX_LASTPACKET : NV_TX2_LASTPACKET);
@@ -157,7 +157,7 @@ forcedeth_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
 
-			/* device specific */
+			/* device-specific */
 			struct ring_desc_ex *put_tx = txr + nic_i;
 			// XXX check who needs lastpkt
 			int cmd = (len - 1) | NV_TX2_VALID | lastpkt;
@@ -232,7 +232,7 @@ forcedeth_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	u_int const cur = nm_rxsync_prologue(kring, &resvd); /* cur + res */
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 
-	/* device specific */
+	/* device-specific */
 	struct SOFTC_T *np = netdev_priv(ifp);
 	struct ring_desc_ex *rxr = np->rx_ring.ex;
 	u_int refill;	// refill position

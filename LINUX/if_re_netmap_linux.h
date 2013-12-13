@@ -114,7 +114,7 @@ re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
 
-			/* device specific */
+			/* device-specific */
 			struct TxDesc *curr = &sc->TxDescArray[nic_i];
 			uint32_t flags = slot->len | LastFrag | DescOwn | FirstFrag ;
 
