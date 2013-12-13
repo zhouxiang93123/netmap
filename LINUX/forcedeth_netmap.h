@@ -168,7 +168,7 @@ forcedeth_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		new_slots += kring->nkr_num_slots;
 	if (new_slots > kring->nr_hwavail) {
 		RD(5, "=== nm_i %d cur %d d %d hwavail %d hwreserved %d",
-			j, k, new_slots, kring->nr_hwavail, kring->nr_hwreserved);
+			nm_i, cur, new_slots, kring->nr_hwavail, kring->nr_hwreserved);
 		return netmap_ring_reinit(kring);
 	}
 	if (!netif_carrier_ok(ifp)) {
@@ -235,7 +235,7 @@ forcedeth_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 
 	struct SOFTC_T *np = netdev_priv(ifp);
 	struct ring_desc_ex *rxr = np->rx_ring.ex;
-	u_int resvd, refill;	// refill position
+	u_int refill;	// refill position
 
 	if (cur > lim)
 		return netmap_ring_reinit(kring);
@@ -252,7 +252,7 @@ forcedeth_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		nm_i = netmap_idx_n2k(kring, nic_i);
 
 		for (n = kring->nr_hwavail; nic_i != refill ; n++) {
-			uint32_t statlen = le32toh(rxr[l].flaglen);
+			uint32_t statlen = le32toh(rxr[nic_i].flaglen);
 
 			if (statlen & NV_RX2_AVAIL) /* still owned by the NIC */
 				break;
@@ -285,7 +285,7 @@ forcedeth_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		refill = np->put_rx.ex - rxr; /* refill position */
 
 		for (n = 0; nm_i != cur; n++) {
-			struct netmap_slot *slot = ring->slot + j;
+			struct netmap_slot *slot = ring->slot + nm_i;
 			struct ring_desc_ex *desc = rxr + nic_i;
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
