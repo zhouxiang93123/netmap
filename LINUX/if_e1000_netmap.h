@@ -143,8 +143,8 @@ e1000_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			curr->lower.data = htole32(adapter->txd_cmd |
 				len | flags |
 				E1000_TXD_CMD_EOP | E1000_TXD_CMD_IFCS);
-			nm_i = nm_next(nm_i, len);
-			nic_i = nm_next(nic_i, len);
+			nm_i = nm_next(nm_i, lim);
+			nic_i = nm_next(nic_i, lim);
 		}
 		kring->nr_hwcur = cur; /* the saved ring->cur */
 		/* The new slots have been sent and so reported as
