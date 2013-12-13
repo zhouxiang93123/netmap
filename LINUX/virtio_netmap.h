@@ -6,6 +6,33 @@
 #define SOFTC_T	virtnet_info
 static int virtnet_close(struct ifnet *ifp);
 static int virtnet_open(struct ifnet *ifp);
+static void free_receive_bufs(struct virtnet_info *vi);
+static void give_pages(struct receive_queue *rq, struct page *page);
+static struct page *get_a_page(struct receive_queue *rq, gfp_t gfp_mask);
+
+
+static void virtio_netmap_free_rx_unused_bufs(struct SOFTC_T* vi, int onoff)
+{
+	void *buf;
+	int i, c;
+
+	for (i = 0; i < vi->max_queue_pairs; i++) {
+		struct virtqueue *vq = vi->rq[i].vq;
+
+		c = 0;
+		while ((buf = virtqueue_detach_unused_buf(vq)) != NULL) {
+			if (onoff) {
+				if (vi->mergeable_rx_bufs || vi->big_packets)
+					give_pages(&vi->rq[i], buf);
+				else
+					dev_kfree_skb(buf);
+			}
+			--vi->rq[i].num;
+			c++;
+		}
+		D("[%d] freed %d rx unused bufs on queue %d", onoff, c, i);
+	}
+}
 
 /*
  * Register/unregister, similar to e1000_reinit_safe()
@@ -14,7 +41,7 @@ static int
 virtio_netmap_reg(struct netmap_adapter *na, int onoff)
 {
         struct ifnet *ifp = na->ifp;
-	/* struct SOFTC_T *vi = netdev_priv(ifp); */
+	struct SOFTC_T *vi = netdev_priv(ifp);
 	struct netmap_hw_adapter *hwna = (struct netmap_hw_adapter*)na;
 	int error = 0;
 
@@ -32,7 +59,11 @@ virtio_netmap_reg(struct netmap_adapter *na, int onoff)
 
         virtnet_close(ifp);
 
-	if (onoff) { /* enable netmap mode */
+	if (onoff) {
+		virtio_netmap_free_rx_unused_bufs(vi, onoff);
+		free_receive_bufs(vi);
+
+		/* enable netmap mode */
 		ifp->if_capenable |= IFCAP_NETMAP;
                 na->na_flags |= NAF_NATIVE_ON;
 		na->if_transmit = (void *)ifp->netdev_ops;
@@ -41,6 +72,8 @@ virtio_netmap_reg(struct netmap_adapter *na, int onoff)
 		ifp->if_capenable &= ~IFCAP_NETMAP;
                 na->na_flags &= ~NAF_NATIVE_ON;
 		ifp->netdev_ops = (void *)na->if_transmit;
+
+		virtio_netmap_free_rx_unused_bufs(vi, onoff);
 	}
 
         virtnet_open(ifp);
@@ -294,7 +327,7 @@ static int virtio_netmap_init_buffers(struct SOFTC_T *vi)
 			return 0;
 		}
 
-		for (i = 0; rq->vq->num_free && i < na->num_rx_desc; i++) {
+		for (i = 0; rq->vq->num_free && i < na->num_rx_desc-1; i++) {
                         void *addr;
                         int err;
 
@@ -308,6 +341,7 @@ static int virtio_netmap_init_buffers(struct SOFTC_T *vi)
                             return 0;
                         }
 		}
+		D("added %d inbufs on queue %d", i, r);
 	}
 
 	return 1;
