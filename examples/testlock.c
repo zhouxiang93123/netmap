@@ -299,9 +299,9 @@ void
 test_sel(struct targ *t)
 {
 	int arg = t->g->arg;
-	// stdin is blocking on reads /dev/null is not
+	// stdin is blocking on reads /dev/null or /dev/zero are not
 	int fd = (arg < 0) ? t->g->nullfd : 0;
-	fd_set r, w, *fdp = (arg < 0) ? &w : &r;
+	fd_set r;
 	struct timeval t0 = { 0, arg};
 	struct timeval tcur, *tp = (arg == -2) ? NULL : &tcur;
 	int64_t m;
@@ -311,15 +311,14 @@ test_sel(struct targ *t)
 	else if (arg < -2)
 		t0.tv_usec = -arg;
 
-	D("tp %p mode %s timeout %d", tp, fdp == &w ? "w" : "r",
+	D("tp %p mode %s timeout %d", tp, arg < 0 ? "ready" : "block",
 		(int)t0.tv_usec);
 	for (m = 0; m < t->g->m_cycles; m++) {
 		int ret;
 		tcur = t0;
 		FD_ZERO(&r);
-		FD_ZERO(&w);
-		FD_SET(fd, fdp);
-		ret = select(fd+1, &r, &w, NULL, tp);
+		FD_SET(fd, &r);
+		ret = select(fd+1, &r, NULL, NULL, tp);
 		(void)ret;
 		ND("ret %d r %d w %d", ret,
 			FD_ISSET(fd, &r),
@@ -756,10 +755,8 @@ main(int argc, char **argv)
 	g.nthreads = 1;
 	g.cpus = 1;
 	g.m_cycles = 0;
-	g.nullfd = open("/dev/null", O_RDWR);
-	i = read(g.nullfd, &ch, 1); // empty read;
-	i = read(g.nullfd, &ch, 1); // empty read;
-	D("nullfd is %d read %d", g.nullfd, i);
+	g.nullfd = open("/dev/zero", O_RDWR);
+	D("nullfd is %d", g.nullfd);
 
 	while ( (ch = getopt(argc, argv, "A:a:m:n:w:c:t:vl:")) != -1) {
 		switch(ch) {
