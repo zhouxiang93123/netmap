@@ -176,7 +176,7 @@ ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
 
-			/* device specific */
+			/* device-specific */
 			union ixgbe_adv_tx_desc *curr = IXGBE_TX_DESC_ADV(txr, nic_i);
 			int flags = (slot->flags & NS_REPORT ||
 				nic_i == 0 || nic_i == report_frequency) ?
@@ -307,7 +307,7 @@ ixgbe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	u_int const cur = nm_rxsync_prologue(kring, &resvd); /* cur + res */
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 
-	/* device specific */
+	/* device-specific */
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct ixgbe_ring *rxr = adapter->rx_ring[ring_nr];
 
@@ -454,7 +454,7 @@ ixgbe_netmap_configure_rx_ring(struct SOFTC_T *adapter, int ring_nr)
 	 * (this is true by default on the TX side, because
 	 * init makes all buffers available to userspace).
 	 *
-	 * netmap_reset() and the device specific routines
+	 * netmap_reset() and the device-specific routines
 	 * (e.g. ixgbe_setup_receive_rings()) map these
 	 * buffers at the end of the NIC ring, so here we
 	 * must set the RDT (tail) register to make sure

@@ -49,15 +49,13 @@ re_netmap_reg(struct netmap_adapter *na, int onoff)
 	struct rl_softc *adapter = ifp->if_softc;
 	int error = 0;
 
-	/* Tell the stack that the interface is no longer active */
-	ifp->if_drv_flags &= ~(IFF_DRV_RUNNING | IFF_DRV_OACTIVE);
-
-	re_stop(adapter);
+	RL_LOCK(adapter);
+	re_stop(adapter); /* also clears IFF_DRV_RUNNING */
 
 	if (onoff) {
 		nm_set_native_flags(na);
 		re_init_locked(adapter);
-		if ((ifp->if_drv_flags & (IFF_DRV_RUNNING | IFF_DRV_OACTIVE)) == 0) {
+		if (!(ifp->if_drv_flags & IFF_DRV_RUNNING)) {
 			error = ENOMEM;
 			goto fail;
 		}
@@ -66,6 +64,7 @@ fail:
 		nm_clear_native_flags(na);
 		re_init_locked(adapter);	/* also enables intr */
 	}
+	RL_UNLOCK(adapter);
 	return (error);
 }
 
@@ -79,21 +78,22 @@ re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct ifnet *ifp = na->ifp;
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	u_int nm_i;	/* index in the netmap ring */
-	u_int nic_i;	/* index in the NIC ring */
+	u_int nm_i;	/* index into the netmap ring */
+	u_int nic_i;	/* index into the NIC ring */
 	u_int n, new_slots;
-	u_int const cur = nm_txsync_prologue(kring, &new_slots);
 	u_int const lim = kring->nkr_num_slots - 1;
+	u_int const cur = nm_txsync_prologue(kring, &new_slots);
 
+	/* device-specific */
 	struct rl_softc *sc = ifp->if_softc;
 	struct rl_txdesc *txd = sc->rl_ldata.rl_tx_desc;
 
-	if (cur > lim)
+	if (cur > lim)	/* error checking in nm_txsync_prologue() */
 		return netmap_ring_reinit(kring);
 
 	bus_dmamap_sync(sc->rl_ldata.rl_tx_list_tag,
 	    sc->rl_ldata.rl_tx_list_map,
-	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
+	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE); // XXX extra postwrite ?
 
 	/*
 	 * First part: process new packets to send.
@@ -109,6 +109,7 @@ re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
 
+			/* device-specific */
 			struct rl_desc *desc = &sc->rl_ldata.rl_tx_list[nic_i];
 			int cmd = slot->len | RL_TDESC_CMD_EOF |
 				RL_TDESC_CMD_OWN | RL_TDESC_CMD_SOF ;
@@ -127,6 +128,7 @@ re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			}
 			slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
 
+			/* Fill the slot in the NIC ring. */
 			desc->rl_cmdstat = htole32(cmd);
 
 			/* make sure changes to the buffer are synced */
@@ -138,12 +140,14 @@ re_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			nic_i = nm_next(nic_i, lim);
 		}
 		sc->rl_ldata.rl_tx_prodidx = nic_i;
+		/* decrease avail by # of packets sent minus previous ones */
 		kring->nr_hwcur = cur; /* the saved ring->cur */
-		kring->nr_hwavail -= n;
+		kring->nr_hwavail -= new_slots;
 
+		/* synchronize the NIC ring */
 		bus_dmamap_sync(sc->rl_ldata.rl_tx_list_tag,
-		    sc->rl_ldata.rl_tx_list_map,
-		    BUS_DMASYNC_PREWRITE|BUS_DMASYNC_PREREAD);
+			sc->rl_ldata.rl_tx_list_map,
+			BUS_DMASYNC_PREREAD|BUS_DMASYNC_PREWRITE);
 
 		/* start ? */
 		CSR_WRITE_1(sc, sc->rl_txstart, RL_TXSTART_START);
@@ -190,16 +194,16 @@ re_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	u_int const cur = nm_rxsync_prologue(kring, &resvd); /* cur + res */
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 
+	/* device-specific */
 	struct rl_softc *sc = ifp->if_softc;
 	struct rl_rxdesc *rxd = sc->rl_ldata.rl_rx_desc;
 
 	if (cur > lim)
 		return netmap_ring_reinit(kring);
 
-	/* XXX check sync modes */
 	bus_dmamap_sync(sc->rl_ldata.rl_rx_list_tag,
-	    sc->rl_ldata.rl_rx_list_map,
-	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
+			sc->rl_ldata.rl_rx_list_map,
+			BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 
 	/*
 	 * First part: import newly received packets.
@@ -213,7 +217,7 @@ re_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		uint16_t slot_flags = kring->nkr_slot_flags;
 
 		nic_i = sc->rl_ldata.rl_rx_prodidx; /* next pkt to check */
-		nm_i = netmap_idx_n2k(kring, nic_i); /* the kring index */
+		nm_i = netmap_idx_n2k(kring, nic_i);
 
 		for (n = kring->nr_hwavail; n < lim ; n++) {
 			struct rl_desc *cur_rx = &sc->rl_ldata.rl_rx_list[nic_i];
@@ -229,8 +233,7 @@ re_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			ring->slot[nm_i].flags = slot_flags;
 			/*  sync was in re_newbuf() */
 			bus_dmamap_sync(sc->rl_ldata.rl_rx_mtag,
-				rxd[nic_i].rx_dmamap,
-				BUS_DMASYNC_POSTREAD);
+			    rxd[nic_i].rx_dmamap, BUS_DMASYNC_POSTREAD);
 			nm_i = nm_next(nm_i, lim);
 			nic_i = nm_next(nic_i, lim);
 		}
@@ -245,13 +248,14 @@ re_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	/*
 	 * Second part: skip past packets that userspace has released.
 	 */
-	nm_i = kring->nr_hwcur; /* netmap ring index */
-	if (nm_i != cur) { /* userspace has released some packets. */
+	nm_i = kring->nr_hwcur;
+	if (nm_i != cur) {
 		nic_i = netmap_idx_k2n(kring, nm_i);
 		for (n = 0; nm_i != cur; n++) {
 			struct netmap_slot *slot = &ring->slot[nm_i];
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
+
 			struct rl_desc *desc = &sc->rl_ldata.rl_rx_list[nic_i];
 			int cmd = NETMAP_BUF_SIZE | RL_RDESC_CMD_OWN;
 
@@ -271,17 +275,19 @@ re_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			}
 			desc->rl_cmdstat = htole32(cmd);
 			bus_dmamap_sync(sc->rl_ldata.rl_rx_mtag,
-				rxd[nic_i].rx_dmamap,
-				BUS_DMASYNC_PREREAD);
+			    rxd[nic_i].rx_dmamap,
+			    BUS_DMASYNC_PREREAD);
 			nm_i = nm_next(nm_i, lim);
 			nic_i = nm_next(nic_i, lim);
 		}
 		kring->nr_hwavail -= n;
 		kring->nr_hwcur = cur;
+
 		bus_dmamap_sync(sc->rl_ldata.rl_rx_list_tag,
 		    sc->rl_ldata.rl_rx_list_map,
 		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 	}
+
 	/* tell userspace that there might be new packets */
 	ring->avail = kring->nr_hwavail - resvd;
 
@@ -290,6 +296,7 @@ re_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 ring_reset:
 	return netmap_ring_reinit(kring);
 }
+
 
 /*
  * Additional routines to init the tx and rx rings.
@@ -388,4 +395,5 @@ re_netmap_attach(struct rl_softc *sc)
 	na.num_tx_rings = na.num_rx_rings = 1;
 	netmap_attach(&na);
 }
+
 /* end of file */

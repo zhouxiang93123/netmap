@@ -237,7 +237,7 @@ ixgbe_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
 
-			/* device specific */
+			/* device-specific */
 			union ixgbe_adv_tx_desc *curr = &txr->tx_base[nic_i];
 			struct ixgbe_tx_buf *txbuf = &txr->tx_buffers[nic_i];
 			int flags = (slot->flags & NS_REPORT ||
@@ -380,7 +380,7 @@ ixgbe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	u_int const cur = nm_rxsync_prologue(kring, &resvd); /* cur + res */
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 
-	/* device specific */
+	/* device-specific */
 	struct adapter *adapter = ifp->if_softc;
 	struct rx_ring *rxr = &adapter->rx_rings[ring_nr];
 
@@ -439,7 +439,7 @@ ixgbe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	}
 
 	/*
-	 * Second, skip past packets that userspace has released
+	 * Second part: skip past packets that userspace has released.
 	 * (kring->nr_hwcur to ring->cur - ring->reserved excluded),
 	 * and make the buffers available for reception.
 	 * As usual nm_i is the index in the netmap ring,

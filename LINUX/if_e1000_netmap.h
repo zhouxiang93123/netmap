@@ -115,7 +115,7 @@ e1000_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
 
-			/* device specific */
+			/* device-specific */
 			struct e1000_tx_desc *curr = E1000_TX_DESC(*txr, nic_i);
 			int flags = (slot->flags & NS_REPORT ||
 				nic_i == 0 || nic_i == report_frequency) ?
@@ -193,7 +193,7 @@ e1000_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	u_int const cur = nm_rxsync_prologue(kring, &resvd); /* cur + res */
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 
-	/* device specific */
+	/* device-specific */
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct e1000_rx_ring *rxr = &adapter->rx_ring[ring_nr];
 
