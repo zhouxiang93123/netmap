@@ -101,30 +101,21 @@ cxgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 {
         struct ifnet *ifp = na->ifp;
 	struct adapter *adapter = ifp->if_softc;
-	int error = 0;
 
 #if 0
-	ixgbe_disable_intr(adapter);
+	cxgbe_disable_intr(adapter);
 
 	/* Tell the stack that the interface is no longer active */
 	ifp->if_drv_flags &= ~(IFF_DRV_RUNNING | IFF_DRV_OACTIVE);
 
 	if (onoff) {
 		nm_set_native_flags(na);
-
-		ixgbe_init_locked(adapter);
-		if ((ifp->if_drv_flags & (IFF_DRV_RUNNING | IFF_DRV_OACTIVE)) == 0) {
-			error = ENOMEM;
-			goto fail;
-		}
 	} else {
-fail:
-		/* restore if_transmit */
 		nm_clear_native_flags(na);
-		ixgbe_init_locked(adapter);	/* also enables intr */
 	}
+	cxgbe_init_locked(adapter);	/* also enables intr */
 #endif
-	return (error);
+	return (ifp->if_drv_flags & IFF_DRV_RUNNING ? 0 : 1);
 }
 
 

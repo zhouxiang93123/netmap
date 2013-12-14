@@ -108,29 +108,20 @@ sfxge_netmap_reg(struct netmap_adapter *na, int onoff)
 	struct sfxge_softc *sc = ifp->if_softc;
 	int error = 0;
 
+	SFXGE_LOCK(sc);
 	sfxge_stop(sc);
 
 	/* Tell the stack that the interface is no longer active */
 	ifp->if_drv_flags &= ~(IFF_DRV_RUNNING | IFF_DRV_OACTIVE);
 
-	if (onoff) { /* enable netmap mode */
+	if (onoff) {
 		nm_set_native_flags(na);
-		/*
-		 * reinitialize the adapter, now with netmap flag set,
-		 * so the rings will be set accordingly.
-		 */
-		sfxge_start(sc);
-		if ((ifp->if_drv_flags & (IFF_DRV_RUNNING | IFF_DRV_OACTIVE)) == 0) {
-			error = ENOMEM;
-			goto fail;
-		}
-	} else { /* reset normal mode (explicit request or netmap failed) */
-fail:
+	} else {
 		nm_clear_native_flags(na);
-		/* initialize the card, this time in standard mode */
-		sfxge_start(sc);	/* also enables intr */
 	}
-	return (error);
+	sfxge_start(sc);	/* also enables intr */
+	SFXGE_UNLOCK(sc);
+	return (ifp->if_drv_flags & IFF_DRV_RUNNING ? 0 : 1);
 }
 
 
