@@ -333,7 +333,6 @@ test_poll(struct targ *t)
 	int arg = t->g->arg;
 	// stdin is blocking on reads /dev/null is not
 	int fd = (arg < 0) ? t->g->nullfd : 0;
-	int mode = (arg < 0) ? POLLOUT : POLLIN;
 	int64_t m;
 	int ms;
 
@@ -346,11 +345,11 @@ test_poll(struct targ *t)
 	else
 		ms = arg/1000;
 
-	D("mode %s timeout %d", mode == POLLOUT ? "w" : "r", ms);
+	D("mode %s timeout %d", arg < 0 ? "ready" : "block", ms);
 	for (m = 0; m < t->g->m_cycles; m++) {
 		struct pollfd x;
 		x.fd = fd;
-		x.events = mode;
+		x.events = POLLIN;
 		poll(&x, 1, ms);
 		t->count++;
 	}
