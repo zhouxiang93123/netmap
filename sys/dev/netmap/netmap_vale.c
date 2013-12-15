@@ -1352,7 +1352,7 @@ retry:
 				RD(5, "rx %d frags to %d", cnt, j);
 			ft_end = ft_p + cnt;
 			do {
-			    void *dst, *src = ft_p->ft_buf;
+			    char *dst, *src = ft_p->ft_buf;
 			    size_t copy_len = ft_p->ft_len, dst_len = copy_len;
 
 			    slot = &ring->slot[j];
