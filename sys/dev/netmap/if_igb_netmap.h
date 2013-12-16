@@ -58,7 +58,6 @@ igb_netmap_reg(struct netmap_adapter *na, int onoff)
 {
 	struct ifnet *ifp = na->ifp;
 	struct adapter *adapter = ifp->if_softc;
-	int error = 0;
 
 	IGB_CORE_LOCK(adapter);
 	igb_disable_intr(adapter);
@@ -69,19 +68,12 @@ igb_netmap_reg(struct netmap_adapter *na, int onoff)
 	/* enable or disable flags and callbacks in na and ifp */
 	if (onoff) {
 		nm_set_native_flags(na);
-		igb_init_locked(adapter);
-		/* should set IFF_DRV_RUNNING on successful completion */
-		if (!(ifp->if_drv_flags & IFF_DRV_RUNNING)) {
-			error = ENOMEM;
-			goto fail;
-		}
 	} else {
-fail:
 		nm_clear_native_flags(na);
-		igb_init_locked(adapter);	/* also enable intr */
 	}
+	igb_init_locked(adapter);	/* also enable intr */
 	IGB_CORE_UNLOCK(adapter);
-	return (error);
+	return (ifp->if_drv_flags & IFF_DRV_RUNNING ? 0 : 1);
 }
 
 

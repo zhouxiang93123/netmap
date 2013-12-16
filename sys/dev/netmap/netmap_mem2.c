@@ -310,7 +310,7 @@ netmap_obj_malloc(struct netmap_obj_pool *p, u_int len, uint32_t *start, uint32_
 	}
 
 	if (p->objfree == 0) {
-		D("%s allocator: run out of memory", p->name);
+		D("no more %s objects", p->name);
 		return NULL;
 	}
 	if (start)
@@ -405,16 +405,12 @@ netmap_new_bufs(struct netmap_mem_d *nmd, struct netmap_slot *slot, u_int n)
 	for (i = 0; i < n; i++) {
 		void *vaddr = netmap_buf_malloc(nmd, &pos, &index);
 		if (vaddr == NULL) {
-			D("unable to locate empty packet buffer");
+			D("no more buffers after %d of %d", i, n);
 			goto cleanup;
 		}
 		slot[i].buf_idx = index;
 		slot[i].len = p->_objsize;
-		/* XXX setting flags=NS_BUF_CHANGED forces a pointer reload
-		 * in the NIC ring. This is a hack that hides missing
-		 * initializations in the drivers, and should go away.
-		 */
-		// slot[i].flags = NS_BUF_CHANGED;
+		slot[i].flags = 0;
 	}
 
 	ND("allocated %d buffers, %d available, first at %d", n, p->objfree, pos);

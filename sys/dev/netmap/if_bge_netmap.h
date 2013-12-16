@@ -26,8 +26,8 @@ bge_netmap_reg(struct netmap_adapter *na, int onoff)
 {
         struct ifnet *ifp = na->ifp;
 	struct bge_softc *adapter = ifp->if_softc;
-	int error = 0;
 
+	BGE_LOCK(adapter);
 	/* Tell the stack that the interface is no longer active */
 	ifp->if_drv_flags &= ~(IFF_DRV_RUNNING | IFF_DRV_OACTIVE);
 
@@ -35,18 +35,12 @@ bge_netmap_reg(struct netmap_adapter *na, int onoff)
 
         if (onoff) {
 		na_set_native_flags(na);
-		bge_init_locked(adapter);
-
-		if ((ifp->if_drv_flags & (IFF_DRV_RUNNING | IFF_DRV_OACTIVE)) == 0) {
-			error = ENOMEM;
-			goto fail;
-		}
 	} else {
-fail:
 		na_clear_native_flags(na);
-		bge_init_locked(adapter);	/* also enables intr */
 	}
-	return (error);
+	bge_init_locked(adapter);	/* also enables intr */
+	BGE_UNLOCK(adapter);
+	return (ifp->if_drv_flags & IFF_DRV_RUNNING ? 0 : 1);
 }
 
 

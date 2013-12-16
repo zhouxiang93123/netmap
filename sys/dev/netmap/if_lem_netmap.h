@@ -48,7 +48,6 @@ lem_netmap_reg(struct netmap_adapter *na, int onoff)
 {
 	struct ifnet *ifp = na->ifp;
 	struct adapter *adapter = ifp->if_softc;
-	int error = 0;
 
 	EM_CORE_LOCK(adapter);
 
@@ -66,17 +65,10 @@ lem_netmap_reg(struct netmap_adapter *na, int onoff)
 	/* enable or disable flags and callbacks in na and ifp */
 	if (onoff) {
 		nm_set_native_flags(na);
-		lem_init_locked(adapter);
-		/* should set IFF_DRV_RUNNING on successful completion */
-		if (!(ifp->if_drv_flags & IFF_DRV_RUNNING)) {
-			error = ENOMEM;
-			goto fail;
-		}
 	} else {
-fail:
 		nm_clear_native_flags(na);
-		lem_init_locked(adapter);	/* also enable intr */
 	}
+	lem_init_locked(adapter);	/* also enable intr */
 
 #ifndef EM_LEGACY_IRQ
 	taskqueue_unblock(adapter->tq); // XXX do we need this ?
@@ -84,7 +76,7 @@ fail:
 
 	EM_CORE_UNLOCK(adapter);
 
-	return (error);
+	return (ifp->if_drv_flags & IFF_DRV_RUNNING ? 0 : 1);
 }
 
 

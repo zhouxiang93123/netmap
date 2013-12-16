@@ -39,10 +39,6 @@
 #include <dev/netmap/netmap_kern.h>
 
 
-static void	em_netmap_block_tasks(struct adapter *);
-static void	em_netmap_unblock_tasks(struct adapter *);
-
-
 // XXX do we need to block/unblock the tasks ?
 static void
 em_netmap_block_tasks(struct adapter *adapter)
@@ -92,7 +88,6 @@ em_netmap_reg(struct netmap_adapter *na, int onoff)
 {
 	struct ifnet *ifp = na->ifp;
 	struct adapter *adapter = ifp->if_softc;
-	int error = 0;
 
 	EM_CORE_LOCK(adapter);
 	em_disable_intr(adapter);
@@ -104,20 +99,13 @@ em_netmap_reg(struct netmap_adapter *na, int onoff)
 	/* enable or disable flags and callbacks in na and ifp */
 	if (onoff) {
 		nm_set_native_flags(na);
-		em_init_locked(adapter);
-		/* should set IFF_DRV_RUNNING on successful completion */
-		if (!(ifp->if_drv_flags & IFF_DRV_RUNNING)) {
-			error = ENOMEM;
-			goto fail;
-		}
 	} else {
-fail:
-		/* return to non-netmap mode */
 		nm_clear_native_flags(na);
-		em_init_locked(adapter);	/* also enable intr */
 	}
+	em_init_locked(adapter);	/* also enable intr */
 	em_netmap_unblock_tasks(adapter);
-	return (error);
+	EM_CORE_UNLOCK(adapter);
+	return (ifp->if_drv_flags & IFF_DRV_RUNNING ? 0 : 1);
 }
 
 

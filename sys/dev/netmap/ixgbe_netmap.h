@@ -117,7 +117,6 @@ ixgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 {
 	struct ifnet *ifp = na->ifp;
 	struct adapter *adapter = ifp->if_softc;
-	int error = 0;
 
 	IXGBE_CORE_LOCK(adapter);
 	ixgbe_disable_intr(adapter); // XXX maybe ixgbe_stop ?
@@ -129,20 +128,13 @@ ixgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 	/* enable or disable flags and callbacks in na and ifp */
 	if (onoff) {
 		nm_set_native_flags(na);
-		ixgbe_init_locked(adapter);
-		/* should set IFF_DRV_RUNNING on successful completion */
-		if (!(ifp->if_drv_flags & IFF_DRV_RUNNING)) {
-			error = ENOMEM;
-			goto fail;
-		}
 	} else {
-fail:
 		nm_clear_native_flags(na);
-		ixgbe_init_locked(adapter);	/* also enables intr */
 	}
+	ixgbe_init_locked(adapter);	/* also enables intr */
 	set_crcstrip(&adapter->hw, onoff); // XXX why twice ?
 	IXGBE_CORE_UNLOCK(adapter);
-	return (error);
+	return (ifp->if_drv_flags & IFF_DRV_RUNNING ? 0 : 1);
 }
 
 

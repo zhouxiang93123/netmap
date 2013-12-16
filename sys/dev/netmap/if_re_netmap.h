@@ -47,25 +47,17 @@ re_netmap_reg(struct netmap_adapter *na, int onoff)
 {
 	struct ifnet *ifp = na->ifp;
 	struct rl_softc *adapter = ifp->if_softc;
-	int error = 0;
 
 	RL_LOCK(adapter);
 	re_stop(adapter); /* also clears IFF_DRV_RUNNING */
-
 	if (onoff) {
 		nm_set_native_flags(na);
-		re_init_locked(adapter);
-		if (!(ifp->if_drv_flags & IFF_DRV_RUNNING)) {
-			error = ENOMEM;
-			goto fail;
-		}
 	} else {
-fail:
 		nm_clear_native_flags(na);
-		re_init_locked(adapter);	/* also enables intr */
 	}
+	re_init_locked(adapter);	/* also enables intr */
 	RL_UNLOCK(adapter);
-	return (error);
+	return (ifp->if_drv_flags & IFF_DRV_RUNNING ? 0 : 1);
 }
 
 

@@ -26,23 +26,24 @@ do_copyfiles_user() {
 
 	find_progs -L / /usr/bin/ssh /usr/bin/scp /usr/sbin/sshd
 	cp -p ${u_progs} ${dst}/bin
-	cp -p ${u_libs} ${dst}/usr/lib
+	# logverbose "Libraries for ssh etc: ${u_libs}"
+	cp -p ${u_libs} ${dst}/usr/local/lib
 
 	find_progs -L / -P /usr/local/bin trafshow netperf netserver
 	cp -p ${u_progs} ${dst}/bin
-	cp -p ${u_libs} ${dst}/usr/lib
+	cp -p ${u_libs} ${dst}/usr/local/lib
 
 
 	# XXX change this to head/tools/tools/netmap
 	#local d=/usr/ports-luigi/netmap-release/examples
 	local d=/usr/home/luigi/qemu-misc/netmap-release/examples
-	find_progs -L $d -P $d pkt-gen bridge vale-ctl testlock libnetmap.so click # pingd 
+	find_progs -L / -P $d pkt-gen bridge vale-ctl testlock libnetmap.so click # pingd 
 	cp -p ${u_progs} ${dst}/bin
 	cp -p ${u_libs} ${dst}/usr/lib
 	cp -p $d/testmod/test.ko ${dst}	 # XXX
 	cp -rp /tmp/boot/modules ${dst}	 # XXX
 
-	find_progs -L $d /tmp/click
+	find_progs -L / /tmp/click
 	cp -p ${u_progs} ${dst}/bin
 	cp -p ${u_libs} ${dst}/usr/lib
 
