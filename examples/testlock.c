@@ -39,6 +39,7 @@
 
 #if defined(__APPLE__)
 
+#include <net/if_var.h>
 #include <libkern/OSAtomic.h>
 #define atomic_add_int(p, n) OSAtomicAdd32(n, (int *)p)
 #define	atomic_cmpset_32(p, o, n)	OSAtomicCompareAndSwap32(o, n, (int *)p)
@@ -630,6 +631,7 @@ test_memcpy(struct targ *t)
 }
 
 #include <sys/ioctl.h>
+#include <sys/socket.h>	// OSX
 #include <net/if.h>
 #include <net/netmap.h>
 void
