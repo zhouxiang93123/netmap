@@ -53,7 +53,7 @@ int verbose = 0;
 #define SKIP_PAYLOAD 1 /* do not check payload. */
 
 struct virt_header {
-	uint8_t fields[10];
+	uint8_t fields[12];
 };
 
 struct pkt {
