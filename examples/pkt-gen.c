@@ -52,8 +52,12 @@ int verbose = 0;
 
 #define SKIP_PAYLOAD 1 /* do not check payload. */
 
+
+#define VIRT_HDR_1	10	/* length of a base vnet-hdr */
+#define VIRT_HDR_2	12	/* length of the extenede vnet-hdr */
+#define VIRT_HDR_MAX	VIRT_HDR_2
 struct virt_header {
-	uint8_t fields[12];
+	uint8_t fields[VIRT_HDR_MAX];
 };
 
 struct pkt {
@@ -658,13 +662,9 @@ pinger_body(void *data)
 	void *frame;
 	int size;
 
-	if (!targ->g->virt_header) {
-		frame = &targ->pkt.eh;
-		size = targ->g->pkt_size;
-	} else {
-		frame = &targ->pkt;
-		size = targ->g->pkt_size + sizeof(targ->pkt.vh);
-	}
+	frame = &targ->pkt;
+	frame += sizeof(targ->pkt.vh) - targ->g->virt_header;
+	size = targ->g->pkt_size + targ->g->virt_header;
 
 	fds[0].fd = targ->fd;
 	fds[0].events = (POLLIN);
@@ -922,13 +922,9 @@ sender_body(void *data)
 	void *frame;
 	int size;
 
-	if (!targ->g->virt_header) {
-		frame = &pkt->eh;
-		size = targ->g->pkt_size;
-	} else {
-		frame = pkt;
-		size = targ->g->pkt_size + sizeof(pkt->vh);
-	}
+	frame = pkt;
+	frame += sizeof(pkt->vh) - targ->g->virt_header;
+	size = targ->g->pkt_size + targ->g->virt_header;
 
 	D("start");
 	if (setaffinity(targ->thread, targ->affinity))
@@ -1244,6 +1240,7 @@ usage(void)
 		"\t-w wait_for_link_time	in seconds\n"
 		"\t-R rate		in packets per second\n"
 		"\t-X			dump payload\n"
+		"\t-H len		add empty virtio-net-header with size 'len'\n"
 		"",
 		cmd);
 
@@ -1520,7 +1517,7 @@ main(int arc, char **argv)
 	g.virt_header = 0;
 
 	while ( (ch = getopt(arc, argv,
-			"a:f:F:n:i:It:r:l:d:s:D:S:b:c:o:p:PT:w:WvR:XC:H")) != -1) {
+			"a:f:F:n:i:It:r:l:d:s:D:S:b:c:o:p:PT:w:WvR:XC:H:")) != -1) {
 		struct sf *fn;
 
 		switch(ch) {
@@ -1645,7 +1642,7 @@ main(int arc, char **argv)
 			g.nmr_config = strdup(optarg);
 			break;
 		case 'H':
-			g.virt_header = 1;
+			g.virt_header = atoi(optarg);
 		}
 	}
 
@@ -1681,6 +1678,12 @@ main(int arc, char **argv)
 	extract_ip_range(&g.dst_ip);
 	extract_mac_range(&g.src_mac);
 	extract_mac_range(&g.dst_mac);
+
+	if (g.virt_header != 0 && g.virt_header != VIRT_HDR_1
+			&& g.virt_header != VIRT_HDR_2) {
+		D("bad virtio-net-header length");
+		usage();
+	}
 
     if (g.dev_type == DEV_TAP) {
 	D("want to use tap %s", g.ifname);
