@@ -1359,28 +1359,30 @@ retry:
 			    dst = BDG_NMB(&dst_na->up, slot);
 
 			    if (unlikely(fix_mismatch)) {
-				if (na->offset > dst_na->offset) {
-					src += na->offset - dst_na->offset;
-					copy_len -= na->offset - dst_na->offset;
-					dst_len = copy_len;
-				} else {
-					bzero(dst, dst_na->offset - na->offset);
-					dst_len += dst_na->offset - na->offset;
-					dst += dst_na->offset - na->offset;
-				}
-				/* fix the first fragment only */
-				fix_mismatch = 0;
-				/* completely skip an header only fragment */
-				if (copy_len == 0) {
-					ft_p++;
-					continue;
-				}
+				    /* We are processing the first fragment
+				     * and there is a mismatch between source
+				     * and destination offsets. Create a zeroed
+				     * header for the destination, independently
+				     * of the source header length and content.
+				     */
+				    src += na->offset;
+				    copy_len -= na->offset;
+				    bzero(dst, dst_na->offset);
+				    dst += dst_na->offset;
+				    dst_len = dst_na->offset + copy_len;
+				    /* fix the first fragment only */
+				    fix_mismatch = 0;
+				    /* Here it could be copy_len == dst_len == 0,
+				     * and so a zero length fragment is passed.
+				     */
 			    }
+
+			    ND("send [%d] %d(%d) bytes at %s:%d",
+				i, (int)copy_len, (int)dst_len,
+				NM_IFPNAME(dst_ifp), j);
 			    /* round to a multiple of 64 */
 			    copy_len = (copy_len + 63) & ~63;
 
-			    ND("send %d %d bytes at %s:%d",
-				i, ft_p->ft_len, NM_IFPNAME(dst_ifp), j);
 			    if (ft_p->ft_flags & NS_INDIRECT) {
 				if (copyin(src, dst, copy_len)) {
 					// invalid user pointer, pretend len is 0
