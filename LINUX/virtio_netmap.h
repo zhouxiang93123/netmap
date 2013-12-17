@@ -352,10 +352,14 @@ virtio_netmap_config(struct netmap_adapter *na, u_int *txr, u_int *txd,
 						u_int *rxr, u_int *rxd)
 {
 	struct ifnet *ifp = na->ifp;
+	struct SOFTC_T *vi = netdev_priv(ifp);
 
 	*txr = ifp->real_num_tx_queues;
-	// *rxr = ifp->real_num_rx_queues;
-	D("tx queues %d", *txr);
+	*txd = virtqueue_get_vring_size(vi->sq[0].vq);
+	*rxr = 1;
+	*rxd = virtqueue_get_vring_size(vi->rq[0].vq);
+        D("virtio config txq=%d, txd=%d rxq=%d, rxd=%d",
+					*txr, *txd, *rxr, *rxd);
 
 	return 0;
 }
@@ -377,6 +381,8 @@ virtio_netmap_attach(struct SOFTC_T *vi)
 	na.num_tx_rings = na.num_rx_rings = 1;
 	netmap_attach(&na);
 
-        D("virtio attached txd=%d rxd=%d", na.num_tx_desc, na.num_rx_desc);
+        D("virtio attached txq=%d, txd=%d rxq=%d, rxd=%d",
+			na.num_tx_rings, na.num_tx_desc,
+			na.num_tx_rings, na.num_rx_desc);
 }
 /* end of file */
