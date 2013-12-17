@@ -249,7 +249,8 @@ pkt_queued(struct my_ring *me, int tx)
 Helper routines for multiple readers from the same queue
 
 - all readers open the device in 'passive' mode (NETMAP_PRIV_RING set).
-  This makes only one win the poll.
+  In this mode a thread that loses the race on a poll() just continues
+  without calling *xsync()
 
 - all readers share an extra 'ring' which contains the sync information.
   In particular we have a shared head+tail pointers that work
@@ -257,16 +258,71 @@ Helper routines for multiple readers from the same queue
   ON RETURN FROM THE SYSCALL:
   shadow->head = ring->cur
   shadow->tail = ring->cur + ring->avail (modulo)
-  shadow->leases = 0 /the current lease entry
-
-  Then each reader does this
-	do {
-		save_head = shadow->head;
-		new_head = save_head + len
-	} while !atomic_cmpswap_int(shadow->head, save_head, new_head);
-
-	leases[save_head] = new_head // link pointer for the leases
-
-
-
+  shadow->link[i] = i for all slots // mark invalid
+ 
  */
+
+struct nm_q_arg {
+	u_int want;	/* Input */
+	u_int have;	/* Output, 0 on error */
+	u_int head;
+	u_int tail;
+	struct netmap_ring *ring;
+}
+
+/*
+ * grab a number of slots from the queue.
+ */
+struct nm_q_arg
+my_grab(struct nm_q_arg q)
+{
+	const u_int ns = q.ring->num_slots;
+
+	for (;;) {
+
+		q.head = (volatile u_int)q.ring->head;
+		q.have = ns + q.head - (volatile u_int)q.ring->tail;
+		if (q.have >= ns)
+			q.have -= ns;
+		if (q.have == 0) /* no space */
+			break;
+		if (q.want < q.have)
+			q.have = q.want;
+		q.tail = q.head + q.have;
+		if (q.tail >= ns)
+			q.tail -= ns;
+		if (atomic_cmpset_int(&q.ring->head, q.head, q.tail)
+			break; /* success */
+	}
+	D("returns %d out of %d at %d,%d",
+		q.have, q.want, q.head, q.tail);
+	/* the last one can clear avail ? */
+	return q;
+}
+
+
+int
+my_release(struct nm_q_arg q)
+{
+	u_int head = q.head, tail = q.tail, i;
+	struct netmap_ring *r = q.ring;
+
+	/* link the block to the next one.
+	 * there is no race here because the location is mine.
+	 */
+	r->slot[head].ptr = tail; /* this is mine */
+	// memory barrier
+	if (r->head != head)
+		return; /* not my turn to release */
+	for (;;) {
+		// advance head
+		r->head = head = r->slot[head].ptr;
+		// barrier ?
+		if (head == r->slot[head].ptr)
+			break; // stop here
+	}
+	/* we have advanced from q.head to head (r.head might be
+	 * further down.
+	 */
+	// do an ioctl/poll to flush.
+}
