@@ -23,6 +23,8 @@
  * SUCH DAMAGE.
  */
 
+/* $FreeBSD$ */
+
 #include <errno.h>
 #include <stdio.h>
 #include <inttypes.h>	/* PRI* macros */
