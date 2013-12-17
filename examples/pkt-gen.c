@@ -363,7 +363,7 @@ source_hwaddr(const char *ifname, char *buf)
 static int
 setaffinity(pthread_t me, int i)
 {
-#ifdef __FreeBSD__
+#if 1 // def __FreeBSD__
 	cpuset_t cpumask;
 
 	if (i == -1)

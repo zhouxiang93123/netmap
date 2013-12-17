@@ -243,6 +243,8 @@ pkt_queued(struct my_ring *me, int tx)
 	return tot;
 }
 
+#if 0
+
 /*
  *
 
@@ -268,7 +270,7 @@ struct nm_q_arg {
 	u_int head;
 	u_int tail;
 	struct netmap_ring *ring;
-}
+};
 
 /*
  * grab a number of slots from the queue.
@@ -326,3 +328,4 @@ my_release(struct nm_q_arg q)
 	 */
 	// do an ioctl/poll to flush.
 }
+#endif /* unused */
