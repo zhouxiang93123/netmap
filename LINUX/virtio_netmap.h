@@ -352,10 +352,10 @@ virtio_netmap_config(struct netmap_adapter *na, u_int *txr, u_int *txd,
 						u_int *rxr, u_int *rxd)
 {
 	struct ifnet *ifp = na->ifp;
-	struct SOFTC_T *vi = netdev_priv(ifp);
 
-	*txr = vi->dev->real_num_tx_queues;
-	// *rxr = vi->dev->real_num_rx_queues;
+	*txr = ifp->real_num_tx_queues;
+	// *rxr = ifp->real_num_rx_queues;
+	D("tx queues %d", *txr);
 
 	return 0;
 }
