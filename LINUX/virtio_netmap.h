@@ -347,6 +347,18 @@ static int virtio_netmap_init_buffers(struct SOFTC_T *vi)
 	return 1;
 }
 
+static int
+virtio_netmap_config(struct netmap_adapter *na, u_int *txr, u_int *txd,
+						u_int *rxr, u_int *rxd)
+{
+	struct ifnet *ifp = na->ifp;
+	struct SOFTC_T *vi = netdev_priv(ifp);
+
+	*txr = vi->dev->real_num_tx_queues;
+	// *rxr = vi->dev->real_num_rx_queues;
+
+	return 0;
+}
 
 static void
 virtio_netmap_attach(struct SOFTC_T *vi)
@@ -361,6 +373,7 @@ virtio_netmap_attach(struct SOFTC_T *vi)
 	na.nm_register = virtio_netmap_reg;
 	na.nm_txsync = virtio_netmap_txsync;
 	na.nm_rxsync = virtio_netmap_rxsync;
+	na.nm_config = virtio_netmap_config;
 	na.num_tx_rings = na.num_rx_rings = 1;
 	netmap_attach(&na);
 
