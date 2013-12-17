@@ -1339,6 +1339,9 @@ netmap_set_ringid(struct netmap_priv_d *priv, u_int ringid)
 		priv->np_qlast = NETMAP_HW_RING ;
 	}
 	priv->np_txpoll = (ringid & NETMAP_NO_TX_POLL) ? 0 : 1;
+	priv->np_passive = (ringid & NETMAP_PRIV_MEM) ? 1 : 0;
+	if (priv->np_passive)
+		D("priv %p na %p is passive", priv, na);
     if (netmap_verbose) {
 	if (ringid & NETMAP_SW_RING)
 		D("ringid %s set to SW RING", NM_IFPNAME(ifp));
@@ -1870,8 +1873,13 @@ flush_tx:
 			if (nm_kr_tryget(kring)) {
 				ND("ring %p busy is %d",
 				    kring, (int)kring->nr_busy);
-				revents |= POLLERR;
-				goto out;
+				if (priv->np_passive) {
+					D("passive %p lost race on txring %d, ok", priv, i);
+					continue;
+				} else {
+					revents |= POLLERR;
+					goto out;
+				}
 			}
 
 			if (netmap_verbose & NM_VERB_TXSYNC)
@@ -1919,8 +1927,13 @@ do_retry_rx:
 			kring = &na->rx_rings[i];
 
 			if (nm_kr_tryget(kring)) {
-				revents |= POLLERR;
-				goto out;
+				if (priv->np_passive) {
+					D("passive %p lost race on rxring %d, ok", priv, i);
+					continue;
+				} else {
+					revents |= POLLERR;
+					goto out;
+				}
 			}
 
 			/* XXX NR_FORWARD should only be read on

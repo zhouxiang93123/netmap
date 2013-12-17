@@ -242,3 +242,31 @@ pkt_queued(struct my_ring *me, int tx)
 			tot, NETMAP_TXRING(me->nifp, me->begin)->cur);
 	return tot;
 }
+
+/*
+ *
+
+Helper routines for multiple readers from the same queue
+
+- all readers open the device in 'passive' mode (NETMAP_PRIV_RING set).
+  This makes only one win the poll.
+
+- all readers share an extra 'ring' which contains the sync information.
+  In particular we have a shared head+tail pointers that work
+  together with cur and available
+  ON RETURN FROM THE SYSCALL:
+  shadow->head = ring->cur
+  shadow->tail = ring->cur + ring->avail (modulo)
+  shadow->leases = 0 /the current lease entry
+
+  Then each reader does this
+	do {
+		save_head = shadow->head;
+		new_head = save_head + len
+	} while !atomic_cmpswap_int(shadow->head, save_head, new_head);
+
+	leases[save_head] = new_head // link pointer for the leases
+
+
+
+ */

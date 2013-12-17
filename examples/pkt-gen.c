@@ -109,6 +109,7 @@ struct glob_arg {
 	char *ifname;
 	char *nmr_config;
 	int dummy_send;
+	int passive;
 };
 enum dev_type { DEV_NONE, DEV_NETMAP, DEV_PCAP, DEV_TAP };
 
@@ -1219,6 +1220,7 @@ usage(void)
 		"\t-w wait_for_link_time	in seconds\n"
 		"\t-R rate		in packets per second\n"
 		"\t-X			dump payload\n"
+		"\t-m			passive mode\n"
 		"",
 		cmd);
 
@@ -1265,6 +1267,10 @@ start_threads(struct glob_arg *g)
 		 */
 		if (g->td_body == receiver_body) {
 			tifreq.nr_ringid |= NETMAP_NO_TX_POLL;
+		}
+		if (g->passive) {
+			D("requesting passive mode");
+			tifreq.nr_ringid |= NETMAP_PRIV_MEM;
 		}
 
 		if ((ioctl(tfd, NIOCREGIF, &tifreq)) == -1) {
@@ -1494,13 +1500,17 @@ main(int arc, char **argv)
 	g.nmr_config = "";
 
 	while ( (ch = getopt(arc, argv,
-			"a:f:F:n:i:It:r:l:d:s:D:S:b:c:o:p:PT:w:WvR:XC:")) != -1) {
+			"a:f:F:n:i:It:r:l:d:s:D:S:b:c:o:p:PT:w:WvR:XC:m")) != -1) {
 		struct sf *fn;
 
 		switch(ch) {
 		default:
 			D("bad option %c %s", ch, optarg);
 			usage();
+			break;
+
+		case 'm':
+			g.passive = 1;
 			break;
 
 		case 'n':
@@ -1700,7 +1710,6 @@ main(int arc, char **argv)
 	bzero(&nmr, sizeof(nmr));
 	nmr.nr_version = NETMAP_API;
 	strncpy(nmr.nr_name, g.ifname, sizeof(nmr.nr_name));
-	nmr.nr_version = NETMAP_API;
 	parse_nmr_config(g.nmr_config, &nmr);
 	if (ioctl(g.main_fd, NIOCREGIF, &nmr) == -1) {
 		D("Unable to register interface %s", g.ifname);
@@ -1709,11 +1718,6 @@ main(int arc, char **argv)
 	ND("%s: txr %d txd %d rxr %d rxd %d", g.ifname,
 			nmr.nr_tx_rings, nmr.nr_tx_slots,
 			nmr.nr_rx_rings, nmr.nr_rx_slots);
-	//if ((ioctl(g.main_fd, NIOCGINFO, &nmr)) == -1) {
-	//	D("Unable to get if info without name");
-	//} else {
-	//	D("map size is %d Kb", nmr.nr_memsize >> 10);
-	//}
 	if ((ioctl(g.main_fd, NIOCGINFO, &nmr)) == -1) {
 		D("Unable to get if info for %s", g.ifname);
 	}
