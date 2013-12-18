@@ -24,7 +24,7 @@ static void virtio_netmap_free_rx_unused_bufs(struct SOFTC_T* vi, int onoff)
 	void *buf;
 	int i, c;
 
-	for (i = 0; i < vi->max_queue_pairs; i++) {
+	for (i = 0; i < vi->dev->num_rx_queues; i++) {
 		struct virtqueue *vq = vi->rq[i].vq;
 
 		c = 0;
