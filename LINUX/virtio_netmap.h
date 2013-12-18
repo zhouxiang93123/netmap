@@ -10,6 +10,52 @@ static int virtnet_open(struct ifnet *ifp);
 static void free_receive_bufs(struct virtnet_info *vi);
 
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 35)
+
+#define DEV_NUM_RX_QUEUES(_netdev)	1
+#define COMPAT_DECL_SG			struct scatterlist _compat_sg;
+
+#else  /* >= 2.6.35 */
+
+#define DEV_NUM_RX_QUEUES(_netdev)	(_netdev)->num_rx_queues
+#define COMPAT_DECL_SG
+
+#endif  /* >= 2.6.35 */
+
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 35)
+/* Before 2.6.35, the virtio interface was not exported with functions,
+   but using virtqueue callbacks. */
+#define virtqueue_detach_unused_buf(_vq) \
+		(_vq)->vq_ops->detach_unused_buf(_vq)
+#define virtqueue_get_buf(_vq, _lp) \
+		(_vq)->vq_ops->get_buf(_vq, _lp)
+#define virtqueue_add_inbuf(_vq, _sg, _num, _tok, _gfp) \
+		(_vq)->vq_ops->add_buf(_vq, _sg, 0, _num, _tok)
+#define virtqueue_add_outbuf(_vq, _sg, _num, _tok, _gfp) \
+		(_vq)->vq_ops->add_buf(_vq, _sg, _num, 0, _tok)
+#define virtqueue_kick(_vq) \
+		(_vq)->vq_ops->kick(_vq)
+#define virtqueue_enable_cb(_vq) \
+		(_vq)->vq_ops->enable_cb(_vq)
+
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(3, 3, 0)
+
+#define virtqueue_add_inbuf(_vq, _sg, _num, _tok, _gfp)	\
+		virtqueue_add_buf_gfp(_vq, _sg, 0, _num, _tok, _gfp)
+#define virtqueue_add_outbuf(_vq, _sg, _num, _tok, _gfp) \
+		virtqueue_add_buf_gfp(_vq, _sg, _num, 0, _tok, _gfp)
+
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(3, 10, 0)
+
+#define virtqueue_add_inbuf(_vq, _sg, _num, _tok, _gfp)	\
+		virtqueue_add_buf(_vq, _sg, 0, _num, _tok, _gfp)
+#define virtqueue_add_outbuf(_vq, _sg, _num, _tok, _gfp) \
+		virtqueue_add_buf(_vq, _sg, _num, 0, _tok, _gfp)
+
+#endif  /* 3.3 <= VER < 3.10.0 */
+
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 0, 0)
 /* The delayed optimization did not exists before version 3.0. */
 #define virtqueue_enable_cb_delayed(_vq)	virtqueue_enable_cb(_vq)
@@ -30,9 +76,7 @@ static struct page *get_a_page(struct SOFTC_T *vi, gfp_t gfp_mask);
 #define GIVE_PAGES(_vi, _i, _buf)	give_pages(_vi, _buf)
 #define DECR_NUM(_vi, _i)		--(_vi)->num
 #define GET_RX_VQ(_vi, _i)		(_vi)->rvq
-#define GET_RX_SG(_vi, _i)		(_vi)->rx_sg
 #define GET_TX_VQ(_vi, _i)		(_vi)->svq
-#define GET_TX_SG(_vi, _i)		(_vi)->tx_sg
 #define VQ_FULL(_vq, _err)		(_err > 0)
 
 static void free_receive_bufs(struct SOFTC_T *vi)
@@ -48,29 +92,28 @@ static struct page *get_a_page(struct receive_queue *rq, gfp_t gfp_mask);
 #define GIVE_PAGES(_vi, _i, _buf)	give_pages(&(_vi)->rq[_i], _buf)
 #define DECR_NUM(_vi, _i)		--(_vi)->rq[_i].num
 #define GET_RX_VQ(_vi, _i)		(_vi)->rq[_i].vq
-#define GET_RX_SG(_vi, _i)		(_vi)->rq[_i].sg
 #define GET_TX_VQ(_vi, _i)		(_vi)->sq[_i].vq
-#define GET_TX_SG(_vi, _i)		(_vi)->sq[_i].sg
 #define VQ_FULL(_vq, _err)		((_vq)->num_free == 0)
 
 #endif  /* >= 3.8.0 */
 
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 3, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 35)
 
-#define virtqueue_add_inbuf(_vq, _sg, _num, _tok, _gfp)	\
-		virtqueue_add_buf_gfp(_vq, _sg, 0, _num, _tok, _gfp)
-#define virtqueue_add_outbuf(_vq, _sg, _num, _tok, _gfp) \
-		virtqueue_add_buf_gfp(_vq, _sg, _num, 0, _tok, _gfp)
+#define GET_RX_SG(_vi, _i)	&_compat_sg
+#define GET_TX_SG(_vi, _i)	&_compat_sg
 
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(3, 10, 0)
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(3, 8, 0)
 
-#define virtqueue_add_inbuf(_vq, _sg, _num, _tok, _gfp)	\
-		virtqueue_add_buf(_vq, _sg, 0, _num, _tok, _gfp)
-#define virtqueue_add_outbuf(_vq, _sg, _num, _tok, _gfp) \
-		virtqueue_add_buf(_vq, _sg, _num, 0, _tok, _gfp)
+#define GET_RX_SG(_vi, _i)		(_vi)->rx_sg
+#define GET_TX_SG(_vi, _i)		(_vi)->tx_sg
 
-#endif  /* 3.3 <= VER < 3.10.0 */
+#else   /* >= 3.8.0 */
+
+#define GET_RX_SG(_vi, _i)		(_vi)->rq[_i].sg
+#define GET_TX_SG(_vi, _i)		(_vi)->sq[_i].sg
+
+#endif  /* >= 3.8.0 */
 
 
 static void virtio_netmap_free_rx_unused_bufs(struct SOFTC_T* vi, int onoff)
@@ -78,7 +121,7 @@ static void virtio_netmap_free_rx_unused_bufs(struct SOFTC_T* vi, int onoff)
 	void *buf;
 	int i, c;
 
-	for (i = 0; i < vi->dev->num_rx_queues; i++) {
+	for (i = 0; i < DEV_NUM_RX_QUEUES(vi->dev); i++) {
 		struct virtqueue *vq = GET_RX_VQ(vi, i);
 
 		c = 0;
@@ -152,6 +195,7 @@ virtio_netmap_reg(struct netmap_adapter *na, int onoff)
 static int
 virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+	COMPAT_DECL_SG
         struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *vi = netdev_priv(ifp);
 	struct virtqueue *vq = GET_TX_VQ(vi, ring_nr);
@@ -259,6 +303,7 @@ out:
 static int
 virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
+	COMPAT_DECL_SG
         struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *vi = netdev_priv(ifp);
 	struct virtqueue *vq = GET_RX_VQ(vi, ring_nr);
@@ -380,6 +425,7 @@ static int virtio_netmap_init_buffers(struct SOFTC_T *vi)
 		return 0;
         }
 	for (r = 0; r < na->num_rx_rings; r++) {
+		COMPAT_DECL_SG
                 struct netmap_ring *ring = na->rx_rings[r].ring;
 		struct virtqueue *vq = GET_RX_VQ(vi, r);
 		struct scatterlist *sg = GET_RX_SG(vi, r);
