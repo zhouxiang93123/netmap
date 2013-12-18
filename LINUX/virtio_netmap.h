@@ -42,14 +42,21 @@ static struct page *get_a_page(struct receive_queue *rq, gfp_t gfp_mask);
 #endif  /* >= 3.8.0 */
 
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 10, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 3, 0)
+
+#define virtqueue_add_inbuf(_vq, _sg, _num, _tok, _gfp)	\
+		virtqueue_add_buf_gfp(_vq, _sg, 0, _num, _tok, _gfp)
+#define virtqueue_add_outbuf(_vq, _sg, _num, _tok, _gfp) \
+		virtqueue_add_buf_gfp(_vq, _sg, _num, 0, _tok, _gfp)
+
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(3, 10, 0)
 
 #define virtqueue_add_inbuf(_vq, _sg, _num, _tok, _gfp)	\
 		virtqueue_add_buf(_vq, _sg, 0, _num, _tok, _gfp)
 #define virtqueue_add_outbuf(_vq, _sg, _num, _tok, _gfp) \
 		virtqueue_add_buf(_vq, _sg, _num, 0, _tok, _gfp)
 
-#endif  /* 3.10.0 */
+#endif  /* 3.3 <= VER < 3.10.0 */
 
 
 static void virtio_netmap_free_rx_unused_bufs(struct SOFTC_T* vi, int onoff)
