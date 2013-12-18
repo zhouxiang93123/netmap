@@ -11,6 +11,14 @@ static void give_pages(struct receive_queue *rq, struct page *page);
 static struct page *get_a_page(struct receive_queue *rq, gfp_t gfp_mask);
 
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 10, 0)
+#define virtqueue_add_inbuf(_vq, _sg, _num, _tok, _gfp)	\
+		virtqueue_add_buf(_vq, _sg, 0, _num, _tok, _gfp)
+#define virtqueue_add_outbuf(_vq, _sg, _num, _tok, _gfp) \
+		virtqueue_add_buf(_vq, _sg, _num, 0, _tok, _gfp)
+#endif
+
+
 static void virtio_netmap_free_rx_unused_bufs(struct SOFTC_T* vi, int onoff)
 {
 	void *buf;
