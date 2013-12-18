@@ -10,7 +10,15 @@ static int virtnet_open(struct ifnet *ifp);
 static void free_receive_bufs(struct virtnet_info *vi);
 
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 0, 0)
+/* The delayed optimization did not exists before version 3.0. */
+#define virtqueue_enable_cb_delayed(_vq)	virtqueue_enable_cb(_vq)
+#endif  /* < 3.0 */
+
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 2, 0)
+/* Not yet found a way to find out virtqueue length in these
+   kernel series. Use the virtio default value. */
 #define virtqueue_get_vring_size(_vq)	256
 #endif  /* < 3.2 */
 
