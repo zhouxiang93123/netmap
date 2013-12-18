@@ -19,6 +19,7 @@ static struct page *get_a_page(struct SOFTC_T *vi, gfp_t gfp_mask);
 #define GET_RX_SG(_vi, _i)		(_vi)->rx_sg
 #define GET_TX_VQ(_vi, _i)		(_vi)->svq
 #define GET_TX_SG(_vi, _i)		(_vi)->tx_sg
+#define VQ_FULL(_vq, _err)		(_err > 0)
 
 #else   /* >= 3.8.0 */
 
@@ -30,6 +31,7 @@ static struct page *get_a_page(struct receive_queue *rq, gfp_t gfp_mask);
 #define GET_RX_SG(_vi, _i)		(_vi)->rq[_i].sg
 #define GET_TX_VQ(_vi, _i)		(_vi)->sq[_i].vq
 #define GET_TX_SG(_vi, _i)		(_vi)->sq[_i].sg
+#define VQ_FULL(_vq, _err)		((_vq)->num_free == 0)
 
 #endif  /* >= 3.8.0 */
 
@@ -356,6 +358,7 @@ static int virtio_netmap_init_buffers(struct SOFTC_T *vi)
 		struct scatterlist *sg = GET_RX_SG(vi, r);
 	        struct netmap_slot* slot;
                 unsigned int i;
+		int err = 0;
 
 		slot = netmap_reset(na, NR_RX, r, 0);
 		if (!slot) {
@@ -363,9 +366,8 @@ static int virtio_netmap_init_buffers(struct SOFTC_T *vi)
 			return 0;
 		}
 
-		for (i = 0; vq->num_free && i < na->num_rx_desc-1; i++) {
+		for (i = 0; i < na->num_rx_desc-1; i++) {
                         void *addr;
-                        int err;
 
                         slot = &ring->slot[i];
                         addr = NMB(slot);
@@ -376,6 +378,8 @@ static int virtio_netmap_init_buffers(struct SOFTC_T *vi)
 
                             return 0;
                         }
+			if (VQ_FULL(vq, err))
+				break;
 		}
 		D("added %d inbufs on queue %d", i, r);
 	}
