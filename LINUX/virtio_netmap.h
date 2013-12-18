@@ -4,19 +4,44 @@
 
 
 #define SOFTC_T	virtnet_info
+
 static int virtnet_close(struct ifnet *ifp);
 static int virtnet_open(struct ifnet *ifp);
 static void free_receive_bufs(struct virtnet_info *vi);
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 8, 0)
+
+static void give_pages(struct SOFTC_T *vi, struct page *page);
+static struct page *get_a_page(struct SOFTC_T *vi, gfp_t gfp_mask);
+#define GIVE_PAGES(_vi, _i, _buf)	give_pages(_vi, _buf)
+#define DECR_NUM(_vi, _i)		--(_vi)->num
+#define GET_RX_VQ(_vi, _i)		(_vi)->rvq
+#define GET_RX_SG(_vi, _i)		(_vi)->rx_sg
+#define GET_TX_VQ(_vi, _i)		(_vi)->svq
+#define GET_TX_SG(_vi, _i)		(_vi)->tx_sg
+
+#else   /* >= 3.8.0 */
+
 static void give_pages(struct receive_queue *rq, struct page *page);
 static struct page *get_a_page(struct receive_queue *rq, gfp_t gfp_mask);
+#define GIVE_PAGES(_vi, _i, _buf)	give_pages(&(_vi)->rq[_i], _buf)
+#define DECR_NUM(_vi, _i)		--(_vi)->rq[_i].num
+#define GET_RX_VQ(_vi, _i)		(_vi)->rq[_i].vq
+#define GET_RX_SG(_vi, _i)		(_vi)->rq[_i].sg
+#define GET_TX_VQ(_vi, _i)		(_vi)->sq[_i].vq
+#define GET_TX_SG(_vi, _i)		(_vi)->sq[_i].sg
+
+#endif  /* >= 3.8.0 */
 
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 10, 0)
+
 #define virtqueue_add_inbuf(_vq, _sg, _num, _tok, _gfp)	\
 		virtqueue_add_buf(_vq, _sg, 0, _num, _tok, _gfp)
 #define virtqueue_add_outbuf(_vq, _sg, _num, _tok, _gfp) \
 		virtqueue_add_buf(_vq, _sg, _num, 0, _tok, _gfp)
-#endif
+
+#endif  /* 3.10.0 */
 
 
 static void virtio_netmap_free_rx_unused_bufs(struct SOFTC_T* vi, int onoff)
@@ -25,17 +50,17 @@ static void virtio_netmap_free_rx_unused_bufs(struct SOFTC_T* vi, int onoff)
 	int i, c;
 
 	for (i = 0; i < vi->dev->num_rx_queues; i++) {
-		struct virtqueue *vq = vi->rq[i].vq;
+		struct virtqueue *vq = GET_RX_VQ(vi, i);
 
 		c = 0;
 		while ((buf = virtqueue_detach_unused_buf(vq)) != NULL) {
 			if (onoff) {
 				if (vi->mergeable_rx_bufs || vi->big_packets)
-					give_pages(&vi->rq[i], buf);
+					GIVE_PAGES(vi, i, buf);
 				else
 					dev_kfree_skb(buf);
 			}
-			--vi->rq[i].num;
+			DECR_NUM(vi, i);
 			c++;
 		}
 		D("[%d] freed %d rx unused bufs on queue %d", onoff, c, i);
@@ -100,7 +125,8 @@ virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
         struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *vi = netdev_priv(ifp);
-        struct send_queue *sq = &vi->sq[ring_nr];
+	struct virtqueue *vq = GET_TX_VQ(vi, ring_nr);
+	struct scatterlist *sg = GET_TX_SG(vi, ring_nr);
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
         struct netmap_adapter *token;
@@ -113,7 +139,7 @@ virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
         /* Free used slots. */
         n = 0;
         for (;;) {
-                token = virtqueue_get_buf(sq->vq, &l);
+                token = virtqueue_get_buf(vq, &l);
                 if (token == NULL)
                         break;
                 if (token == na)
@@ -160,13 +186,13 @@ virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 				return netmap_ring_reinit(kring);
 
 			slot->flags &= ~NS_REPORT;
-                        sg_set_buf(sq->sg, addr, slot->len);
-                        err = virtqueue_add_outbuf(sq->vq, sq->sg, 1, na, GFP_ATOMIC);
+                        sg_set_buf(sg, addr, slot->len);
+                        err = virtqueue_add_outbuf(vq, sg, 1, na, GFP_ATOMIC);
                         if (err < 0) {
                                 D("virtqueue_add_outbuf failed");
                                 break;
                         }
-			virtqueue_kick(sq->vq);
+			virtqueue_kick(vq);
 
 			j = (j == lim) ? 0 : j + 1;
 			l = (l == lim) ? 0 : l + 1;
@@ -178,7 +204,7 @@ virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		kring->nr_hwavail -= new_slots;
 
 		if (kring->nr_hwavail == 0)
-			virtqueue_enable_cb_delayed(sq->vq);
+			virtqueue_enable_cb_delayed(vq);
 	}
 out:
 	/* recompute hwreserved */
@@ -206,7 +232,8 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
         struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *vi = netdev_priv(ifp);
-        struct receive_queue *rq = &vi->rq[ring_nr];
+	struct virtqueue *vq = GET_RX_VQ(vi, ring_nr);
+	struct scatterlist *sg = GET_RX_SG(vi, ring_nr);
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;
@@ -233,7 +260,7 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
                         j -= kring->nkr_num_slots;
                 n = 0;
 		for (;;) {
-                        token = virtqueue_get_buf(rq->vq, &l);
+                        token = virtqueue_get_buf(vq, &l);
                         if (token == NULL)
                                 break;
                         if (likely(token == na)) {
@@ -247,13 +274,13 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
                             int err;
 
                             if (kring->nr_ntc < lim) {
-                                sg_set_buf(rq->sg, addr, ring->nr_buf_size);
-                                err = virtqueue_add_inbuf(rq->vq, rq->sg, 1, na, GFP_ATOMIC);
+                                sg_set_buf(sg, addr, ring->nr_buf_size);
+                                err = virtqueue_add_inbuf(vq, sg, 1, na, GFP_ATOMIC);
                                 if (err < 0) {
                                     D("virtqueue_add_inbuf failed");
                                     return err;
                                 }
-                                virtqueue_kick(rq->vq);
+                                virtqueue_kick(vq);
                                 kring->nr_ntc = (kring->nr_ntc == lim) ? 0 : kring->nr_ntc + 1;
                             }
                         }
@@ -285,20 +312,20 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			if (slot->flags & NS_BUF_CHANGED)
 				slot->flags &= ~NS_BUF_CHANGED;
 
-                        sg_set_buf(rq->sg, addr, ring->nr_buf_size);
-                        err = virtqueue_add_inbuf(rq->vq, rq->sg, 1, na, GFP_ATOMIC);
+                        sg_set_buf(sg, addr, ring->nr_buf_size);
+                        err = virtqueue_add_inbuf(vq, sg, 1, na, GFP_ATOMIC);
                         if (err < 0) {
                             D("virtqueue_add_inbuf failed");
                             return err;
                         }
-                        virtqueue_kick(rq->vq);
+                        virtqueue_kick(vq);
 			j = (j == lim) ? 0 : j + 1;
 		}
 		kring->nr_hwavail -= n;
 		kring->nr_hwcur = k;
 	}
 
-        virtqueue_enable_cb(rq->vq);
+        virtqueue_enable_cb(vq);
 
 	/* Tell userspace that there are new packets. */
 	ring->avail = kring->nr_hwavail - resvd;
@@ -325,7 +352,8 @@ static int virtio_netmap_init_buffers(struct SOFTC_T *vi)
         }
 	for (r = 0; r < na->num_rx_rings; r++) {
                 struct netmap_ring *ring = na->rx_rings[r].ring;
-                struct receive_queue *rq = &vi->rq[r];
+		struct virtqueue *vq = GET_RX_VQ(vi, r);
+		struct scatterlist *sg = GET_RX_SG(vi, r);
 	        struct netmap_slot* slot;
                 unsigned int i;
 
@@ -335,14 +363,14 @@ static int virtio_netmap_init_buffers(struct SOFTC_T *vi)
 			return 0;
 		}
 
-		for (i = 0; rq->vq->num_free && i < na->num_rx_desc-1; i++) {
+		for (i = 0; vq->num_free && i < na->num_rx_desc-1; i++) {
                         void *addr;
                         int err;
 
                         slot = &ring->slot[i];
                         addr = NMB(slot);
-                        sg_set_buf(rq->sg, addr, ring->nr_buf_size);
-                        err = virtqueue_add_inbuf(rq->vq, rq->sg, 1, na, GFP_ATOMIC);
+                        sg_set_buf(sg, addr, ring->nr_buf_size);
+                        err = virtqueue_add_inbuf(vq, sg, 1, na, GFP_ATOMIC);
                         if (err < 0) {
                             D("virtqueue_add_inbuf failed");
 
@@ -363,9 +391,9 @@ virtio_netmap_config(struct netmap_adapter *na, u_int *txr, u_int *txd,
 	struct SOFTC_T *vi = netdev_priv(ifp);
 
 	*txr = ifp->real_num_tx_queues;
-	*txd = virtqueue_get_vring_size(vi->sq[0].vq);
+	*txd = virtqueue_get_vring_size(GET_TX_VQ(vi, 0));
 	*rxr = 1;
-	*rxd = virtqueue_get_vring_size(vi->rq[0].vq);
+	*rxd = virtqueue_get_vring_size(GET_RX_VQ(vi, 0));
         D("virtio config txq=%d, txd=%d rxq=%d, rxd=%d",
 					*txr, *txd, *rxr, *rxd);
 
@@ -380,8 +408,8 @@ virtio_netmap_attach(struct SOFTC_T *vi)
 	bzero(&na, sizeof(na));
 
 	na.ifp = vi->dev;
-	na.num_tx_desc = virtqueue_get_vring_size(vi->sq[0].vq);
-	na.num_rx_desc = virtqueue_get_vring_size(vi->rq[0].vq);
+	na.num_tx_desc = virtqueue_get_vring_size(GET_TX_VQ(vi, 0));
+	na.num_rx_desc = virtqueue_get_vring_size(GET_RX_VQ(vi, 0));
 	na.nm_register = virtio_netmap_reg;
 	na.nm_txsync = virtio_netmap_txsync;
 	na.nm_rxsync = virtio_netmap_rxsync;
