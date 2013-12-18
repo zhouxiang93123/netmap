@@ -11,8 +11,13 @@ static void free_receive_bufs(struct virtnet_info *vi);
 
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 35)
-
+/* Before 2.6.35 there was no net_device.num_rx_queues, so we assume 1. */
 #define DEV_NUM_RX_QUEUES(_netdev)	1
+/* A scatterlist struct is needed by functions that invoke
+   virtqueue_add_buf() methods, but before 2.6.35 these struct were
+   not part of virtio-net data structures, but were defined in those
+   function. This macro does this definition, which is not necessary
+   for subsequent versions. */
 #define COMPAT_DECL_SG			struct scatterlist _compat_sg;
 
 #else  /* >= 2.6.35 */
@@ -40,14 +45,14 @@ static void free_receive_bufs(struct virtnet_info *vi);
 		(_vq)->vq_ops->enable_cb(_vq)
 
 #elif LINUX_VERSION_CODE < KERNEL_VERSION(3, 3, 0)
-
+/* Some simple renaming due to virtio interface changes. */
 #define virtqueue_add_inbuf(_vq, _sg, _num, _tok, _gfp)	\
 		virtqueue_add_buf_gfp(_vq, _sg, 0, _num, _tok, _gfp)
 #define virtqueue_add_outbuf(_vq, _sg, _num, _tok, _gfp) \
 		virtqueue_add_buf_gfp(_vq, _sg, _num, 0, _tok, _gfp)
 
 #elif LINUX_VERSION_CODE < KERNEL_VERSION(3, 10, 0)
-
+/* Some simple renaming due to virtio interface changes. */
 #define virtqueue_add_inbuf(_vq, _sg, _num, _tok, _gfp)	\
 		virtqueue_add_buf(_vq, _sg, 0, _num, _tok, _gfp)
 #define virtqueue_add_outbuf(_vq, _sg, _num, _tok, _gfp) \
@@ -70,15 +75,19 @@ static void free_receive_bufs(struct virtnet_info *vi);
 
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 8, 0)
-
-static void give_pages(struct SOFTC_T *vi, struct page *page);
-static struct page *get_a_page(struct SOFTC_T *vi, gfp_t gfp_mask);
-#define GIVE_PAGES(_vi, _i, _buf)	give_pages(_vi, _buf)
+/* Before 3.8.0 virtio did not have multiple queues, and therefore
+   it did not have per-queue data structure. We then abstract the
+   way data structure are accessed, ignoring the queue indexes. */
 #define DECR_NUM(_vi, _i)		--(_vi)->num
 #define GET_RX_VQ(_vi, _i)		(_vi)->rvq
 #define GET_TX_VQ(_vi, _i)		(_vi)->svq
 #define VQ_FULL(_vq, _err)		(_err > 0)
 
+static void give_pages(struct SOFTC_T *vi, struct page *page);
+static struct page *get_a_page(struct SOFTC_T *vi, gfp_t gfp_mask);
+#define GIVE_PAGES(_vi, _i, _buf)	give_pages(_vi, _buf)
+
+/* This function did not exists, there was just the code. */
 static void free_receive_bufs(struct SOFTC_T *vi)
 {
 	while (vi->pages)
@@ -88,7 +97,6 @@ static void free_receive_bufs(struct SOFTC_T *vi)
 #else   /* >= 3.8.0 */
 
 static void give_pages(struct receive_queue *rq, struct page *page);
-static struct page *get_a_page(struct receive_queue *rq, gfp_t gfp_mask);
 #define GIVE_PAGES(_vi, _i, _buf)	give_pages(&(_vi)->rq[_i], _buf)
 #define DECR_NUM(_vi, _i)		--(_vi)->rq[_i].num
 #define GET_RX_VQ(_vi, _i)		(_vi)->rq[_i].vq
@@ -99,12 +107,14 @@ static struct page *get_a_page(struct receive_queue *rq, gfp_t gfp_mask);
 
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 35)
-
+/* Use the scatterlist struct defined in the current function
+   (see above). */
 #define GET_RX_SG(_vi, _i)	&_compat_sg
 #define GET_TX_SG(_vi, _i)	&_compat_sg
 
 #elif LINUX_VERSION_CODE < KERNEL_VERSION(3, 8, 0)
-
+/* Also here we create an abstraction because of multiqueue support
+   (see above). */
 #define GET_RX_SG(_vi, _i)		(_vi)->rx_sg
 #define GET_TX_SG(_vi, _i)		(_vi)->tx_sg
 
@@ -116,6 +126,16 @@ static struct page *get_a_page(struct receive_queue *rq, gfp_t gfp_mask);
 #endif  /* >= 3.8.0 */
 
 
+/* Free all the unused buffer in all the RX virtqueues.
+ * This function is called when entering and exiting netmap mode.
+ * In the former case, the unused buffers point to memory allocated by
+ * the virtio-driver (e.g. sk_buffs). We need to free that
+ * memory, otherwise we have leakage.
+ * In the latter case, the unused buffers point to memory allocated by
+ * netmap, and so we don't need to free anything.
+ * We scan all the RX virtqueues, even those that have not been
+ * activated (by ethtool set-channel).
+ */
 static void virtio_netmap_free_rx_unused_bufs(struct SOFTC_T* vi, int onoff)
 {
 	void *buf;
@@ -139,9 +159,7 @@ static void virtio_netmap_free_rx_unused_bufs(struct SOFTC_T* vi, int onoff)
 	}
 }
 
-/*
- * Register/unregister, similar to e1000_reinit_safe()
- */
+/* Register and unregister. */
 static int
 virtio_netmap_reg(struct netmap_adapter *na, int onoff)
 {
@@ -162,10 +180,16 @@ virtio_netmap_reg(struct netmap_adapter *na, int onoff)
 
 	rtnl_lock();
 
+	/* Down the interface. This also disables napi. */
         virtnet_close(ifp);
 
 	if (onoff) {
+		/* We have drain the RX virtqueues, otherwise the
+		 * virtio_netmap_init_buffer() called by the subsequent
+		 * virtnet_open() cannot link the netmap buffers to the
+		 * virtio RX ring. */
 		virtio_netmap_free_rx_unused_bufs(vi, onoff);
+		/* Also free the pages allocated by the driver. */
 		free_receive_bufs(vi);
 
 		/* enable netmap mode */
@@ -178,9 +202,14 @@ virtio_netmap_reg(struct netmap_adapter *na, int onoff)
                 na->na_flags &= ~NAF_NATIVE_ON;
 		ifp->netdev_ops = (void *)na->if_transmit;
 
+		/* Drain the RX virtqueues, otherwise the driver will
+		 * interpret the netmap buffers currently linked to the
+		 * netmap ring as buffers allocated by the driver. This
+		 * would break the driver (and kernel panic/ooops). */
 		virtio_netmap_free_rx_unused_bufs(vi, onoff);
 	}
 
+	/* Up the interface. This also enables the napi. */
         virtnet_open(ifp);
 
 	rtnl_unlock();
@@ -189,9 +218,7 @@ virtio_netmap_reg(struct netmap_adapter *na, int onoff)
 }
 
 
-/*
- * Reconcile kernel and user view of the transmit ring.
- */
+/* Reconcile kernel and user view of the transmit ring. */
 static int
 virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
@@ -209,7 +236,9 @@ virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
         ND("[A] %d %d %d %d", ring->cur, kring->nr_hwcur,
 			      kring->nr_hwavail, kring->nr_hwreserved);
 
-        /* Free used slots. */
+        /* Free used slots. We only consider our own used buffers, recognized
+	 * by the token we passed to virtqueue_add_outbuf.
+	 */
         n = 0;
         for (;;) {
                 token = virtqueue_get_buf(vq, &l);
@@ -228,9 +257,8 @@ virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		return netmap_ring_reinit(kring);
 
 	rmb();
-	/*
-	 * Process new packets to send. j is the current index in the
-	 * netmap ring, l is the corresponding index in the NIC ring.
+	/* Process new packets to send. j is the current index in the
+	 * netmap ring.
 	 */
 	j = kring->nr_hwcur;
 	new_slots = k - j - kring->nr_hwreserved;
@@ -246,7 +274,7 @@ virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		kring->nr_hwavail -= new_slots;
 		goto out;
 	}
-	if (j != k) {	/* we have new packets to send */
+	if (j != k) {	/* We have new packets to send */
 		l = netmap_idx_k2n(kring, j);
 		for (n = 0; j != k; n++) {
 			/* slot is the current slot in the netmap ring */
@@ -259,6 +287,9 @@ virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 				return netmap_ring_reinit(kring);
 
 			slot->flags &= ~NS_REPORT;
+			/* Initialize the scatterlist, expose it to the hypervisor,
+			 * and kick the hypervisor (if necessary).
+			 */
                         sg_set_buf(sg, addr, slot->len);
                         err = virtqueue_add_outbuf(vq, sg, 1, na, GFP_ATOMIC);
                         if (err < 0) {
@@ -276,6 +307,10 @@ virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		/* The new slots are reported as unavailable. */
 		kring->nr_hwavail -= new_slots;
 
+		/* No more free TX slots? Ask the hypervisor for notifications,
+		 * possibly only when a considerable amount of work has been
+		 * done.
+		 */
 		if (kring->nr_hwavail == 0)
 			virtqueue_enable_cb_delayed(vq);
 	}
@@ -297,9 +332,7 @@ out:
 }
 
 
-/*
- * Reconcile kernel and user view of the receive ring.
- */
+/* Reconcile kernel and user view of the receive ring. */
 static int
 virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
@@ -323,7 +356,10 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	rmb();
 	/*
 	 * Import newly received packets into the netmap ring.
-	 * j is an index in the netmap ring.
+	 * j is an index in the netmap ring. Only accept our
+	 * own buffers (matching the token). We should only get
+	 * matching buffers, because of virtio_netmap_free_rx_unused_bufs()
+	 * and virtio_netmap_init_buffers().
 	 */
 	if (netmap_no_pendintr || force_update) {
 		uint16_t slot_flags = kring->nkr_slot_flags;
@@ -343,6 +379,7 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
                             j = (j == lim) ? 0 : j + 1;
                             n++;
                         } else {
+				/* TODO This will go away. */
                             struct netmap_slot *slot = &ring->slot[kring->nr_ntc];
                             void *addr = NMB(slot);
                             int err;
@@ -386,6 +423,9 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			if (slot->flags & NS_BUF_CHANGED)
 				slot->flags &= ~NS_BUF_CHANGED;
 
+			/* Initialize the scatterlist, expose it to the hypervisor,
+			 * and kick the hypervisor (if necessary).
+			 */
                         sg_set_buf(sg, addr, ring->nr_buf_size);
                         err = virtqueue_add_inbuf(vq, sg, 1, na, GFP_ATOMIC);
                         if (err < 0) {
@@ -399,6 +439,10 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		kring->nr_hwcur = k;
 	}
 
+	/* We have finished processing used RX buffers, so we have to tell
+	 * the hypervisor to make a call when more used RX buffers will be
+	 * ready.
+	 */
         virtqueue_enable_cb(vq);
 
 	/* Tell userspace that there are new packets. */
@@ -411,10 +455,7 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 }
 
 
-
-/*
- * Make the tx and rx rings point to the netmap buffers.
- */
+/* Make RX virtqueues buffers pointing to netmap buffers. */
 static int virtio_netmap_init_buffers(struct SOFTC_T *vi)
 {
 	struct ifnet *ifp = vi->dev;
@@ -439,6 +480,10 @@ static int virtio_netmap_init_buffers(struct SOFTC_T *vi)
 			return 0;
 		}
 
+		/* Add up to na>-num_rx_desc-1 buffers to this RX virtqueue.
+		 * It's important to leave one virtqueue slot free, otherwise
+		 * we can run into ring->cur/ring->avail wraparounds.
+		 */
 		for (i = 0; i < na->num_rx_desc-1; i++) {
                         void *addr;
 
@@ -455,11 +500,17 @@ static int virtio_netmap_init_buffers(struct SOFTC_T *vi)
 				break;
 		}
 		D("added %d inbufs on queue %d", i, r);
+		virtqueue_kick(vq);
 	}
 
 	return 1;
 }
 
+/* Update the virtio-net device configurations. Number of queues can
+ * change dinamically, by 'ethtool --set-channels $IFNAME combined $N'.
+ * This is actually the only way virtio-net can currently enable
+ * the multiqueue mode.
+ */
 static int
 virtio_netmap_config(struct netmap_adapter *na, u_int *txr, u_int *txd,
 						u_int *rxr, u_int *rxd)
