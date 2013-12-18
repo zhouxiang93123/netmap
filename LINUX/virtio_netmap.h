@@ -21,6 +21,12 @@ static struct page *get_a_page(struct SOFTC_T *vi, gfp_t gfp_mask);
 #define GET_TX_SG(_vi, _i)		(_vi)->tx_sg
 #define VQ_FULL(_vq, _err)		(_err > 0)
 
+static void free_receive_bufs(struct SOFTC_T *vi)
+{
+	while (vi->pages)
+		__free_pages(get_a_page(vi, GFP_KERNEL), 0);
+}
+
 #else   /* >= 3.8.0 */
 
 static void give_pages(struct receive_queue *rq, struct page *page);

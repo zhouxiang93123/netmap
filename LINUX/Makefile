@@ -4,7 +4,7 @@
 #       make oldconfig; make scripts; make prepare
 #
 
-CONFIG_V1000:=m
+CONFIG_V1000:=n
 
 # list of objects for this module
 netmap_lin-objs := netmap.o netmap_mem2.o netmap_linux.o \
