@@ -9,6 +9,12 @@ static int virtnet_close(struct ifnet *ifp);
 static int virtnet_open(struct ifnet *ifp);
 static void free_receive_bufs(struct virtnet_info *vi);
 
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 2, 0)
+#define virtqueue_get_vring_size(_vq)	256
+#endif  /* < 3.2 */
+
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 8, 0)
 
 static void give_pages(struct SOFTC_T *vi, struct page *page);
