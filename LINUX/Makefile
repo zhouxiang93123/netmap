@@ -4,7 +4,7 @@
 #       make oldconfig; make scripts; make prepare
 #
 
-CONFIG_V1000:=n
+
 
 # list of objects for this module
 netmap_lin-objs := netmap.o netmap_mem2.o netmap_linux.o \
@@ -72,6 +72,16 @@ S_DRIVERS := $(shell \
 # actual drivers after copy and patch
 DRIVERS = $(shell [ "$(PATCHES)" != "" ] && ls -dAp \
 	`echo $(PATCHES:diff--%=%) | sed -E 's/--[0-9a-f-]+//g'` 2> /dev/null)
+
+# Compile v1000 (vhost porting to e1000) only if
+# the LIN_VER >= 3.8.0, because we don't want to deal
+# with backporting problems for v1000.
+ifeq ($(word 1, $(sort "3.8.0" $(LIN_VER))), "3.8.0")
+CONFIG_V1000:=m
+else
+CONFIG_V1000:=n
+endif
+
 
 all: build
 
