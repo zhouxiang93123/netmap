@@ -431,6 +431,7 @@ netmap_krings_create(struct netmap_adapter *na, u_int ntx, u_int nrx, u_int tail
 	u_int i, len, ndesc;
 	struct netmap_kring *kring;
 
+	// XXX additional space for extra rings ?
 	len = (ntx + nrx) * sizeof(struct netmap_kring) + tailroom;
 
 	na->tx_rings = malloc((size_t)len, M_DEVBUF, M_NOWAIT | M_ZERO);
@@ -472,10 +473,9 @@ netmap_krings_create(struct netmap_adapter *na, u_int ntx, u_int nrx, u_int tail
 	na->tailroom = na->rx_rings + nrx;
 
 	return 0;
-
 }
 
-
+/* XXX check boundaries */
 void
 netmap_krings_delete(struct netmap_adapter *na)
 {
@@ -491,6 +491,17 @@ netmap_krings_delete(struct netmap_adapter *na)
 	na->tx_rings = na->rx_rings = na->tailroom = NULL;
 }
 
+
+void
+netmap_hw_krings_delete(struct netmap_adapter *na)
+{
+	struct mbq *q = &na->rx_rings[na->num_rx_rings].rx_queue;
+
+	D("destroy sw mbq with len %d", mbq_len(q));
+	mbq_purge(q);
+	mbq_safe_destroy(q);
+	netmap_krings_delete(na);
+}
 
 static struct netmap_if*
 netmap_if_new(const char *ifname, struct netmap_adapter *na)
@@ -781,69 +792,54 @@ netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
 
 
 /*
- * The host ring has packets from nr_hwcur to (cur - reserved)
- * to be sent down to the NIC.
- * We need to use the queue lock on the source (host RX ring)
- * to protect against netmap_transmit.
- * If the user is well behaved we do not need to acquire locks
- * on the destination(s),
- * so we only need to make sure that there are no panics because
- * of user errors.
- * XXX verify
- *
- * We scan the tx rings, which have just been
- * flushed so nr_hwcur == cur. Pushing packets down means
- * increment cur and decrement avail.
- * XXX to be verified
+ * Called under kring->rx_queue.lock on the sw rx ring,
+ * push packets marked as forward to the NIC rings.
+ * Start at nr_hwcur and do at most n steps (argument)
  */
-static void
-netmap_sw_to_nic(struct netmap_adapter *na)
+static u_int
+netmap_sw_to_nic(struct netmap_adapter *na, u_int n)
 {
 	struct netmap_kring *kring = &na->rx_rings[na->num_rx_rings];
-	struct netmap_kring *k1 = &na->tx_rings[0];
-	u_int i, howmany, src_lim, dst_lim;
+	struct netmap_slot *rxslot = kring->ring->slot;
+	u_int i, rxcur = kring->nr_hwcur;
+	u_int const src_lim = kring->nkr_num_slots - 1;
+	u_int sent = 0;
 
-	/* XXX we should also check that the carrier is on */
-	if (kring->nkr_stopped)
-		return;
+	/* scan rings to find space, then fill as much as possible */
+	for (i = 0; i < na->num_tx_rings; i++) {
+		struct netmap_kring *kdst = &na->tx_rings[i];
+		u_int const dst_lim = kdst->nkr_num_slots - 1;
 
-	mtx_lock(&kring->q_lock);
+		if (kdst->ring->avail == 0)
+			continue;	/* skip busy rings */
 
-	if (kring->nkr_stopped)
-		goto out;
-
-	howmany = kring->nr_hwavail;	/* XXX otherwise cur - reserved - nr_hwcur */
-
-	src_lim = kring->nkr_num_slots - 1;
-	for (i = 0; howmany > 0 && i < na->num_tx_rings; i++, k1++) {
-		ND("%d packets left to ring %d (space %d)", howmany, i, k1->nr_hwavail);
-		dst_lim = k1->nkr_num_slots - 1;
-		while (howmany > 0 && k1->ring->avail > 0) {
+		for (;n > 0 && kdst->ring->avail > 0;
+		    n--, rxcur = nm_next(rxcur, src_lim) ) {
 			struct netmap_slot *src, *dst, tmp;
-			src = &kring->ring->slot[kring->nr_hwcur];
-			dst = &k1->ring->slot[k1->ring->cur];
+
+			if (! (netmap_fwd ||
+				    kring->ring->flags & NR_FORWARD) )
+				continue;
+			sent++;
+
+			src = &rxslot[rxcur];
+			dst = &kdst->ring->slot[kdst->ring->cur];
+
 			tmp = *src;
+
 			src->buf_idx = dst->buf_idx;
 			src->flags = NS_BUF_CHANGED;
 
 			dst->buf_idx = tmp.buf_idx;
 			dst->len = tmp.len;
 			dst->flags = NS_BUF_CHANGED;
-			ND("out len %d buf %d from %d to %d",
-				dst->len, dst->buf_idx,
-				kring->nr_hwcur, k1->ring->cur);
 
-			kring->nr_hwcur = nm_next(kring->nr_hwcur, src_lim);
-			howmany--;
-			kring->nr_hwavail--;
-			k1->ring->cur = nm_next(k1->ring->cur, dst_lim);
-			k1->ring->avail--;
+			kdst->ring->cur = nm_next(kdst->ring->cur, dst_lim);
+			kdst->ring->avail--;
 		}
-		kring->ring->cur = kring->nr_hwcur; // XXX
-		k1++; // XXX why?
+		/* if (sent) XXX txsync ? */
 	}
-out:
-	mtx_unlock(&kring->q_lock);
+	return sent;
 }
 
 
@@ -892,60 +888,87 @@ netmap_txsync_to_host(struct netmap_adapter *na)
 
 /*
  * rxsync backend for packets coming from the host stack.
- * They have been put in the queue by netmap_transmit() so we
- * need to protect access to the kring using a lock.
+ * They have been put in kring->rx_queue by netmap_transmit().
+ * We protect access to the kring using kring->rx_queue.lock
  *
  * This routine also does the selrecord if called from the poll handler
  * (we know because td != NULL).
  *
  * NOTE: on linux, selrecord() is defined as a macro and uses pwait
  *     as an additional hidden argument.
+ * returns the number of packets delivered to tx queues in
+ * transparent mode, or a negative value if error
  */
-static void
+static int
 netmap_rxsync_from_host(struct netmap_adapter *na, struct thread *td, void *pwait)
 {
 	struct netmap_kring *kring = &na->rx_rings[na->num_rx_rings];
 	struct netmap_ring *ring = kring->ring;
-	u_int j, n, lim = kring->nkr_num_slots;
-	u_int k = ring->cur, resvd = ring->reserved;
+	u_int nm_i, n;
+	u_int const lim = kring->nkr_num_slots - 1;
+	u_int resvd;
+	u_int const cur = nm_rxsync_prologue(kring, &resvd); /* cur + res */
+	int ret = 0;
+	struct mbq *q = &kring->rx_queue;
 
 	(void)pwait;	/* disable unused warnings */
 
-	if (kring->nkr_stopped) /* check a first time without lock */
-		return;
-
-	mtx_lock(&kring->q_lock);
-
-	if (kring->nkr_stopped)  /* check again with lock held */
-		goto unlock_out;
-
-	if (k >= lim) {
+	if (cur > lim) {
 		netmap_ring_reinit(kring);
+		return EINVAL;
+	}
+
+	if (kring->nkr_stopped) /* check a first time without lock */
+		return EBUSY;
+
+	mtx_lock(&q->lock);
+
+	if (kring->nkr_stopped) {  /* check again with lock held */
+		ret = EBUSY;
 		goto unlock_out;
 	}
-	/* new packets are already set in nr_hwavail */
-	/* skip past packets that userspace has released */
-	j = kring->nr_hwcur;
-	if (resvd > 0) {
-		if (resvd + ring->avail >= lim + 1) {
-			D("XXX invalid reserve/avail %d %d", resvd, ring->avail);
-			ring->reserved = resvd = 0; // XXX panic...
+
+	D("import packets ");
+	/* First part: import newly received packets */
+
+	n = mbq_len(q);
+	if (n) { /* grab packets from the queue */
+		struct mbuf *m;
+
+		D("drain %d packets from queue", n);
+		nm_i = nm_kr_rxpos(kring); /* hwcur + hwavail */
+		while ( kring->nr_hwavail < lim &&
+		    (m = mbq_dequeue(q)) != NULL ) { 
+			int len = MBUF_LEN(m);
+			struct netmap_slot *slot = &ring->slot[nm_i];
+
+			m_copydata(m, 0, len, BDG_NMB(na, slot));
+			slot->len = len;
+			slot->flags = kring->nkr_slot_flags;
+			kring->nr_hwavail++;
+			nm_i = nm_next(nm_i, lim);
 		}
-		k = (k >= resvd) ? k - resvd : k + lim - resvd;
 	}
-	if (j != k) {
-		n = k >= j ? k - j : k + lim - j;
+	/*
+	 * Second part: skip past packets that userspace has released.
+	 */
+	nm_i = kring->nr_hwcur;
+	if (nm_i != cur) { /* something was released */
+		if (netmap_fwd || kring->ring->flags & NR_FORWARD)
+			ret = netmap_sw_to_nic(na, n);
+		n = cur >= nm_i ? cur - nm_i : cur + lim + 1 - nm_i;
 		kring->nr_hwavail -= n;
-		kring->nr_hwcur = k;
+		kring->nr_hwcur = cur;
 	}
-	k = ring->avail = kring->nr_hwavail - resvd;
-	if (k == 0 && td)
+	n = ring->avail = kring->nr_hwavail - resvd;
+	if (n == 0 && td)
 		selrecord(td, &kring->si);
-	if (k && (netmap_verbose & NM_VERB_HOST))
-		D("%d pkts from stack", k);
+	if (n && (netmap_verbose & NM_VERB_HOST))
+		D("%d pkts from stack", n);
 unlock_out:
 
-	mtx_unlock(&kring->q_lock);
+	mtx_unlock(&q->lock);
+	return ret;
 }
 
 
@@ -1228,6 +1251,9 @@ nm_rxsync_prologue(struct netmap_kring *kring, u_int *resvd)
 	if (a != avail) {
 		RD(5, "wrong but fixable avail have %d need %d",
 			avail, a);
+		/* on a sw ring this is acceptable, because nr_hwavail
+		 * advances without a txsync.
+		 */
 		ring->avail = avail = a;
 	}
 	if (res != 0) {
@@ -1251,6 +1277,7 @@ error:
 		ring->cur, avail, res);
 	return n;
 }
+
 
 /*
  * Error routine called when txsync/rxsync detects an error.
@@ -1306,6 +1333,7 @@ netmap_ring_reinit(struct netmap_kring *kring)
 	}
 	return (errors ? 1 : 0);
 }
+
 
 
 /*
@@ -1626,6 +1654,7 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			break;
 		}
 
+		/* XXX use callbacks so they are the same ? */
 		if (priv->np_qfirst == NETMAP_SW_RING) { /* host rings */
 			if (cmd == NIOCTXSYNC)
 				netmap_txsync_to_host(na);
@@ -1728,8 +1757,8 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	struct ifnet *ifp;
 	struct netmap_kring *kring;
 	u_int i, check_all_tx, check_all_rx, want_tx, want_rx, revents = 0;
-	u_int lim_tx, lim_rx, host_forwarded = 0;
-	struct mbq q;
+	u_int lim_tx, lim_rx;
+	struct mbq q;		/* packets from hw queues to host stack */
 	void *pwait = dev;	/* linux compatibility */
 
 	/*
@@ -1781,27 +1810,12 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 			kring = &na->rx_rings[lim_rx];
 			if (kring->ring->avail == 0)
 				netmap_rxsync_from_host(na, td, dev);
-			if (kring->ring->avail > 0) {
+			if (kring->ring->avail > 0)
 				revents |= want_rx;
-			}
 		}
 		return (revents);
 	}
 
-	/*
-	 * If we are in transparent mode, check also the host rx ring
-	 * XXX Transparent mode at the moment requires to bind all
- 	 * rings to a single file descriptor.
-	 */
-	kring = &na->rx_rings[lim_rx];
-	if ( (priv->np_qlast == NETMAP_HW_RING) // XXX check_all
-			&& want_rx
-			&& (netmap_fwd || kring->ring->flags & NR_FORWARD) ) {
-		if (kring->ring->avail == 0)
-			netmap_rxsync_from_host(na, td, dev);
-		if (kring->ring->avail > 0)
-			revents |= want_rx;
-	}
 
 	/*
 	 * check_all_{tx|rx} are set if the card has more than one queue AND
@@ -1860,6 +1874,8 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 		 */
 flush_tx:
 		for (i = priv->np_qfirst; i < lim_tx; i++) {
+			int found = 0;
+
 			kring = &na->tx_rings[i];
 			/*
 			 * Skip this ring if want_tx == 0
@@ -1871,15 +1887,8 @@ flush_tx:
 				continue;
 			/* make sure only one user thread is doing this */
 			if (nm_kr_tryget(kring)) {
-				ND("ring %p busy is %d",
-				    kring, (int)kring->nr_busy);
-				if (priv->np_passive) {
-					D("passive %p lost race on txring %d, ok", priv, i);
-					continue;
-				} else {
-					revents |= POLLERR;
-					goto out;
-				}
+				D("%p lost race on txring %d, ok", priv, i);
+				continue;
 			}
 
 			if (netmap_verbose & NM_VERB_TXSYNC)
@@ -1897,20 +1906,17 @@ flush_tx:
 			 * txsync set a flag telling if we need
 			 * to do a selrecord().
 			 */
-			if (want_tx) {
-				if (kring->ring->avail > 0) {
-					/* stop at the first ring. We don't risk
-					 * starvation.
-					 */
-					revents |= want_tx;
-					want_tx = 0;
-				}
-			}
+			found = kring->ring->avail > 0;
 			nm_kr_put(kring);
+			if (found) { /* notify other listeners */
+				revents |= want_tx;
+				want_tx = 0;
+				na->nm_notify(na, i, NR_TX, NAF_GLOBAL_NOTIFY);
+			}
 		}
 		if (want_tx && retry_tx) {
 			selrecord(td, check_all_tx ?
-			    &na->tx_si : &na->tx_rings[priv->np_qfirst].si);
+			    &na->tx_si : &na->tx_rings[i].si);
 			retry_tx = 0;
 			goto flush_tx;
 		}
@@ -1921,27 +1927,25 @@ flush_tx:
 	 * Do it on all rings because otherwise we starve.
 	 */
 	if (want_rx) {
+		int send_down = 0;
 		int retry_rx = 1;
 do_retry_rx:
 		for (i = priv->np_qfirst; i < lim_rx; i++) {
+			int found = 0;
 			kring = &na->rx_rings[i];
 
 			if (nm_kr_tryget(kring)) {
-				if (priv->np_passive) {
-					D("passive %p lost race on rxring %d, ok", priv, i);
-					continue;
-				} else {
-					revents |= POLLERR;
-					goto out;
-				}
+				D("%p lost race on rxring %d, ok", priv, i);
+				continue;
 			}
 
-			/* XXX NR_FORWARD should only be read on
+			/*
+			 * transparent mode support: collect packets
+			 * from the rxring(s).
+			 * XXX NR_FORWARD should only be read on
 			 * physical or NIC ports
 			 */
 			if (netmap_fwd ||kring->ring->flags & NR_FORWARD) {
-				ND(10, "forwarding some buffers up %d to %d",
-				    kring->nr_hwcur, kring->ring->cur);
 				netmap_grab_packets(kring, &q, netmap_fwd);
 			}
 
@@ -1952,38 +1956,46 @@ do_retry_rx:
 				microtime(&kring->ring->ts);
 			}
 
-			if (kring->ring->avail > 0) {
+			found = kring->ring->avail > 0;
+			nm_kr_put(kring);
+			if (found) {
 				revents |= want_rx;
 				retry_rx = 0;
+				na->nm_notify(na, i, NR_RX, NAF_GLOBAL_NOTIFY);
 			}
-			nm_kr_put(kring);
 		}
+		/* transparent mode */
+		kring = &na->rx_rings[lim_rx];
+		if (check_all_rx
+		    && (netmap_fwd || kring->ring->flags & NR_FORWARD)) {
+			if (kring->ring->avail == 0)
+				send_down = netmap_rxsync_from_host(na, td, dev);
+			if (kring->ring->avail > 0)
+				revents |= want_rx;
+		}
+
 		if (retry_rx) {
 			retry_rx = 0;
 			selrecord(td, check_all_rx ?
-			    &na->rx_si : &na->rx_rings[priv->np_qfirst].si);
+			    &na->rx_si : &na->rx_rings[i].si);
 			goto do_retry_rx;
 		}
 	}
 
-	/* forward host to the netmap ring.
-	 * I am accessing nr_hwavail without lock, but netmap_transmit
-	 * can only increment it, so the operation is safe.
+	/*
+	 * Transparent mode: marked bufs on rx rings between
+	 * kring->nr_hwcur and ring->cur - ring->reserved
+	 * are passed to the other endpoint.
+	 * 
+	 * In this mode we also scan the sw rxring, which in
+	 * turn passes packets up.
+	 *
+	 * XXX Transparent mode at the moment requires to bind all
+ 	 * rings to a single file descriptor.
 	 */
-	kring = &na->rx_rings[lim_rx];
-	if ( (priv->np_qlast == NETMAP_HW_RING) // XXX check_all
-			&& (netmap_fwd || kring->ring->flags & NR_FORWARD)
-			 && kring->nr_hwavail > 0 && !host_forwarded) {
-		netmap_sw_to_nic(na);
-		host_forwarded = 1; /* prevent another pass */
-		want_rx = 0;
-		goto flush_tx;
-	}
 
 	if (q.head)
 		netmap_send_up(na->ifp, &q);
-
-out:
 
 	return (revents);
 }
@@ -2027,7 +2039,7 @@ netmap_attach_common(struct netmap_adapter *na)
 	NETMAP_SET_CAPABLE(ifp);
 	if (na->nm_krings_create == NULL) {
 		na->nm_krings_create = netmap_hw_krings_create;
-		na->nm_krings_delete = netmap_krings_delete;
+		na->nm_krings_delete = netmap_hw_krings_delete;
 	}
 	if (na->nm_notify == NULL)
 		na->nm_notify = netmap_notify;
@@ -2144,8 +2156,14 @@ NM_DBG(netmap_adapter_put)(struct netmap_adapter *na)
 int
 netmap_hw_krings_create(struct netmap_adapter *na)
 {
-	return netmap_krings_create(na,
+	int ret = netmap_krings_create(na,
 		na->num_tx_rings + 1, na->num_rx_rings + 1, 0);
+	if (ret == 0) {
+		/* initialize the mbq for the sw rx ring */
+		mbq_safe_init(&na->rx_rings[na->num_rx_rings].rx_queue);
+		D("initialized sw rx queue %d", na->num_rx_rings);
+	}
+	return ret;
 }
 
 
@@ -2174,6 +2192,10 @@ netmap_detach(struct ifnet *ifp)
 /*
  * Intercept packets from the network stack and pass them
  * to netmap as incoming packets on the 'software' ring.
+ *
+ * We only store packets in a bounded mbq and then copy them
+ * in the relevant rxsync routine.
+ *
  * We rely on the OS to make sure that the ifp and na do not go
  * away (typically the caller checks for IFF_DRV_RUNNING or the like).
  * In nm_register() or whenever there is a reinitialization,
@@ -2184,63 +2206,55 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 {
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring;
-	u_int i, len = MBUF_LEN(m);
+	u_int len = MBUF_LEN(m);
 	u_int error = EBUSY, lim;
-	struct netmap_slot *slot;
+	struct mbq *q;
 
 	// XXX [Linux] we do not need this lock
 	// if we follow the down/configure/up protocol -gl
 	// mtx_lock(&na->core_lock);
+
 	if ( (ifp->if_capenable & IFCAP_NETMAP) == 0) {
-		/* interface not in netmap mode anymore */
+		D("%s not in netmap mode anymore", NM_IFPNAME(ifp));
 		error = ENXIO;
 		goto done;
 	}
 
 	kring = &na->rx_rings[na->num_rx_rings];
 	lim = kring->nkr_num_slots - 1;
-	if (netmap_verbose & NM_VERB_HOST)
-		D("%s packet %d len %d from the stack", NM_IFPNAME(ifp),
-			kring->nr_hwcur + kring->nr_hwavail, len);
+	q = &kring->rx_queue;
+
 	// XXX reconsider long packets if we handle fragments
 	if (len > NETMAP_BDG_BUF_SIZE(na->nm_mem)) { /* too long for us */
 		D("%s from_host, drop packet size %d > %d", NM_IFPNAME(ifp),
 			len, NETMAP_BDG_BUF_SIZE(na->nm_mem));
 		goto done;
 	}
-	/* protect against other instances of netmap_transmit,
-	 * and userspace invocations of rxsync().
+
+	/* protect against rxsync_from_host(), netmap_sw_to_nic()
+	 * and maybe other instances of netmap_transmit (the latter
+	 * not possible on Linux).
+	 * Also avoid overflowing the queue.
 	 */
-	// XXX [Linux] there can be no other instances of netmap_transmit
-	// on this same ring, but we still need this lock to protect
-	// concurrent access from netmap_sw_to_nic() -gl
-	mtx_lock(&kring->q_lock);
-	if (kring->nr_hwavail >= lim) {
+	mtx_lock(&q->lock);
+
+	if (kring->nr_hwavail + mbq_len(q) >= lim) {
 		if (netmap_verbose)
 			D("stack ring %s full\n", NM_IFPNAME(ifp));
 	} else {
-		/* compute the insert position */
-		i = nm_kr_rxpos(kring);
-		slot = &kring->ring->slot[i];
-		m_copydata(m, 0, (int)len, BDG_NMB(na, slot));
-		slot->len = len;
-		slot->flags = kring->nkr_slot_flags;
-		kring->nr_hwavail++;
-		if (netmap_verbose  & NM_VERB_HOST)
-			D("wake up host ring %s %d", NM_IFPNAME(na->ifp), na->num_rx_rings);
-		na->nm_notify(na, na->num_rx_rings, NR_RX, 0);
+		mbq_enqueue(q, m);
+		ND("now %d bufs in queue", mbq_len(q));
+		/* notify outside the lock */
+		m = NULL;
 		error = 0;
 	}
-	mtx_unlock(&kring->q_lock);
+	mtx_unlock(&q->lock);
 
 done:
-	// mtx_unlock(&na->core_lock);
-
-	/* release the mbuf in either cases of success or failure. As an
-	 * alternative, put the mbuf in a free list and free the list
-	 * only when really necessary.
-	 */
-	m_freem(m);
+	if (m)
+		m_freem(m);
+	else /* wake up listeners */
+		na->nm_notify(na, na->num_rx_rings, NR_RX, 0);
 
 	return (error);
 }
