@@ -1766,7 +1766,7 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	 * txsync and rxsync if we decide to do a selrecord().
 	 * retry_tx (and retry_rx, later) prevent looping forever.
 	 */
-	int retry_tx = 1;
+	int retry_tx = 1, retry_rx = 1;
 
 	(void)pwait;
 	mbq_init(&q);
@@ -1860,45 +1860,38 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	}
 
 	/*
-	 * If we to push packets out (priv->np_txpoll) or want_tx is
-	 * still set, we do need to run the txsync calls (on all rings,
-	 * to avoid that the tx rings stall).
+	 * If we want to push packets out (priv->np_txpoll) or
+	 * want_tx is still set, we must issue txsync calls
+	 * (on all rings, to avoid that the tx rings stall).
 	 * XXX should also check cur != hwcur on the tx rings.
 	 * Fortunately, normal tx mode has np_txpoll set.
 	 */
 	if (priv->np_txpoll || want_tx) {
-		/* If we really want to be woken up (want_tx),
-		 * do a selrecord, either on the global or on
-		 * the private structure.  Then issue the txsync
-		 * so there is no race in the selrecord/selwait
+		/*
+		 * The first round checks if anyone is ready, if not
+		 * do a selrecord and another round to handle races.
+		 * want_tx goes to 0 if any space is found, and is
+		 * used to skip rings with no pending transmissions.
 		 */
 flush_tx:
 		for (i = priv->np_qfirst; i < lim_tx; i++) {
 			int found = 0;
 
 			kring = &na->tx_rings[i];
-			/*
-			 * Skip this ring if want_tx == 0
-			 * (we have already done a successful sync on
-			 * a previous ring) AND kring->cur == kring->hwcur
-			 * (there are no pending transmissions for this ring).
-			 */
 			if (!want_tx && kring->ring->cur == kring->nr_hwcur)
 				continue;
-			/* make sure only one user thread is doing this */
+			/* only one thread does txsync */
 			if (nm_kr_tryget(kring)) {
 				D("%p lost race on txring %d, ok", priv, i);
 				continue;
 			}
-
-			if (netmap_verbose & NM_VERB_TXSYNC)
-				D("send %d on %s %d",
-					kring->ring->cur, NM_IFPNAME(ifp), i);
 			if (na->nm_txsync(na, i, 0))
 				revents |= POLLERR;
 
-			/* Check avail and call selrecord only if
-			 * called with POLLOUT and run out of bufs.
+			/*
+			 * If we found new slots, notify potential
+			 * listeners on the same ring.
+			 *
 			 * XXX Note, we cannot trust much ring->avail
 			 * as it is exposed to userspace (even though
 			 * just updated by txsync). We should really
@@ -1906,7 +1899,7 @@ flush_tx:
 			 * txsync set a flag telling if we need
 			 * to do a selrecord().
 			 */
-			found = kring->ring->avail > 0;
+			found = (kring->ring->avail > 0);
 			nm_kr_put(kring);
 			if (found) { /* notify other listeners */
 				revents |= want_tx;
@@ -1915,23 +1908,24 @@ flush_tx:
 			}
 		}
 		if (want_tx && retry_tx) {
-			selrecord(td, check_all_tx ?
-			    &na->tx_si : &na->tx_rings[i].si);
+			selrecord(td, check_all_tx ? &na->tx_si :
+			    &na->tx_rings[priv->np_qfirst].si);
 			retry_tx = 0;
 			goto flush_tx;
 		}
 	}
 
 	/*
-	 * now if want_rx is still set we need to lock and rxsync.
+	 * If want_rx is still set scan receive rings.
 	 * Do it on all rings because otherwise we starve.
 	 */
 	if (want_rx) {
-		int send_down = 0;
-		int retry_rx = 1;
+		int send_down = 0; /* transparent mode */
+		/* two rounds here to for race avoidance */
 do_retry_rx:
 		for (i = priv->np_qfirst; i < lim_rx; i++) {
 			int found = 0;
+
 			kring = &na->rx_rings[i];
 
 			if (nm_kr_tryget(kring)) {
@@ -1952,11 +1946,11 @@ do_retry_rx:
 			if (na->nm_rxsync(na, i, 0))
 				revents |= POLLERR;
 			if (netmap_no_timestamp == 0 ||
-					kring->ring->flags & NR_TIMESTAMP) {
+			    kring->ring->flags & NR_TIMESTAMP) {
 				microtime(&kring->ring->ts);
 			}
 
-			found = kring->ring->avail > 0;
+			found = (kring->ring->avail > 0);
 			nm_kr_put(kring);
 			if (found) {
 				revents |= want_rx;
@@ -1964,7 +1958,8 @@ do_retry_rx:
 				na->nm_notify(na, i, NR_RX, NAF_GLOBAL_NOTIFY);
 			}
 		}
-		/* transparent mode */
+
+		/* transparent mode XXX only during first pass ? */
 		kring = &na->rx_rings[lim_rx];
 		if (check_all_rx
 		    && (netmap_fwd || kring->ring->flags & NR_FORWARD)) {
@@ -1974,11 +1969,15 @@ do_retry_rx:
 				revents |= want_rx;
 		}
 
-		if (retry_rx) {
+		if (retry_rx)
+			selrecord(td, check_all_rx ? &na->rx_si :
+			    &na->rx_rings[priv->np_qfirst].si);
+		if (send_down > 0 || retry_rx) {
 			retry_rx = 0;
-			selrecord(td, check_all_rx ?
-			    &na->rx_si : &na->rx_rings[i].si);
-			goto do_retry_rx;
+			if (send_down)
+				goto flush_tx; /* and retry_rx */
+			else
+				goto do_retry_rx;
 		}
 	}
 
