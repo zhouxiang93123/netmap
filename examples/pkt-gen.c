@@ -109,7 +109,6 @@ struct glob_arg {
 	char *ifname;
 	char *nmr_config;
 	int dummy_send;
-	int passive;
 };
 enum dev_type { DEV_NONE, DEV_NETMAP, DEV_PCAP, DEV_TAP };
 
@@ -1221,7 +1220,6 @@ usage(void)
 		"\t-w wait_for_link_time	in seconds\n"
 		"\t-R rate		in packets per second\n"
 		"\t-X			dump payload\n"
-		"\t-m			passive mode\n"
 		"",
 		cmd);
 
@@ -1268,10 +1266,6 @@ start_threads(struct glob_arg *g)
 		 */
 		if (g->td_body == receiver_body) {
 			tifreq.nr_ringid |= NETMAP_NO_TX_POLL;
-		}
-		if (g->passive) {
-			D("requesting passive mode");
-			tifreq.nr_ringid |= NETMAP_PRIV_MEM;
 		}
 
 		if ((ioctl(tfd, NIOCREGIF, &tifreq)) == -1) {
@@ -1501,17 +1495,13 @@ main(int arc, char **argv)
 	g.nmr_config = "";
 
 	while ( (ch = getopt(arc, argv,
-			"a:f:F:n:i:It:r:l:d:s:D:S:b:c:o:p:PT:w:WvR:XC:m")) != -1) {
+			"a:f:F:n:i:It:r:l:d:s:D:S:b:c:o:p:PT:w:WvR:XC:")) != -1) {
 		struct sf *fn;
 
 		switch(ch) {
 		default:
 			D("bad option %c %s", ch, optarg);
 			usage();
-			break;
-
-		case 'm':
-			g.passive = 1;
 			break;
 
 		case 'n':
