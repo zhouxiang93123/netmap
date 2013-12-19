@@ -159,9 +159,11 @@ extern NMG_LOCK_T	netmap_global_lock;
  *
  *	nr_hwcur	index of the next buffer to refill.
  *			It corresponds to ring->cur - ring->reserved
+ *			at the time the system call returns.
  *
  *	nr_hwavail	the number of slots "owned" by userspace.
  *			nr_hwavail =:= ring->avail + ring->reserved
+ *			at the time the system call returns.
  *
  * The indexes in the NIC and netmap rings are offset by nkr_hwofs slots.
  * This is so that, on a reset, buffers owned by userspace are not
@@ -210,10 +212,12 @@ struct netmap_kring {
 	int32_t	nkr_hwofs;	/* offset between NIC and netmap ring */
 
 	uint16_t	nkr_slot_flags;	/* initial value for flags */
+
 	struct netmap_adapter *na;
+
 	struct nm_bdg_fwd *nkr_ft;
 	uint32_t *nkr_leases;
-#define NR_NOSLOT	((uint32_t)~0)
+#define NR_NOSLOT	((uint32_t)~0)	/* used in nkr_*lease* */
 	uint32_t nkr_hwlease;
 	uint32_t nkr_lease_idx;
 
@@ -221,7 +225,7 @@ struct netmap_kring {
 	NM_LOCK_T q_lock;	/* protects kring and ring. */
 	NM_ATOMIC_T nr_busy;	/* prevent concurrent syscalls */
 
-	volatile int nkr_stopped;
+	volatile int nkr_stopped;	// XXX what for ?
 
 	/* support for adapters without native netmap support.
 	 * On tx rings we preallocate an array of tx buffers
@@ -1094,7 +1098,6 @@ struct netmap_priv_d {
 	int		        np_ringid;	/* from the ioctl */
 	u_int		        np_qfirst, np_qlast;	/* range of rings to scan */
 	uint16_t	        np_txpoll;
-	uint16_t	        np_passive;	/* do not call txsync/rxsync on poll */
 
 	struct netmap_mem_d     *np_mref;	/* use with NMG_LOCK held */
 	/* np_refcount is only used on FreeBSD */
