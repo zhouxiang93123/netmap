@@ -184,7 +184,7 @@ virtio_netmap_reg(struct netmap_adapter *na, int onoff)
         virtnet_close(ifp);
 
 	if (onoff) {
-		/* We have drain the RX virtqueues, otherwise the
+		/* We have to drain the RX virtqueues, otherwise the
 		 * virtio_netmap_init_buffer() called by the subsequent
 		 * virtnet_open() cannot link the netmap buffers to the
 		 * virtio RX ring. */
