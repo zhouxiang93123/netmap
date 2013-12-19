@@ -76,7 +76,7 @@ DRIVERS = $(shell [ "$(PATCHES)" != "" ] && ls -dAp \
 # Compile v1000 (vhost porting to e1000) only if
 # the LIN_VER >= 3.8.0, because we don't want to deal
 # with backporting problems for v1000.
-ifeq ($(word 1, $(sort "3.8.0" $(LIN_VER))), "3.8.0")
+ifeq ($(word 1, $(sort 30800 $(LIN_VER))), 30800)
 CONFIG_V1000:=m
 else
 CONFIG_V1000:=n
