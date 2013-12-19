@@ -61,6 +61,7 @@
 #define NM_ATOMIC_TEST_AND_SET(p)       (!atomic_cmpset_acq_int((p), 0, 1))
 #define NM_ATOMIC_CLEAR(p)              atomic_store_rel_int((p), 0)
 
+
 MALLOC_DECLARE(M_NETMAP);
 
 // XXX linux struct, not used in FreeBSD
@@ -158,9 +159,11 @@ extern NMG_LOCK_T	netmap_global_lock;
  *
  *	nr_hwcur	index of the next buffer to refill.
  *			It corresponds to ring->cur - ring->reserved
+ *			at the time the system call returns.
  *
  *	nr_hwavail	the number of slots "owned" by userspace.
  *			nr_hwavail =:= ring->avail + ring->reserved
+ *			at the time the system call returns.
  *
  * The indexes in the NIC and netmap rings are offset by nkr_hwofs slots.
  * This is so that, on a reset, buffers owned by userspace are not
@@ -209,7 +212,9 @@ struct netmap_kring {
 	int32_t	nkr_hwofs;	/* offset between NIC and netmap ring */
 
 	uint16_t	nkr_slot_flags;	/* initial value for flags */
+
 	struct netmap_adapter *na;
+
 	struct nm_bdg_fwd *nkr_ft;
 	uint32_t *nkr_leases;
 #define NR_NOSLOT	((uint32_t)~0)
@@ -220,7 +225,7 @@ struct netmap_kring {
 	NM_LOCK_T q_lock;	/* protects kring and ring. */
 	NM_ATOMIC_T nr_busy;	/* prevent concurrent syscalls */
 
-	volatile int nkr_stopped;
+	volatile int nkr_stopped;	// XXX what for ?
 
 	/* support for adapters without native netmap support.
 	 * On tx rings we preallocate an array of tx buffers
