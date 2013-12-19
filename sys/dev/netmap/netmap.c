@@ -1367,9 +1367,6 @@ netmap_set_ringid(struct netmap_priv_d *priv, u_int ringid)
 		priv->np_qlast = NETMAP_HW_RING ;
 	}
 	priv->np_txpoll = (ringid & NETMAP_NO_TX_POLL) ? 0 : 1;
-	priv->np_passive = (ringid & NETMAP_PRIV_MEM) ? 1 : 0;
-	if (priv->np_passive)
-		D("priv %p na %p is passive", priv, na);
     if (netmap_verbose) {
 	if (ringid & NETMAP_SW_RING)
 		D("ringid %s set to SW RING", NM_IFPNAME(ifp));

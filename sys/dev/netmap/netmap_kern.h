@@ -1098,7 +1098,6 @@ struct netmap_priv_d {
 	int		        np_ringid;	/* from the ioctl */
 	u_int		        np_qfirst, np_qlast;	/* range of rings to scan */
 	uint16_t	        np_txpoll;
-	uint16_t	        np_passive;	/* do not call txsync/rxsync on poll */
 
 	struct netmap_mem_d     *np_mref;	/* use with NMG_LOCK held */
 	/* np_refcount is only used on FreeBSD */
