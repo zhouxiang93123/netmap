@@ -431,6 +431,7 @@ netmap_krings_create(struct netmap_adapter *na, u_int ntx, u_int nrx, u_int tail
 	u_int i, len, ndesc;
 	struct netmap_kring *kring;
 
+	// XXX additional space for extra rings ?
 	len = (ntx + nrx) * sizeof(struct netmap_kring) + tailroom;
 
 	na->tx_rings = malloc((size_t)len, M_DEVBUF, M_NOWAIT | M_ZERO);
@@ -472,10 +473,9 @@ netmap_krings_create(struct netmap_adapter *na, u_int ntx, u_int nrx, u_int tail
 	na->tailroom = na->rx_rings + nrx;
 
 	return 0;
-
 }
 
-
+/* XXX check boundaries */
 void
 netmap_krings_delete(struct netmap_adapter *na)
 {
@@ -1251,6 +1251,7 @@ error:
 		ring->cur, avail, res);
 	return n;
 }
+
 
 /*
  * Error routine called when txsync/rxsync detects an error.
