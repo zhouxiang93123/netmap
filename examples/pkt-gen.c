@@ -660,6 +660,7 @@ pinger_body(void *data)
 	}
 
 	clock_gettime(CLOCK_REALTIME_PRECISE, &last_print);
+	now = last_print;
 	while (n == 0 || (int)sent < n) {
 		struct netmap_ring *ring = NETMAP_TXRING(nifp, 0);
 		struct netmap_slot *slot;
@@ -1700,7 +1701,6 @@ main(int arc, char **argv)
 	bzero(&nmr, sizeof(nmr));
 	nmr.nr_version = NETMAP_API;
 	strncpy(nmr.nr_name, g.ifname, sizeof(nmr.nr_name));
-	nmr.nr_version = NETMAP_API;
 	parse_nmr_config(g.nmr_config, &nmr);
 	if (ioctl(g.main_fd, NIOCREGIF, &nmr) == -1) {
 		D("Unable to register interface %s", g.ifname);
@@ -1709,11 +1709,6 @@ main(int arc, char **argv)
 	ND("%s: txr %d txd %d rxr %d rxd %d", g.ifname,
 			nmr.nr_tx_rings, nmr.nr_tx_slots,
 			nmr.nr_rx_rings, nmr.nr_rx_slots);
-	//if ((ioctl(g.main_fd, NIOCGINFO, &nmr)) == -1) {
-	//	D("Unable to get if info without name");
-	//} else {
-	//	D("map size is %d Kb", nmr.nr_memsize >> 10);
-	//}
 	if ((ioctl(g.main_fd, NIOCGINFO, &nmr)) == -1) {
 		D("Unable to get if info for %s", g.ifname);
 	}
