@@ -76,7 +76,7 @@ static void free_receive_bufs(struct virtnet_info *vi);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 8, 0)
 /* Before 3.8.0 virtio did not have multiple queues, and therefore
-   it did not have per-queue data structure. We then abstract the
+   it did not have per-queue data structures. We then abstract the
    way data structure are accessed, ignoring the queue indexes. */
 #define DECR_NUM(_vi, _i)		--(_vi)->num
 #define GET_RX_VQ(_vi, _i)		(_vi)->rvq
@@ -134,7 +134,7 @@ static void give_pages(struct receive_queue *rq, struct page *page);
  * In the latter case, the unused buffers point to memory allocated by
  * netmap, and so we don't need to free anything.
  * We scan all the RX virtqueues, even those that have not been
- * activated (by ethtool set-channel).
+ * activated (by 'ethtool --set-channels eth0 combined $N').
  */
 static void virtio_netmap_free_rx_unused_bufs(struct SOFTC_T* vi, int onoff)
 {
@@ -244,7 +244,7 @@ virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
                 token = virtqueue_get_buf(vq, &l);
                 if (token == NULL)
                         break;
-                if (token == na)
+                if (likely(token == na))
                         n++;
         }
         kring->nr_hwavail += n;
@@ -379,21 +379,7 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
                             j = (j == lim) ? 0 : j + 1;
                             n++;
                         } else {
-				/* TODO This will go away. */
-                            struct netmap_slot *slot = &ring->slot[kring->nr_ntc];
-                            void *addr = NMB(slot);
-                            int err;
-
-                            if (kring->nr_ntc < lim) {
-                                sg_set_buf(sg, addr, ring->nr_buf_size);
-                                err = virtqueue_add_inbuf(vq, sg, 1, na, GFP_ATOMIC);
-                                if (err < 0) {
-                                    D("virtqueue_add_inbuf failed");
-                                    return err;
-                                }
-                                virtqueue_kick(vq);
-                                kring->nr_ntc = (kring->nr_ntc == lim) ? 0 : kring->nr_ntc + 1;
-                            }
+			    D("This should not happen");
                         }
 		}
 		kring->nr_hwavail += n;
