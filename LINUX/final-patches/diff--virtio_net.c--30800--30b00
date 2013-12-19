@@ -1,5 +1,5 @@
 diff --git a/virtio_net.c b/virtio_net.c
-index 35c00c5..385b7ab 100644
+index 35c00c5..8aaaa7e 100644
 --- a/virtio_net.c
 +++ b/virtio_net.c
 @@ -132,6 +132,10 @@ struct virtnet_info {
@@ -18,7 +18,7 @@ index 35c00c5..385b7ab 100644
  	virtqueue_disable_cb(vq);
  
 +#ifdef DEV_NETMAP
-+        if (netmap_tx_irq(vi->dev, 0))
++        if (netmap_tx_irq(vi->dev, vq2txq(vq)))
 +		return;
 +#endif
  	/* We were probably waiting for more output buffers. */
@@ -31,7 +31,7 @@ index 35c00c5..385b7ab 100644
 +#ifdef DEV_NETMAP
 +        int work_done = 0;
  
-+        if (netmap_rx_irq(vi->dev, 0, &work_done)) {
++        if (netmap_rx_irq(vi->dev, vq2rxq(rq->vq), &work_done)) {
 +		napi_complete(napi);
 +		ND("called netmap_rx_irq");
 +
