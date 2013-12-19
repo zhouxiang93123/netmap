@@ -228,6 +228,10 @@ struct netmap_ring {
 #define	NR_FORWARD	0x0004		/* enable NS_FORWARD for ring */
 #define	NR_RX_TSTMP	0x0008		/* set rx timestamp in slots */
 
+	uint32_t head;			/* first to use */
+	uint32_t tail;			/* cur + avail */
+	uint32_t spare[3];
+
 	struct timeval	ts;		/* time of last *sync() */
 
 	/* the slots follow. This struct has variable size */

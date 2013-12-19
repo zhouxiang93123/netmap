@@ -661,6 +661,7 @@ pinger_body(void *data)
 	}
 
 	clock_gettime(CLOCK_REALTIME_PRECISE, &last_print);
+	now = last_print;
 	while (n == 0 || (int)sent < n) {
 		struct netmap_ring *ring = NETMAP_TXRING(nifp, 0);
 		struct netmap_slot *slot;
