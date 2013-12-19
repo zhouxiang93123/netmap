@@ -835,6 +835,7 @@ EXPORT_SYMBOL(netmap_backend_recvmsg);
 
 /* ######################## SOCKET SUPPORT ######################### */
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,35)
 struct netmap_sock {
 	struct sock sk;
 	struct socket sock;
@@ -1065,7 +1066,7 @@ static int netmap_socket_recvmsg(struct kiocb *iocb, struct socket *sock,
 
 	return ret;
 }
-
+#endif  /* >= 2.6.35 */
 
 
 /* ########################## MODULE INIT ######################### */
