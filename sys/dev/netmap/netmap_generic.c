@@ -236,6 +236,8 @@ generic_netmap_register(struct netmap_adapter *na, int enable)
 		/*
 		 * Preallocate packet buffers for the tx rings.
 		 */
+		for (r=0; r<na->num_tx_rings; r++)
+			na->tx_rings[r].tx_pool = NULL;
 		for (r=0; r<na->num_tx_rings; r++) {
 			na->tx_rings[r].nr_ntc = 0;
 			na->tx_rings[r].tx_pool = malloc(na->num_tx_desc * sizeof(struct mbuf *),
@@ -243,14 +245,16 @@ generic_netmap_register(struct netmap_adapter *na, int enable)
 			if (!na->tx_rings[r].tx_pool) {
 				D("tx_pool allocation failed");
 				error = ENOMEM;
-				goto free_tx_pool;
+				goto free_tx_pools;
 			}
+			for (i=0; i<na->num_tx_desc; i++)
+				na->tx_rings[r].tx_pool[i] = NULL;
 			for (i=0; i<na->num_tx_desc; i++) {
 				m = netmap_get_mbuf(GENERIC_BUF_SIZE);
 				if (!m) {
 					D("tx_pool[%d] allocation failed", i);
 					error = ENOMEM;
-					goto free_mbufs;
+					goto free_tx_pools;
 				}
 				na->tx_rings[r].tx_pool[i] = m;
 			}
@@ -328,17 +332,14 @@ generic_netmap_register(struct netmap_adapter *na, int enable)
 
 register_handler:
 	rtnl_unlock();
-free_tx_pool:
-	r--;
-	i = na->num_tx_desc;  /* Useless, but just to stay safe. */
-free_mbufs:
-	i--;
-	for (; r>=0; r--) {
-		for (; i>=0; i--) {
-			m_freem(na->tx_rings[r].tx_pool[i]);
-		}
+free_tx_pools:
+	for (r=0; r<na->num_tx_rings; r++) {
+		if (na->tx_rings[r].tx_pool == NULL)
+			continue;
+		for (i=0; i<na->num_tx_desc; i++)
+			if (na->tx_rings[r].tx_pool[i])
+				m_freem(na->tx_rings[r].tx_pool[i]);
 		free(na->tx_rings[r].tx_pool, M_DEVBUF);
-		i = na->num_tx_desc - 1;
 	}
 
 	return error;
