@@ -520,6 +520,15 @@ netmap_adapter_vp_dtor(struct netmap_adapter *na)
 	na->ifp = NULL;
 }
 
+/* Try to get a reference to a netmap adapter attached to a VALE switch.
+ * If the adapter is found (or is created), this function returns 0, a
+ * non NULL pointer is returned into *na, and the caller holds a
+ * reference to the adapter.
+ * If an adapter is not found, then no reference is grabbed and the
+ * function returns an error code, or 0 if there is just a VALE prefix
+ * mismatch. Therefore the caller holds a reference when
+ * (*na != NULL && return == 0).
+ */
 int
 netmap_get_bdg_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
 {
@@ -890,12 +899,13 @@ netmap_bdg_ctl(struct nmreq *nmr, bdg_lookup_fn_t func)
 	case NETMAP_BDG_OFFSET:
 		NMG_LOCK();
 		error = netmap_get_bdg_na(nmr, &na, 0);
-		if (!error) {
+		if (na && !error) {
 			vpna = (struct netmap_vp_adapter *)na;
 			if (nmr->nr_arg1 > NETMAP_BDG_MAX_OFFSET)
 				nmr->nr_arg1 = NETMAP_BDG_MAX_OFFSET;
 			vpna->offset = nmr->nr_arg1;
 			D("Using offset %d for %p", vpna->offset, vpna);
+			netmap_adapter_put(na);
 		}
 		NMG_UNLOCK();
 		break;
