@@ -260,8 +260,8 @@ bge_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		    sc->bge_cdata.bge_rx_return_ring_map,
 		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 	}
-	/* tell userspace that there are new packets */
-	ring->avail = kring->nr_hwavail ;
+	/* tell userspace that there might are new packets */
+	nm_rxsync_finalize(kring, resvd);
 	return 0;
 }
 

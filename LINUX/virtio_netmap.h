@@ -409,7 +409,7 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
         virtqueue_enable_cb(vq);
 
 	/* tell userspace that there might be new packets. */
-	ring->avail = kring->nr_hwavail - resvd;
+	nm_rxsync_finalize(kring, resvd);
 
         ND("[C] %d %d %d %d", ring->cur, ring->reserved, kring->nr_hwcur,
 			      kring->nr_hwavail);

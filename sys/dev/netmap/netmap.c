@@ -810,10 +810,10 @@ netmap_sw_to_nic(struct netmap_adapter *na, u_int n)
 		struct netmap_kring *kdst = &na->tx_rings[i];
 		u_int const dst_lim = kdst->nkr_num_slots - 1;
 
-		if (kdst->ring->avail == 0)
-			continue;	/* skip busy rings */
+		if (nm_ring_empty(kdst->ring))
+			continue;	/* skip tx rings with no space */
 
-		for (;n > 0 && kdst->ring->avail > 0;
+		for (;n > 0 && !nm_ring_empty(kdst->ring);
 		    n--, rxcur = nm_next(rxcur, src_lim) ) {
 			struct netmap_slot *src, *dst, tmp;
 
@@ -1800,11 +1800,10 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 		}
 		if (want_rx) {
 			kring = &na->rx_rings[lim_rx];
-			if (kring->ring->avail == 0)
+			if (nm_ring_empty(kring->ring))
 				netmap_rxsync_from_host(na, td, dev);
-			if (kring->ring->avail > 0) {
+			if (!nm_ring_empty(kring->ring))
 				revents |= want_rx;
-			}
 		}
 		return (revents);
 	}
@@ -1834,19 +1833,17 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 	 * We start with a lock free round which is cheap if we have
 	 * slots available. If this fails, then lock and call the sync
 	 * routines.
-	 * XXX rather than ring->avail >0 should check that
-	 * ring->cur has not reached hwcur+hwavail
 	 */
 	for (i = priv->np_qfirst; want_rx && i < lim_rx; i++) {
 		kring = &na->rx_rings[i];
-		if (kring->ring->avail > 0) {
+		if (!nm_ring_empty(kring->ring)) {
 			revents |= want_rx;
 			want_rx = 0;	/* also breaks the loop */
 		}
 	}
 	for (i = priv->np_qfirst; want_tx && i < lim_tx; i++) {
 		kring = &na->tx_rings[i];
-		if (kring->ring->avail > 0) {
+		if (!nm_ring_empty(kring->ring)) {
 			revents |= want_tx;
 			want_tx = 0;	/* also breaks the loop */
 		}
@@ -1892,7 +1889,7 @@ flush_tx:
 			 * txsync set a flag telling if we need
 			 * to do a selrecord().
 			 */
-			found = (kring->ring->avail > 0);
+			found = !nm_ring_empty(kring->ring);
 			nm_kr_put(kring);
 			if (found) { /* notify other listeners */
 				revents |= want_tx;
@@ -1945,7 +1942,7 @@ do_retry_rx:
 				microtime(&kring->ring->ts);
 			}
 
-			found = (kring->ring->avail > 0);
+			found = !nm_ring_empty(kring->ring);
 			nm_kr_put(kring);
 			if (found) {
 				revents |= want_rx;
@@ -1958,9 +1955,9 @@ do_retry_rx:
 		kring = &na->rx_rings[lim_rx];
 		if (check_all_rx
 		    && (netmap_fwd || kring->ring->flags & NR_FORWARD)) {
-			if (kring->ring->avail == 0)
+			if (nm_ring_empty(kring->ring))
 				send_down = netmap_rxsync_from_host(na, td, dev);
-			if (kring->ring->avail > 0)
+			if (!nm_ring_empty(kring->ring))
 				revents |= want_rx;
 		}
 

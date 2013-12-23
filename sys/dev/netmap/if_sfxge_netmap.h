@@ -381,7 +381,7 @@ sfxge_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		//IXGBE_WRITE_REG(&adapter->hw, IXGBE_RDT(rxr->me), l);
 	}
 	/* tell userspace that there are new packets */
-	ring->avail = kring->nr_hwavail - resvd;
+	nm_rxsync_finalize(kring, resvd);
 
 	return 0;
 

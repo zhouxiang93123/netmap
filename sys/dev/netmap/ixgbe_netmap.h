@@ -478,7 +478,7 @@ ixgbe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	}
 
 	/* tell userspace that there might be new packets */
-	ring->avail = kring->nr_hwavail - resvd;
+	nm_rxsync_finalize(kring, resvd);
 
 	return 0;
 

@@ -688,7 +688,7 @@ pinger_body(void *data)
 		slot->len = size;
 		p = NETMAP_BUF(ring, slot->buf_idx);
 
-		if (ring->avail == 0) {
+		if (nm_ring_empty(ring)) {
 			D("-- ouch, cannot send");
 		} else {
 			pkt_copy(frame, p, size);
@@ -708,7 +708,7 @@ pinger_body(void *data)
 		/* see what we got back */
 		for (i = targ->qfirst; i < targ->qlast; i++) {
 			ring = NETMAP_RXRING(nifp, i);
-			while (ring->avail > 0) {
+			while (!nm_ring_empty(ring)) {
 				uint32_t seq;
 				slot = &ring->slot[ring->cur];
 				p = NETMAP_BUF(ring, slot->buf_idx);
@@ -790,7 +790,7 @@ ponger_body(void *data)
 		/* see what we got back */
 		for (i = targ->qfirst; i < targ->qlast; i++) {
 			rxring = NETMAP_RXRING(nifp, i);
-			while (rxring->avail > 0) {
+			while (!nm_ring_empty(rxring)) {
 				uint16_t *spkt, *dpkt;
 				uint32_t cur = rxring->cur;
 				struct netmap_slot *slot = &rxring->slot[cur];
@@ -1004,7 +1004,7 @@ sender_body(void *data)
 			if (n > 0 && n - sent < limit)
 				limit = n - sent;
 			txring = NETMAP_TXRING(nifp, i);
-			if (txring->avail == 0)
+			if (nm_ring_empty(txring))
 				continue;
 			if (frags > 1)
 				limit = ((limit + frags - 1) / frags) * frags;
@@ -1028,7 +1028,7 @@ sender_body(void *data)
 	/* final part: wait all the TX queues to be empty. */
 	for (i = targ->qfirst; i < targ->qlast; i++) {
 		txring = NETMAP_TXRING(nifp, i);
-		while (!NETMAP_TX_RING_EMPTY(txring)) {
+		while (NETMAP_TX_PENDING(txring)) {
 			ioctl(fds[0].fd, NIOCTXSYNC, NULL);
 			usleep(1); /* wait 1 tick */
 		}
@@ -1141,7 +1141,7 @@ receiver_body(void *data)
 			int m;
 
 			rxring = NETMAP_RXRING(nifp, i);
-			if (rxring->avail == 0)
+			if (nm_ring_empty(rxring))
 				continue;
 
 			m = receive_packets(rxring, targ->g->burst, dump);

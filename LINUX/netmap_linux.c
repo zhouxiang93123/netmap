@@ -663,11 +663,11 @@ static inline int netmap_common_peek_head_len(struct netmap_adapter *na)
 
         /* Do the rxsync here. The recvmsg() callback must be
            called after the peek_head_len() callback. */
-        if (!ring->avail)
+        if (nm_ring_empty(ring))
             na->nm_rxsync(na, 0, NAF_FORCE_READ);
 
         i = ring->cur;
-	if (ring->avail) {
+	if (!nm_ring_empty(ring)) {
 		for(;;) {
 			ret += ring->slot[i].len;
 			if (!(ring->slot[i].flags & NS_MOREFRAG))

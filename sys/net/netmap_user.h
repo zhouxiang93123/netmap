@@ -67,6 +67,11 @@
 #include <net/if.h>		/* IFNAMSIZ */
 #include <net/netmap.h>
 
+#ifndef likely
+#define likely(x)	__builtin_expect(!!(x), 1)
+#define unlikely(x)	__builtin_expect(!!(x), 0)
+#endif /* likely and unlikely */
+
 #define _NETMAP_OFFSET(type, ptr, offset) \
 	((type)(void *)((char *)(ptr) + (offset)))
 
@@ -85,8 +90,12 @@
 	( ((char *)(buf) - ((char *)(ring) + (ring)->buf_ofs) ) / \
 		(ring)->nr_buf_size )
 
-#define	NETMAP_RING_NEXT(r, i)				\
-	((i)+1 == (r)->num_slots ? 0 : (i) + 1 )
+static inline int
+NETMAP_RING_NEXT(struct netmap_ring *r, uint32_t i)
+{
+	return ( unlikely(i + 1 == r->num_slots) ? 0 : i + 1);
+}
+
 
 #define	NETMAP_RING_FIRST_RESERVED(r)			\
 	( (r)->cur < (r)->reserved ?			\
@@ -94,9 +103,13 @@
 	  (r)->cur - (r)->reserved )
 
 /*
- * Return 1 if the given tx ring is empty.
+ * Return 1 if we have pending transmissions in the tx ring.
  */
-#define NETMAP_TX_RING_EMPTY(r)	((r)->avail >= (r)->num_slots - 1)
+static inline int
+NETMAP_TX_PENDING(struct netmap_ring *r)
+{
+	return r->avail < r->num_slots - 1;
+}
 
 #ifdef NETMAP_WITH_LIBS
 /*
@@ -276,7 +289,7 @@ nm_dispatch(struct nm_desc_t *d, int cnt, nm_cb_t cb, u_char *arg)
 		if (ri > d->last_ring)
 			ri = d->first_ring;
 		ring = NETMAP_RXRING(d->nifp, ri);
-		for ( ; ring->avail > 0 && cnt != got; got++) {
+		for ( ; !nm_ring_empty(ring) && cnt != got; got++) {
 			u_int i = ring->cur;
 			u_int idx = ring->slot[i].buf_idx;
 			u_char *buf = (u_char *)NETMAP_BUF(ring, idx);
@@ -302,7 +315,7 @@ nm_next(struct nm_desc_t *d, struct nm_hdr_t *hdr)
 	do {
 		/* compute current ring to use */
 		struct netmap_ring *ring = NETMAP_RXRING(d->nifp, ri);
-		if (ring->avail > 0) {
+		if (!nm_ring_empty(ring)) {
 			u_int i = ring->cur;
 			u_int idx = ring->slot[i].buf_idx;
 			u_char *buf = (u_char *)NETMAP_BUF(ring, idx);

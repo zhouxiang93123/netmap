@@ -761,6 +761,18 @@ nm_txsync_finalize(struct netmap_kring *kring, u_int cur)
 	kring->ring->reserved = kring->nr_hwreserved;
 }
 
+
+/*
+ * update kring and ring at the end of rxsync
+ */
+static inline void
+nm_rxsync_finalize(struct netmap_kring *kring, u_int resvd)
+{
+	/* tell userspace that there might be new packets */
+	kring->ring->avail = kring->nr_hwavail - resvd;
+}
+
+
 /* check/fix address and len in tx rings */
 #if 1 /* debug version */
 #define	NM_CHECK_ADDR_LEN(_a, _l)	do {				\

@@ -107,11 +107,11 @@ move(struct my_ring *src, struct my_ring *dst, u_int limit)
 		rxring = NETMAP_RXRING(src->nifp, si);
 		txring = NETMAP_TXRING(dst->nifp, di);
 		ND("txring %p rxring %p", txring, rxring);
-		if (rxring->avail == 0) {
+		if (nm_ring_empty(rxring)) {
 			si++;
 			continue;
 		}
-		if (txring->avail == 0) {
+		if (nm_ring_empty(txring)) {
 			di++;
 			continue;
 		}

@@ -500,14 +500,14 @@ pcap_dispatch(pcap_t *p, int cnt, pcap_handler callback, u_char *user)
 	for (si = me->begin; si < me->end; si++) {
 		struct netmap_ring *ring = NETMAP_RXRING(me->nifp, si);
 		ND("ring has %d pkts", ring->avail);
-		if (ring->avail == 0)
+		if (nm_ring_empty(ring))
 			continue;
 		pme->hdr.ts = ring->ts;
 		/*
 		 * XXX a proper prefetch should be done as
 		 *	prefetch(i); callback(i-1); ...
 		 */
-		while ((cnt == -1 || cnt != got) && ring->avail > 0) {
+		while ((cnt == -1 || cnt != got) && !nm_ring_empty(ring)) {
 			u_int i = ring->cur;
 			u_int idx = ring->slot[i].buf_idx;
 			if (idx < 2) {
@@ -541,7 +541,7 @@ pcap_inject(pcap_t *p, const void *buf, size_t size)
                 struct netmap_ring *ring = NETMAP_TXRING(me->nifp, si);
  
                 ND("ring has %d pkts", ring->avail);
-                if (ring->avail == 0)
+                if (nm_ring_empty(ring))
                         continue;
 		u_int i = ring->cur;
 		u_int idx = ring->slot[i].buf_idx;

@@ -235,6 +235,15 @@ struct netmap_ring {
 };
 
 
+/* check if space is available in the ring.
+ * eventually will use cur != tail
+ */
+static inline int
+nm_ring_empty(struct netmap_ring *ring)
+{
+	return (ring->avail == 0);
+}
+
 /*
  * Netmap representation of an interface and its queue(s).
  * This is initialized by the kernel when binding a file
