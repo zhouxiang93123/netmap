@@ -1901,8 +1901,8 @@ flush_tx:
 			}
 		}
 		if (want_tx && retry_tx) {
-			selrecord(td, check_all_tx ? &na->tx_si :
-			    &na->tx_rings[priv->np_qfirst].si);
+			selrecord(td, check_all_tx ?
+			    &na->tx_si : &na->tx_rings[priv->np_qfirst].si);
 			retry_tx = 0;
 			goto flush_tx;
 		}
@@ -1933,13 +1933,15 @@ do_retry_rx:
 			 * physical or NIC ports
 			 */
 			if (netmap_fwd ||kring->ring->flags & NR_FORWARD) {
+				ND(10, "forwarding some buffers up %d to %d",
+				    kring->nr_hwcur, kring->ring->cur);
 				netmap_grab_packets(kring, &q, netmap_fwd);
 			}
 
 			if (na->nm_rxsync(na, i, 0))
 				revents |= POLLERR;
 			if (netmap_no_timestamp == 0 ||
-			    kring->ring->flags & NR_TIMESTAMP) {
+					kring->ring->flags & NR_TIMESTAMP) {
 				microtime(&kring->ring->ts);
 			}
 
@@ -1963,8 +1965,8 @@ do_retry_rx:
 		}
 
 		if (retry_rx)
-			selrecord(td, check_all_rx ? &na->rx_si :
-			    &na->rx_rings[priv->np_qfirst].si);
+			selrecord(td, check_all_rx ?
+			    &na->rx_si : &na->rx_rings[priv->np_qfirst].si);
 		if (send_down > 0 || retry_rx) {
 			retry_rx = 0;
 			if (send_down)
