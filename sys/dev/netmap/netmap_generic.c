@@ -485,53 +485,42 @@ generic_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct ifnet *ifp = na->ifp;
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	u_int j, k, num_slots = kring->nkr_num_slots;
-	int new_slots, ntx;
+	u_int nm_i;	/* index into the netmap ring */ // j
+	u_int n, new_slots;
+	u_int const lim = kring->nkr_num_slots - 1;
+	u_int const cur = nm_txsync_prologue(kring, &new_slots);// k,
 
 	IFRATE(rate_ctx.new.txsync++);
 
 	// TODO: handle the case of mbuf allocation failure
-	/* first, reclaim completed buffers */
-	generic_netmap_tx_clean(kring);
 
-	/* Take a copy of ring->cur now, and never read it again. */
-	k = ring->cur;
-	if (unlikely(k >= num_slots)) {
+	if (unlikely(cur > lim)) {
 		return netmap_ring_reinit(kring);
 	}
 
 	rmb();
-	j = kring->nr_hwcur;
+
 	/*
-	 * 'new_slots' counts how many new slots have been added:
-	 * everything from hwcur to cur, excluding reserved ones, if any.
-	 * nr_hwreserved start from hwcur and counts how many slots were
-	 * not sent to the NIC from the previous round.
+	 * First part: process new packets to send.
 	 */
-	new_slots = k - j - kring->nr_hwreserved;
-	if (new_slots < 0) {
-		new_slots += num_slots;
-	}
-	ntx = 0;
-	if (j != k) {
-		/* Process new packets to send:
-		 * j is the current index in the netmap ring.
-		 */
-		while (j != k) {
-			struct netmap_slot *slot = &ring->slot[j]; /* Current slot in the netmap ring */
-			void *addr = NMB(slot);
+	nm_i = kring->nr_hwcur;
+	if (nm_i != cur) {	/* we have new packets to send */
+		for (n = 0; nm_i != cur;) {
+			struct netmap_slot *slot = &ring->slot[nm_i];
 			u_int len = slot->len;
+			void *addr = NMB(slot);
+
+			/* device-specific */
 			struct mbuf *m;
 			int tx_ret;
 
-			if (unlikely(addr == netmap_buffer_base || len > NETMAP_BUF_SIZE)) {
-				return netmap_ring_reinit(kring);
-			}
+			NM_CHECK_ADDR_LEN(addr, len);
+
 			/* Tale a mbuf from the tx pool and copy in the user packet. */
-			m = kring->tx_pool[j];
+			m = kring->tx_pool[nm_i];
 			if (unlikely(!m)) {
 				RD(5, "This should never happen");
-				kring->tx_pool[j] = m = netmap_get_mbuf(GENERIC_BUF_SIZE);
+				kring->tx_pool[nm_i] = m = netmap_get_mbuf(GENERIC_BUF_SIZE);
 				if (unlikely(m == NULL)) {
 					D("mbuf allocation failed");
 					break;
@@ -542,12 +531,12 @@ generic_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			 * by lazily requesting notifications only when a
 			 * transmission fails. Probably the best way is to
 			 * break on failures and set notifications when
-			 * ring->avail == 0 || j != k
+			 * ring->avail == 0 || nm_i != cur
 			 */
 			tx_ret = generic_xmit_frame(ifp, m, addr, len, ring_nr);
 			if (unlikely(tx_ret)) {
 				RD(5, "start_xmit failed: err %d [%u,%u,%u,%u]",
-						tx_ret, kring->nr_ntc, j, k, kring->nr_hwavail);
+						tx_ret, kring->nr_ntc, nm_i, cur, kring->nr_hwavail);
 				/*
 				 * No room for this mbuf in the device driver.
 				 * Request a notification FOR A PREVIOUS MBUF,
@@ -562,7 +551,7 @@ generic_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 				 * is preallocated). The bridge has a similar problem
 				 * and we solve it there by dropping the excess packets.
 				 */
-				generic_set_tx_event(kring, j);
+				generic_set_tx_event(kring, nm_i);
 				if (generic_netmap_tx_clean(kring)) { /* space now available */
 					continue;
 				} else {
@@ -570,24 +559,17 @@ generic_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 				}
 			}
 			slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
-			if (unlikely(++j == num_slots))
-				j = 0;
-			ntx++;
+			nm_i = nm_next(nm_i, lim);
+			n++;
 		}
 
 		/* Update hwcur to the next slot to transmit. */
-		kring->nr_hwcur = j;
-
+		kring->nr_hwcur = nm_i;
 		/*
 		 * Report all new slots as unavailable, even those not sent.
-		 * We account for them with with hwreserved, so that
-		 * nr_hwreserved =:= cur - nr_hwcur
+		 * We will account for them with with hwreserved
 		 */
 		kring->nr_hwavail -= new_slots;
-		kring->nr_hwreserved = k - j;
-		if (kring->nr_hwreserved < 0) {
-			kring->nr_hwreserved += num_slots;
-		}
 
 		IFRATE(rate_ctx.new.txpkt += ntx);
 
@@ -597,17 +579,19 @@ generic_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			 * No doublecheck is performed, since txsync() will be
 			 * called twice by netmap_poll().
 			 */
-			generic_set_tx_event(kring, j);
+			generic_set_tx_event(kring, nm_i);
 		}
 		ND("tx #%d, hwavail = %d", n, kring->nr_hwavail);
 	}
 
-	/* Synchronize the user's view to the kernel view. */
-	ring->avail = kring->nr_hwavail;
-	ring->reserved = kring->nr_hwreserved;
+	/* first, reclaim completed buffers */ // XXX move to second part
+	generic_netmap_tx_clean(kring);
+
+	nm_txsync_finalize(kring, cur);
 
 	return 0;
 }
+
 
 /*
  * This handler is registered (through netmap_catch_rx())
@@ -663,50 +647,53 @@ generic_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	u_int j, n, lim = kring->nkr_num_slots - 1;
+	u_int nm_i;	/* index into the netmap ring */ //j,
+	u_int n, resvd;
+	u_int const lim = kring->nkr_num_slots - 1;
+	u_int const cur = nm_rxsync_prologue(kring, &resvd); /* cur + res */
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
-	u_int k, resvd = ring->reserved;
 
-	if (ring->cur > lim)
+	if (cur > lim)
 		return netmap_ring_reinit(kring);
 
-	/* Import newly received packets into the netmap ring. */
+	/*
+	 * First part: import newly received packets.
+	 */
 	if (netmap_no_pendintr || force_update) {
-		uint16_t slot_flags = kring->nkr_slot_flags;
-		struct mbuf *m;
-
-		n = 0;
-		j = kring->nr_ntc; /* first empty slot in the receive ring */
 		/* extract buffers from the rx queue, stop at most one
-		 * slot before nr_hwcur (index k)
+		 * slot before nr_hwcur (stop_i)
 		 */
-		k = (kring->nr_hwcur) ? kring->nr_hwcur-1 : lim;
-		while (j != k) {
-			int len;
-			void *addr = NMB(&ring->slot[j]);
+		uint16_t slot_flags = kring->nkr_slot_flags;
+		u_int stop_i = nm_prev(cur, lim);
 
+		nm_i = kring->nr_ntc; /* first empty slot in the receive ring */
+		for (n = 0; nm_i != stop_i; n++) {
+			int len;
+			void *addr = NMB(&ring->slot[nm_i]);
+			struct mbuf *m;
+
+			/* we only check the address here on generic rx rings */
 			if (addr == netmap_buffer_base) { /* Bad buffer */
 				return netmap_ring_reinit(kring);
 			}
 			/*
 			 * Call the locked version of the function.
-			 *  XXX Ideally we could grab a batch of mbufs at once,
-			 * by changing rx_queue into a ring.
+			 * XXX Ideally we could grab a batch of mbufs at once
+			 * and save some locking overhead.
 			 */
 			m = mbq_safe_dequeue(&kring->rx_queue);
-			if (!m)
+			if (!m)	/* no more data */
 				break;
 			len = MBUF_LEN(m);
 			m_copydata(m, 0, len, addr);
-			ring->slot[j].len = len;
-			ring->slot[j].flags = slot_flags;
+			ring->slot[nm_i].len = len;
+			ring->slot[nm_i].flags = slot_flags;
 			m_freem(m);
-			if (unlikely(j++ == lim))
-				j = 0;
+			nm_i = nm_next(nm_i, lim);
 			n++;
 		}
 		if (n) {
-			kring->nr_ntc = j;
+			kring->nr_ntc = nm_i;
 			kring->nr_hwavail += n;
 			IFRATE(rate_ctx.new.rxpkt += n);
 		}
@@ -714,29 +701,22 @@ generic_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	}
 
 	// XXX should we invert the order ?
-	/* Skip past packets that userspace has released */
-	j = kring->nr_hwcur;
-	k = ring->cur;
-	if (resvd > 0) {
-		if (resvd + ring->avail >= lim + 1) {
-			D("XXX invalid reserve/avail %d %d", resvd, ring->avail);
-			ring->reserved = resvd = 0; // XXX panic...
-		}
-		k = (k >= resvd) ? k - resvd : k + lim + 1 - resvd;
-	}
-	if (j != k) {
+	/*
+	 * Second part: skip past packets that userspace has released.
+	 */
+	nm_i = kring->nr_hwcur;
+	if (nm_i != cur) {
 		/* Userspace has released some packets. */
-		for (n = 0; j != k; n++) {
-			struct netmap_slot *slot = &ring->slot[j];
+		for (n = 0; nm_i != cur; n++) {
+			struct netmap_slot *slot = &ring->slot[nm_i];
 
 			slot->flags &= ~NS_BUF_CHANGED;
-			if (unlikely(j++ == lim))
-				j = 0;
+			nm_i = nm_next(nm_i, lim);
 		}
 		kring->nr_hwavail -= n;
-		kring->nr_hwcur = k;
+		kring->nr_hwcur = cur;
 	}
-	/* Tell userspace that there are new packets. */
+	/* tell userspace that there might be new packets. */
 	ring->avail = kring->nr_hwavail - resvd;
 	IFRATE(rate_ctx.new.rxsync++);
 

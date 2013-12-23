@@ -165,6 +165,12 @@ extern NMG_LOCK_T	netmap_global_lock;
  *			nr_hwavail =:= ring->avail + ring->reserved
  *			at the time the system call returns.
  *
+ *	nr_hwreserved	in tx rings, packets from nr_hwcur that have
+ *			been reported through txsync (as ring->cur)
+ *			but not sent yet to the NIC (e.g. because
+ *			the interface was down). In this case
+ *			nr_hwreserved = ring->cur - kring->nr_hwcur
+ *
  * The indexes in the NIC and netmap rings are offset by nkr_hwofs slots.
  * This is so that, on a reset, buffers owned by userspace are not
  * modified by the kernel. In particular:
@@ -212,7 +218,7 @@ struct netmap_kring {
 	uint32_t nr_hwcur;
 	uint32_t nr_hwavail;
 	uint32_t nr_kflags;	/* private driver flags */
-	int32_t nr_hwreserved;
+	int32_t nr_hwreserved;	/* tx: packets not sent to driver */
 #define NKR_PENDINTR	0x1	// Pending interrupt.
 	uint32_t nkr_num_slots;
 	int32_t	nkr_hwofs;	/* offset between NIC and netmap ring */
@@ -251,6 +257,13 @@ static inline uint32_t
 nm_next(uint32_t i, uint32_t lim)
 {
 	return unlikely (i == lim) ? 0 : i + 1;
+}
+
+/* return the previous index, with wraparound */
+static inline uint32_t
+nm_prev(uint32_t i, uint32_t lim)
+{
+	return unlikely (i == 0) ? lim : i - 1;
 }
 
 /*
@@ -526,6 +539,7 @@ struct netmap_bwrap_adapter {
 
 /*
  * Available space in the ring. Only used in VALE code
+ * and only with is_rx = 1
  */
 static inline uint32_t
 nm_kr_space(struct netmap_kring *k, int is_rx)
@@ -533,11 +547,16 @@ nm_kr_space(struct netmap_kring *k, int is_rx)
 	int space;
 
 	if (is_rx) {
+		/* XXX nr_hwreserved should be 0 ? */
 		int busy = k->nkr_hwlease - k->nr_hwcur + k->nr_hwreserved;
 		if (busy < 0)
 			busy += k->nkr_num_slots;
 		space = k->nkr_num_slots - 1 - busy;
+		if (k->nr_hwreserved)
+			RD(5, "rxring has hwres %d hwcur %d hwavail %d hwlease %d",
+				k->nr_hwreserved, k->nr_hwcur, k->nr_hwavail, k->nkr_hwlease);
 	} else {
+		/* XXX never used in this branch */
 		space = k->nr_hwcur + k->nr_hwavail - k->nkr_hwlease;
 		if (space < 0)
 			space += k->nkr_num_slots;
@@ -561,6 +580,7 @@ nm_kr_space(struct netmap_kring *k, int is_rx)
 
 /* make a lease on the kring for N positions. return the
  * lease index
+ * XXX only used in VALE code and with is_rx = 1
  */
 static inline uint32_t
 nm_kr_lease(struct netmap_kring *k, u_int n, int is_rx)
