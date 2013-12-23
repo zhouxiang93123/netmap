@@ -238,9 +238,6 @@ virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct scatterlist *sg = GET_TX_SG(vi, ring_nr);
         struct netmap_adapter *token;
 
-        ND("[A] %d %d %d %d", ring->cur, kring->nr_hwcur,
-			      kring->nr_hwavail, kring->nr_hwreserved);
-
 	// XXX invert the order
         /* Free used slots. We only consider our own used buffers, recognized
 	 * by the token we passed to virtqueue_add_outbuf.
@@ -254,8 +251,6 @@ virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
                         n++;
         }
         kring->nr_hwavail += n;
-        ND("[B] %d %d %d %d", ring->cur, kring->nr_hwcur,
-			      kring->nr_hwavail, kring->nr_hwreserved);
 
 	/*
 	 * First part: process new packets to send.
