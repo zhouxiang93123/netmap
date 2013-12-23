@@ -222,26 +222,32 @@ virtio_netmap_reg(struct netmap_adapter *na, int onoff)
 static int
 virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
-	COMPAT_DECL_SG
         struct ifnet *ifp = na->ifp;
+	struct netmap_kring *kring = &na->tx_rings[ring_nr];
+	struct netmap_ring *ring = kring->ring;
+	u_int nm_i;	/* index into the netmap ring */
+	u_int nic_i;	/* index into the NIC ring */
+	u_int n, new_slots;
+	u_int const lim = kring->nkr_num_slots - 1;
+	u_int const cur = nm_txsync_prologue(kring, &new_slots);
+
+	/* device-specific */
+	COMPAT_DECL_SG
 	struct SOFTC_T *vi = netdev_priv(ifp);
 	struct virtqueue *vq = GET_TX_VQ(vi, ring_nr);
 	struct scatterlist *sg = GET_TX_SG(vi, ring_nr);
-	struct netmap_kring *kring = &na->tx_rings[ring_nr];
-	struct netmap_ring *ring = kring->ring;
         struct netmap_adapter *token;
-	u_int j, k, l, n, lim = kring->nkr_num_slots - 1;
-	int new_slots;
 
         ND("[A] %d %d %d %d", ring->cur, kring->nr_hwcur,
 			      kring->nr_hwavail, kring->nr_hwreserved);
 
+	// XXX invert the order
         /* Free used slots. We only consider our own used buffers, recognized
 	 * by the token we passed to virtqueue_add_outbuf.
 	 */
         n = 0;
         for (;;) {
-                token = virtqueue_get_buf(vq, &l);
+                token = virtqueue_get_buf(vq, &nic_i); /* dummy 2nd arg */
                 if (token == NULL)
                         break;
                 if (likely(token == na))
@@ -251,46 +257,36 @@ virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
         ND("[B] %d %d %d %d", ring->cur, kring->nr_hwcur,
 			      kring->nr_hwavail, kring->nr_hwreserved);
 
-	/* Take a copy of ring->cur now, and never read it again. */
-	k = ring->cur;
-	if (k > lim)
+	/*
+	 * First part: process new packets to send.
+	 */
+	if (cur > lim)
 		return netmap_ring_reinit(kring);
 
 	rmb();
-	/* Process new packets to send. j is the current index in the
-	 * netmap ring.
-	 */
-	j = kring->nr_hwcur;
-	new_slots = k - j - kring->nr_hwreserved;
-	if (new_slots < 0)
-		new_slots += kring->nkr_num_slots;
-	if (new_slots > kring->nr_hwavail) {
-		RD(5, "=== j %d k %d d %d hwavail %d hwreserved %d",
-			j, k, new_slots, kring->nr_hwavail, kring->nr_hwreserved);
-		return netmap_ring_reinit(kring);
-	}
+
 	if (!netif_carrier_ok(ifp)) {
 		/* All the new slots are now unavailable. */
 		kring->nr_hwavail -= new_slots;
 		goto out;
 	}
-	if (j != k) {	/* We have new packets to send */
-		l = netmap_idx_k2n(kring, j);
-		for (n = 0; j != k; n++) {
-			/* slot is the current slot in the netmap ring */
-			struct netmap_slot *slot = &ring->slot[j];
+
+	nm_i = kring->nr_hwcur;
+	if (nm_i != cur) {	/* we have new packets to send */
+		nic_i = netmap_idx_k2n(kring, nm_i);
+		for (n = 0; nm_i != cur; n++) {
+			struct netmap_slot *slot = &ring->slot[nm_i];
+			u_int len = slot->len;
 			void *addr = NMB(slot);
                         int err;
 
-			if (unlikely(addr == netmap_buffer_base ||
-                                     slot->len > NETMAP_BUF_SIZE))
-				return netmap_ring_reinit(kring);
+			NM_CHECK_ADDR_LEN(addr, len);
 
-			slot->flags &= ~NS_REPORT;
+			slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
 			/* Initialize the scatterlist, expose it to the hypervisor,
 			 * and kick the hypervisor (if necessary).
 			 */
-                        sg_set_buf(sg, addr, slot->len);
+                        sg_set_buf(sg, addr, len);
                         err = virtqueue_add_outbuf(vq, sg, 1, na, GFP_ATOMIC);
                         if (err < 0) {
                                 D("virtqueue_add_outbuf failed");
@@ -298,11 +294,11 @@ virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
                         }
 			virtqueue_kick(vq);
 
-			j = (j == lim) ? 0 : j + 1;
-			l = (l == lim) ? 0 : l + 1;
+			nm_i = nm_next(nm_i, lim);
+			nic_i = nm_next(nic_i, lim);
 		}
 		/* Update hwcur depending on where we stopped. */
-		kring->nr_hwcur = j;
+		kring->nr_hwcur = nm_i; /* note we migth break early */
 
 		/* The new slots are reported as unavailable. */
 		kring->nr_hwavail -= new_slots;
@@ -315,18 +311,7 @@ virtio_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			virtqueue_enable_cb_delayed(vq);
 	}
 out:
-	/* recompute hwreserved */
-	kring->nr_hwreserved = k - j;
-	if (kring->nr_hwreserved < 0) {
-		kring->nr_hwreserved += kring->nkr_num_slots;
-	}
-
-	/* update avail and reserved to what the kernel knows */
-	ring->avail = kring->nr_hwavail;
-	ring->reserved = kring->nr_hwreserved;
-
-        ND("[C] %d %d %d %d", ring->cur, kring->nr_hwcur,
-			      kring->nr_hwavail, kring->nr_hwreserved);
+	nm_txsync_finalize(kring, cur);
 
         return 0;
 }
@@ -336,27 +321,31 @@ out:
 static int
 virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
-	COMPAT_DECL_SG
         struct ifnet *ifp = na->ifp;
+	struct netmap_kring *kring = &na->rx_rings[ring_nr];
+	struct netmap_ring *ring = kring->ring;
+	u_int nm_i;	/* index into the netmap ring */
+	// u_int nic_i;	/* index into the NIC ring */
+	u_int n, resvd;
+	u_int const lim = kring->nkr_num_slots - 1;
+	u_int const cur = nm_rxsync_prologue(kring, &resvd); /* cur + res */
+	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
+
+	/* device-specific */
+	COMPAT_DECL_SG
 	struct SOFTC_T *vi = netdev_priv(ifp);
 	struct virtqueue *vq = GET_RX_VQ(vi, ring_nr);
 	struct scatterlist *sg = GET_RX_SG(vi, ring_nr);
-	struct netmap_kring *kring = &na->rx_rings[ring_nr];
-	struct netmap_ring *ring = kring->ring;
-	u_int j, l, n, lim = kring->nkr_num_slots - 1;
-	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
-	u_int k = ring->cur, resvd = ring->reserved;
 
-        ND("[A] %d %d %d %d", ring->cur, ring->reserved, kring->nr_hwcur,
-			      kring->nr_hwavail);
+	/* XXX netif_carrier_ok ? */
 
-	if (k > lim)
+	if (cur > lim)
 		return netmap_ring_reinit(kring);
 
 	rmb();
 	/*
-	 * Import newly received packets into the netmap ring.
-	 * j is an index in the netmap ring. Only accept our
+	 * First part: import newly received packets.
+	 * Only accept our
 	 * own buffers (matching the token). We should only get
 	 * matching buffers, because of virtio_netmap_free_rx_unused_bufs()
 	 * and virtio_netmap_init_buffers().
@@ -365,18 +354,17 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		uint16_t slot_flags = kring->nkr_slot_flags;
                 struct netmap_adapter *token;
 
-                j = kring->nr_hwcur + kring->nr_hwavail;
-                if (j >= kring->nkr_num_slots)
-                        j -= kring->nkr_num_slots;
+                nm_i = nm_kr_rxpos(kring);
                 n = 0;
 		for (;;) {
-                        token = virtqueue_get_buf(vq, &l);
+			int len;
+                        token = virtqueue_get_buf(vq, &len);
                         if (token == NULL)
                                 break;
                         if (likely(token == na)) {
-                            ring->slot[j].len = l;
-                            ring->slot[j].flags = slot_flags;
-                            j = (j == lim) ? 0 : j + 1;
+                            ring->slot[nm_i].len = len;
+                            ring->slot[nm_i].flags = slot_flags;
+                            nm_i = nm_next(nm_i, lim);
                             n++;
                         } else {
 			    D("This should not happen");
@@ -388,26 +376,20 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
         ND("[B] %d %d %d %d", ring->cur, ring->reserved, kring->nr_hwcur,
 			      kring->nr_hwavail);
 
-	/* skip past packets that userspace has released */
-	j = kring->nr_hwcur; /* netmap ring index */
-	if (resvd > 0) {
-		if (resvd + ring->avail >= lim + 1) {
-			D("XXX invalid reserve/avail %d %d", resvd, ring->avail);
-			ring->reserved = resvd = 0; // XXX panic...
-		}
-		k = (k >= resvd) ? k - resvd : k + lim + 1 - resvd;
-	}
-	if (j != k) { /* userspace has released some packets. */
-		for (n = 0; j != k; n++) {
-			struct netmap_slot *slot = &ring->slot[j];
+	/*
+	 * Second part: skip past packets that userspace has released.
+	 */
+	nm_i = kring->nr_hwcur; /* netmap ring index */
+	if (nm_i != cur) {
+		for (n = 0; nm_i != cur; n++) {
+			struct netmap_slot *slot = &ring->slot[nm_i];
 			void *addr = NMB(slot);
                         int err;
 
 			if (addr == netmap_buffer_base) /* bad buf */
 				return netmap_ring_reinit(kring);
 
-			if (slot->flags & NS_BUF_CHANGED)
-				slot->flags &= ~NS_BUF_CHANGED;
+			slot->flags &= ~NS_BUF_CHANGED;
 
 			/* Initialize the scatterlist, expose it to the hypervisor,
 			 * and kick the hypervisor (if necessary).
@@ -419,10 +401,10 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
                             return err;
                         }
                         virtqueue_kick(vq);
-			j = (j == lim) ? 0 : j + 1;
+			nm_i = nm_next(nm_i, lim);
 		}
 		kring->nr_hwavail -= n;
-		kring->nr_hwcur = k;
+		kring->nr_hwcur = cur;
 	}
 
 	/* We have finished processing used RX buffers, so we have to tell
@@ -431,7 +413,7 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	 */
         virtqueue_enable_cb(vq);
 
-	/* Tell userspace that there are new packets. */
+	/* tell userspace that there might be new packets. */
 	ring->avail = kring->nr_hwavail - resvd;
 
         ND("[C] %d %d %d %d", ring->cur, ring->reserved, kring->nr_hwcur,
