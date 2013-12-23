@@ -1251,9 +1251,6 @@ nm_rxsync_prologue(struct netmap_kring *kring, u_int *resvd)
 	if (a != avail) {
 		RD(5, "wrong but fixable avail have %d need %d",
 			avail, a);
-		/* on a sw ring this is acceptable, because nr_hwavail
-		 * advances without a txsync.
-		 */
 		ring->avail = avail = a;
 	}
 	if (res != 0) {
@@ -1333,7 +1330,6 @@ netmap_ring_reinit(struct netmap_kring *kring)
 	}
 	return (errors ? 1 : 0);
 }
-
 
 
 /*
@@ -1651,7 +1647,6 @@ netmap_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 			break;
 		}
 
-		/* XXX use callbacks so they are the same ? */
 		if (priv->np_qfirst == NETMAP_SW_RING) { /* host rings */
 			if (cmd == NIOCTXSYNC)
 				netmap_txsync_to_host(na);
@@ -1807,8 +1802,9 @@ netmap_poll(struct cdev *dev, int events, struct thread *td)
 			kring = &na->rx_rings[lim_rx];
 			if (kring->ring->avail == 0)
 				netmap_rxsync_from_host(na, td, dev);
-			if (kring->ring->avail > 0)
+			if (kring->ring->avail > 0) {
 				revents |= want_rx;
+			}
 		}
 		return (revents);
 	}
