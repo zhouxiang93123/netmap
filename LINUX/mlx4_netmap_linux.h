@@ -220,18 +220,30 @@ same for rx_cq and rx_ring.
 static int
 mlx4_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
-        struct ifnet *ifp = na->ifp;
-	struct SOFTC_T *priv = netdev_priv(ifp);
-	struct mlx4_en_tx_ring *txr = &priv->tx_ring[ring_nr];
+	struct ifnet *ifp = na->ifp;
 	struct netmap_kring *kring = &na->tx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	u_int j, k = ring->cur, n = 0, lim = kring->nkr_num_slots - 1;
-	int error = 0;
-	int new_slots;
+	u_int nm_i;	/* index into the netmap ring */
+	u_int nic_i;	/* index into the NIC ring */
+	u_int n, new_slots;
+	u_int const lim = kring->nkr_num_slots - 1;
+	u_int const cur = nm_txsync_prologue(kring, &new_slots);
+	/*
+	 * interrupts on every tx packet are expensive so request
+	 * them every half ring, or where NS_REPORT is set
+	 */
+	u_int report_frequency = kring->nkr_num_slots >> 1;
 
-	/* if cur is invalid reinitialize the ring. */
-	if (k > lim)
+	struct SOFTC_T *priv = netdev_priv(ifp);
+	int error = 0;
+
+	if (cur > lim)	/* error checking in nm_txsync_prologue() */
 		return netmap_ring_reinit(kring);
+
+	if (!netif_carrier_ok(ifp)) {
+		kring->nr_hwavail -= new_slots;
+		goto out;
+	}
 
 	// XXX debugging, only print if sending something
 	n = (txr->prod - txr->cons - 1) & 0xffffff; // should be modulo 2^24 ?
@@ -239,32 +251,14 @@ mlx4_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		RD(5, "XXXXXXXXXXX txr %d overflow: cons %u prod %u size %d delta %d",
 		    ring_nr, txr->cons, txr->prod, txr->size, n);
 	}
+
 	/*
-	 * Process new packets to send. j is the current index in the
-	 * netmap ring, txr->prod is the entry in the NIC ring.
+	 * First part: process new packets to send.
 	 */
-	j = kring->nr_hwcur;
-	if (j > lim) {
-		D("XXXXXXXXXXXXX ERROR q %d nwcur overflow %d", j, lim);
-		error = EINVAL;
-		goto err;
-	}
-	new_slots = k - j - kring->nr_hwreserved;
-	if (new_slots < 0)
-		new_slots += kring->nkr_num_slots;
-	if (new_slots > kring->nr_hwavail) {
-		RD(5, "=== j %d k %d d %d hwavail %d hwreserved %d",
-			j, k, new_slots, kring->nr_hwavail, kring->nr_hwreserved);
-		return netmap_ring_reinit(kring);
-	}
-	if (!netif_carrier_ok(ifp)) {
-		/* All the new slots are now unavailable. */
-		kring->nr_hwavail -= new_slots;
-		goto out;
-	}
+	nm_i = kring->nr_hwcur;
 	// XXX debugging, assuming lim is 2^x-1
 	n = 0; // XXX debugging
-	if (j != k) {	/* we have new packets to send */
+	if (nm_i != cur) {	/* we have new packets to send */
 		ND(5,"START: txr %u cons %u prod %u hwcur %u cur %u avail %d send %d",
 			ring_nr, txr->cons, txr->prod, kring->nr_hwcur, ring->cur, kring->nr_hwavail,
 			(k - j) & lim);
@@ -279,21 +273,19 @@ mlx4_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		 */
 
 		ND(10,"=======>========== send from %d to %d at bd %d", j, k, txr->prod);
-		for (n = 0; j != k; n++) {
-			struct netmap_slot *slot = &ring->slot[j];
+		for (n = 0; nm_i != cur; n++) {
+			struct netmap_slot *slot = &ring->slot[nm_i];
+			u_int len = slot->len;
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
-			uint16_t len = slot->len;
+
+			/* device-specific */
 			uint32_t l = txr->prod & txr->size_mask;
 			struct mlx4_en_tx_desc *tx_desc = txr->buf + l * TXBB_SIZE;
 			struct mlx4_wqe_ctrl_seg *ctrl = &tx_desc->ctrl;
 
-			/* Quick check for valid addr and len. */
-			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
-				D("ring %d error, resetting", ring_nr);
-				error = EINVAL;
-				goto err;
-			}
+			NM_CHECK_ADDR_LEN(addr, len);
+
 
 			if (slot->flags & NS_BUF_CHANGED) {
 				/* buffer has changed, unload and reload map */
@@ -329,9 +321,9 @@ mlx4_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 				MLX4_OPCODE_SEND |
 				((txr->prod & txr->size) ? MLX4_EN_BIT_DESC_OWN : 0) );
 			txr->prod++;
-			j = (j == lim) ? 0 : j + 1;
+			nm_i = nm_next(nm_i, lim);
 		}
-		kring->nr_hwcur = k; /* the saved ring->cur */
+		kring->nr_hwcur = cur; /* the saved ring->cur */
 		/* decrease avail by number of packets  sent */
 		kring->nr_hwavail -= new_slots;
 
@@ -348,7 +340,10 @@ mlx4_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	    ND(5, "SENT: txr %d cons %u prod %u hwcur %u cur %u avail %d sent %d",
 		ring_nr, txr->cons, txr->prod, kring->nr_hwcur, ring->cur, kring->nr_hwavail, n);
 
-    /* XXX now recover completed transmissions. */
+	/*
+	 * Second part: reclaim buffers for completed transmissions.
+	 */
+
     {
 	struct mlx4_en_cq *cq = &priv->tx_cq[ring_nr];
 	struct mlx4_cq *mcq = &cq->mcq;
@@ -457,35 +452,33 @@ mlx4_en_update_rx_prod_db() tells the NIC where it can go
 static int
 mlx4_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
-        struct ifnet *ifp = na->ifp;
-	struct SOFTC_T *priv = netdev_priv(ifp);
-	struct mlx4_en_rx_ring *rxr = &priv->rx_ring[ring_nr];
+	struct ifnet *ifp = na->ifp;
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	u_int j, l, n, lim = kring->nkr_num_slots - 1;
+	u_int nm_i;	/* index into the netmap ring */
+	u_int nic_i;	/* index into the NIC ring */
+	u_int n, resvd;
+	u_int const lim = kring->nkr_num_slots - 1;
+	u_int const cur = nm_rxsync_prologue(kring, &resvd); /* cur + res */
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
-	u_int k = ring->cur, resvd = ring->reserved;
+
+	struct SOFTC_T *priv = netdev_priv(ifp);
+	struct mlx4_en_rx_ring *rxr = &priv->rx_ring[ring_nr];
 
         if (!priv->port_up)	// XXX as in mlx4_en_process_rx_cq()
                 return 0;
 
-	if (k > lim) /* userspace is cheating */
+	if (!netif_carrier_ok(ifp)) // XXX maybe above is redundant ?
+		return 0;
+
+	if (cur > lim)
 		return netmap_ring_reinit(kring);
+
 	ND(5, "START rxr %d cons %d prod %d kcur %d kavail %d cur %d avail %d",
 		ring_nr, rxr->cons, rxr->prod, kring->nr_hwcur, kring->nr_hwavail, ring->cur, ring->avail);
 
 	/*
-	 * First part, import newly received packets into the netmap ring.
-	 *
-	 * j is the index of the next free slot in the netmap ring,
-	 * and l is the index of the next received packet in the NIC ring,
-	 * and they may differ in case if_init() has been called while
-	 * in netmap mode. For the receive ring we have
-	 *
-	 *	j = (kring->nr_hwcur + kring->nr_hwavail) % ring_size
-	 *	l = consumer index in NIC ring (the NIC is the consumer)
-	 * and
-	 *	j == (l + kring->nkr_hwofs) % ring_size
+	 * First part, import newly received packets.
 	 */
 
 	/* scan the completion queue to see what is going on.
@@ -504,15 +497,16 @@ mlx4_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	 *		and in turn mlx4_alloc_hwq_res()
 	 */
 	if (1 || netmap_no_pendintr || force_update) {
+		uint16_t slot_flags = kring->nkr_slot_flags;
+
 		struct mlx4_en_cq *cq = &priv->rx_cq[ring_nr];
 		struct mlx4_cq *mcq = &cq->mcq;
 		int factor = priv->cqe_factor;
 		uint32_t size_mask = rxr->size_mask;
 		int size = cq->size;
 		struct mlx4_cqe *buf = cq->buf;
-		uint16_t slot_flags = kring->nkr_slot_flags;
 
-		j = (kring->nr_hwcur + kring->nr_hwavail) % kring->nkr_num_slots;
+		nm_i = (kring->nr_hwcur + kring->nr_hwavail) % kring->nkr_num_slots;
 
 		/* Process all completed CQEs, use same logic as in TX */
 		for (n = 0; n <= 2*lim ; n++) {
@@ -523,10 +517,10 @@ mlx4_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 				break;
 
 			rmb();	/* make sure data is up to date */
-			ring->slot[j].len = be32_to_cpu(cqe->byte_cnt) - rxr->fcs_del;
-			ring->slot[j].flags = slot_flags;
+			ring->slot[nm_i].len = be32_to_cpu(cqe->byte_cnt) - rxr->fcs_del;
+			ring->slot[nm_i].flags = slot_flags;
 			mcq->cons_index++;
-			j = (j == lim) ? 0 : j + 1;
+			nm_i = nm_next(nm_i, lim);
 		}
 		if (n) { /* update the state variables */
 			if (n >= 2*lim)
@@ -545,35 +539,18 @@ mlx4_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	}
 
 	/*
-	 * Skip past packets that userspace has already released
-	 * (from kring->nr_hwcur to ring->cur-ring->reserved excluded),
-	 * and make the buffers available for reception.
-	 * As usual j is the index in the netmap ring, l is the index
-	 * in the NIC ring, and j == (l + kring->nkr_hwofs) % ring_size
+	 * Second part: skip past packets that userspace has released.
 	 */
-	j = kring->nr_hwcur; /* netmap ring index */
-	if (resvd > 0) {
-		if (resvd + ring->avail >= lim + 1) {
-			D("XXX invalid reserve/avail %d %d", resvd, ring->avail);
-			ring->reserved = resvd = 0; // XXX panic...
-		}
-		k = (k >= resvd) ? k - resvd : k + lim + 1 - resvd;
-	}
-	if (j != k) { /* userspace has released some packets. */
-		l = netmap_idx_k2n(kring, j); // XXX NIC index
-		for (n = 0; j != k; n++) {
+	nm_i = kring->nr_hwcur; /* netmap ring index */
+	if (nm_i != cur) { /* userspace has released some packets. */
+		nic_i = netmap_idx_k2n(kring, nm_i);
+		for (n = 0; nm_i != cur; n++) {
 			/* collect per-slot info, with similar validations
-			 * and flag handling as in the txsync code.
-			 *
-			 * NOTE curr and rxbuf are indexed by l.
-			 * Also, this driver needs to update the physical
-			 * address in the NIC ring, but other drivers
-			 * may not have this requirement.
-			 */
-			struct netmap_slot *slot = &ring->slot[j];
+			struct netmap_slot *slot = &ring->slot[nm_i];
 			uint64_t paddr;
 			void *addr = PNMB(slot, &paddr);
-			struct mlx4_en_rx_desc *rx_desc = rxr->buf + (l * rxr->stride);
+
+			struct mlx4_en_rx_desc *rx_desc = rxr->buf + (nic_i * rxr->stride);
 
 			if (addr == netmap_buffer_base) /* bad buf */
 				goto ring_reset;
@@ -603,15 +580,15 @@ mlx4_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			}
 #endif
 
-			j = (j == lim) ? 0 : j + 1;
-			l = (l == lim) ? 0 : l + 1;
+			nm_i = nm_next(nm_i, lim);
+			nic_i = nm_next(nic_i, lim);
 		}
 
 		/* XXX note that mcq->cons_index and ring->cons are not in sync */
 		wmb();
 		rxr->prod += n;
 		kring->nr_hwavail -= n;
-		kring->nr_hwcur = k;
+		kring->nr_hwcur = cur;
 
 		/* and now tell the system that there are more buffers available.
 		 * should use mlx4_en_update_rx_prod_db(rxr) but it is static in
