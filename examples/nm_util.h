@@ -32,6 +32,9 @@
 
 #ifndef _NM_UTIL_H
 #define _NM_UTIL_H
+
+#define _GNU_SOURCE	/* for CPU_SET() */
+
 #include <errno.h>
 #include <signal.h>	/* signal */
 #include <stdlib.h>
@@ -79,6 +82,9 @@ struct pcap_pkthdr;
 #include <pthread.h>	/* pthread_* */
 
 #ifdef linux
+
+#define cpuset_t	cpu_set_t
+
 #define ifr_flagshigh  ifr_flags
 #define ifr_curcap     ifr_flags
 #define ifr_reqcap     ifr_flags
