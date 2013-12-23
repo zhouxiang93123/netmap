@@ -195,11 +195,17 @@ extern NMG_LOCK_T	netmap_global_lock;
  *	nkr_lease_idx	index of next free slot in nr_leases, to be assigned
  *
  * The kring is manipulated by txsync/rxsync and generic netmap function.
- * q_lock is used to arbitrate access to the kring from within the netmap
- * code, and this and other protections guarantee that there is never
- * more than 1 concurrent call to txsync or rxsync. So we are free
- * to manipulate the kring from within txsync/rxsync without any extra
- * locks.
+ *
+ * Concurrent rxsync or txsync on the same ring are prevented through
+ * by nm_kr_lock() which in turn uses nr_busy. This is all we need
+ * for NIC rings, and for TX rings attached to the host stack.
+ *
+ * RX rings attached to the host stack use an mbq (rx_queue) on both
+ * rxsync_from_host() and netmap_transmit(). The mbq is protected
+ * by its internal lock.
+ *
+ * RX rings attached to the VALE switch are accessed by both sender
+ * and receiver. They are protected through the q_lock on the RX ring.
  */
 struct netmap_kring {
 	struct netmap_ring *ring;
@@ -217,7 +223,7 @@ struct netmap_kring {
 
 	struct nm_bdg_fwd *nkr_ft;
 	uint32_t *nkr_leases;
-#define NR_NOSLOT	((uint32_t)~0)
+#define NR_NOSLOT	((uint32_t)~0)	/* used in nkr_*lease* */
 	uint32_t nkr_hwlease;
 	uint32_t nkr_lease_idx;
 
