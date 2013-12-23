@@ -232,7 +232,7 @@ pkt_queued(struct my_ring *me, int tx)
 	for (i = me->begin; i < me->end; i++) {
 		struct netmap_ring *ring = tx ?
 			NETMAP_TXRING(me->nifp, i) : NETMAP_RXRING(me->nifp, i);
-		tot += ring->avail;
+		tot += nm_ring_space(ring);
 	}
 	if (0 && verbose && tot && !tx)
 		D("ring %s %s %s has %d avail at %d",

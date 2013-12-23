@@ -1507,11 +1507,11 @@ netmap_vp_txsync(struct netmap_vp_adapter *na, u_int ring_nr, int flags)
 	/* k-j modulo ring size is the number of slots processed */
 	if (k < j)
 		k += kring->nkr_num_slots;
-	kring->nr_hwavail = lim - (k - j);
 
 done:
+	kring->nr_hwavail = lim - (k - j);
 	kring->nr_hwcur = j;
-	ring->avail = kring->nr_hwavail;
+	ring->tail = kring->rtail = nm_tx_ktail(kring); // nm_prev(j, lim);
 	if (netmap_verbose)
 		D("%s ring %d flags %d", NM_IFPNAME(na->up.ifp), ring_nr, flags);
 	return 0;
@@ -1542,34 +1542,26 @@ bdg_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 {
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
-	u_int j, lim = kring->nkr_num_slots - 1;
-	u_int k = ring->cur, resvd = ring->reserved;
+	u_int nm_i, lim = kring->nkr_num_slots - 1;
+	u_int resvd;
+	u_int head = nm_rxsync_prologue(kring, &resvd);
 	int n;
 
 	mtx_lock(&kring->q_lock);
-	if (k > lim) {
+	if (head > lim) {
 		D("ouch dangerous reset!!!");
 		n = netmap_ring_reinit(kring);
 		goto done;
 	}
 
-	/* skip past packets that userspace has released */
-	j = kring->nr_hwcur;    /* netmap ring index */
-	if (resvd > 0) {
-		if (resvd + ring->avail >= lim + 1) {
-			D("XXX invalid reserve/avail %d %d", resvd, ring->avail);
-			ring->reserved = resvd = 0; // XXX panic...
-		}
-		k = (k >= resvd) ? k - resvd : k + lim + 1 - resvd;
-	}
+	// XXX invert order ?
 
-	if (j != k) { /* userspace has released some packets. */
-		n = k - j;
-		if (n < 0)
-			n += kring->nkr_num_slots;
-		ND("userspace releases %d packets", n);
-		for (n = 0; likely(j != k); n++) {
-			struct netmap_slot *slot = &ring->slot[j];
+	/* skip past packets that userspace has released */
+	nm_i = kring->nr_hwcur;    /* netmap ring index */
+	if (nm_i != head) { /* userspace has released some packets. */
+		/* consistency check, but nothing really important here */
+		for (n = 0; likely(nm_i != head); n++) {
+			struct netmap_slot *slot = &ring->slot[nm_i];
 			void *addr = BDG_NMB(na, slot);
 
 			if (addr == netmap_buffer_base) { /* bad buf */
@@ -1577,13 +1569,13 @@ bdg_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 					slot->buf_idx);
 			}
 			slot->flags &= ~NS_BUF_CHANGED;
-			j = nm_next(j, lim);
+			nm_i = nm_next(nm_i, lim);
 		}
 		kring->nr_hwavail -= n;
-		kring->nr_hwcur = k;
+		kring->nr_hwcur = head;
 	}
 	/* tell userspace that there are new packets */
-	ring->avail = kring->nr_hwavail - resvd;
+	ring->tail = kring->rtail = nm_rx_ktail(kring);
 	n = 0;
 done:
 	mtx_unlock(&kring->q_lock);
@@ -1897,7 +1889,7 @@ netmap_bwrap_notify(struct netmap_adapter *na, u_int ring_n, enum txrx tx, int f
 	kring->nr_hwcur = ring->cur;
 	kring->nr_hwavail = 0;
 	// XXX lr 20131223 it seems wrong to use hwreserved on a receive ring
-	kring->nr_hwreserved = lim - ring->avail;
+	// kring->nr_hwreserved = lim - ring->avail;
 	ND("%s[%d] PST rx(%d, %d, %d, %d) ring(%d, %d, %d) tx(%d, %d)",
 		NM_IFPNAME(na->ifp), ring_n,
 		kring->nr_hwcur, kring->nr_hwavail, kring->nkr_hwlease, kring->nr_hwreserved,

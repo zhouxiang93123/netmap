@@ -717,7 +717,7 @@ generic_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		kring->nr_hwcur = cur;
 	}
 	/* tell userspace that there might be new packets. */
-	ring->avail = kring->nr_hwavail - resvd;
+	ring->tail = kring->rtail = nm_rx_ktail(kring);
 	IFRATE(rate_ctx.new.rxsync++);
 
 	return 0;

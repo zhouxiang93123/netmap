@@ -586,11 +586,12 @@ send_packets(struct netmap_ring *ring, struct pkt *pkt, void *frame,
 		int size, struct glob_arg *g, u_int count, int options,
 		u_int nfrags)
 {
-	u_int sent, cur = ring->cur;
+	u_int n, sent, cur = ring->cur;
 	int fcnt;
 
-	if (ring->avail < count)
-		count = ring->avail;
+	n = nm_ring_space(ring);
+	if (n < count)
+		count = n;
 	if (count < nfrags) {
 		D("truncating packet, no room for frags %d %d",
 				count, nfrags);
@@ -639,7 +640,6 @@ send_packets(struct netmap_ring *ring, struct pkt *pkt, void *frame,
 		}
 		cur = NETMAP_RING_NEXT(ring, cur);
 	}
-	ring->avail -= sent;
 	ring->cur = cur;
 
 	return (sent);
@@ -683,7 +683,7 @@ pinger_body(void *data)
 		struct netmap_ring *ring = NETMAP_TXRING(nifp, 0);
 		struct netmap_slot *slot;
 		char *p;
-	    for (i = 0; i < 1; i++) {
+	    for (i = 0; i < 1; i++) { /* XXX why the loop for 1 pkt ? */
 		slot = &ring->slot[ring->cur];
 		slot->len = size;
 		p = NETMAP_BUF(ring, slot->buf_idx);
@@ -697,7 +697,6 @@ pinger_body(void *data)
 			bcopy(&ts, p+46, sizeof(ts));
 			sent++;
 			ring->cur = NETMAP_RING_NEXT(ring, ring->cur);
-			ring->avail--;
 		}
 	    }
 		/* should use a parameter to decide how often to send */
@@ -728,8 +727,7 @@ pinger_body(void *data)
 					min = ts.tv_nsec;
 				count ++;
 				av += ts.tv_nsec;
-				ring->avail--;
-				ring->cur = NETMAP_RING_NEXT(ring, ring->cur);
+				ring->head = ring->cur = NETMAP_RING_NEXT(ring, ring->cur);
 				rx++;
 			}
 		}
@@ -786,7 +784,7 @@ ponger_body(void *data)
 #endif
 		txring = NETMAP_TXRING(nifp, 0);
 		txcur = txring->cur;
-		txavail = txring->avail;
+		txavail = nm_ring_space(txring);
 		/* see what we got back */
 		for (i = targ->qfirst; i < targ->qlast; i++) {
 			rxring = NETMAP_RXRING(nifp, i);
@@ -797,8 +795,7 @@ ponger_body(void *data)
 				char *src, *dst;
 				src = NETMAP_BUF(rxring, slot->buf_idx);
 				//D("got pkt %p of size %d", src, slot->len);
-				rxring->avail--;
-				rxring->cur = NETMAP_RING_NEXT(rxring, cur);
+				rxring->head = rxring->cur = NETMAP_RING_NEXT(rxring, cur);
 				rx++;
 				if (txavail == 0)
 					continue;
@@ -822,7 +819,6 @@ ponger_body(void *data)
 			}
 		}
 		txring->cur = txcur;
-		txring->avail = txavail;
 		targ->count = sent;
 #ifdef BUSYWAIT
 		ioctl(fds[0].fd, NIOCTXSYNC, NULL);
@@ -1060,11 +1056,12 @@ receive_pcap(u_char *user, const struct pcap_pkthdr * h,
 static int
 receive_packets(struct netmap_ring *ring, u_int limit, int dump)
 {
-	u_int cur, rx;
+	u_int cur, rx, n;
 
 	cur = ring->cur;
-	if (ring->avail < limit)
-		limit = ring->avail;
+	n = nm_ring_space(ring);
+	if (n < limit)
+		limit = n;
 	for (rx = 0; rx < limit; rx++) {
 		struct netmap_slot *slot = &ring->slot[cur];
 		char *p = NETMAP_BUF(ring, slot->buf_idx);
@@ -1074,8 +1071,7 @@ receive_packets(struct netmap_ring *ring, u_int limit, int dump)
 
 		cur = NETMAP_RING_NEXT(ring, cur);
 	}
-	ring->avail -= rx;
-	ring->cur = cur;
+	ring->head = ring->cur = cur;
 
 	return (rx);
 }

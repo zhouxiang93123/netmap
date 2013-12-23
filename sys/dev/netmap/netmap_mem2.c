@@ -965,8 +965,8 @@ netmap_mem_rings_create(struct netmap_adapter *na)
 			na->nm_mem->pools[NETMAP_RING_POOL].memtotal) -
 			netmap_ring_offset(na->nm_mem, ring);
 
-		ring->avail = kring->nr_hwavail;
-		ring->cur = kring->nr_hwcur;
+		ring->tail = kring->rtail = nm_tx_ktail(kring);
+		ring->cur = ring->head = kring->nr_hwcur;
 		*(uint16_t *)(uintptr_t)&ring->nr_buf_size =
 			NETMAP_BDG_BUF_SIZE(na->nm_mem);
 		ND("initializing slots for txring");
@@ -994,8 +994,8 @@ netmap_mem_rings_create(struct netmap_adapter *na)
 		        na->nm_mem->pools[NETMAP_RING_POOL].memtotal) -
 			netmap_ring_offset(na->nm_mem, ring);
 
-		ring->cur = kring->nr_hwcur;
-		ring->avail = kring->nr_hwavail;
+		ring->cur = ring->head = kring->nr_hwcur;
+		ring->tail = kring->rtail = nm_rx_ktail(kring);
 		*(int *)(uintptr_t)&ring->nr_buf_size =
 			NETMAP_BDG_BUF_SIZE(na->nm_mem);
 		ND("initializing slots for rxring[%d]", i);

@@ -108,7 +108,7 @@ NETMAP_RING_NEXT(struct netmap_ring *r, uint32_t i)
 static inline int
 NETMAP_TX_PENDING(struct netmap_ring *r)
 {
-	return r->avail < r->num_slots - 1;
+	return nm_ring_space(r) < r->num_slots - 1;
 }
 
 #ifdef NETMAP_WITH_LIBS

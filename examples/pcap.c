@@ -520,8 +520,7 @@ pcap_dispatch(pcap_t *p, int cnt, pcap_handler callback, u_char *user)
 			pme->hdr.len = pme->hdr.caplen = ring->slot[i].len;
 			// D("call %p len %d", p, me->hdr.len);
 			callback(user, &pme->hdr, buf);
-			ring->cur = NETMAP_RING_NEXT(ring, i);
-			ring->avail--;
+			ring->head = ring->cur = NETMAP_RING_NEXT(ring, i);
 			got++;
 		}
 	}
@@ -554,7 +553,6 @@ pcap_inject(pcap_t *p, const void *buf, size_t size)
 		ring->slot[i].len = size;
 		pkt_copy(buf, dst, size);
 		ring->cur = NETMAP_RING_NEXT(ring, i);
-		ring->avail--;
 		// if (ring->avail == 0) ioctl(me->fd, NIOCTXSYNC, NULL);
 		return size;
         }

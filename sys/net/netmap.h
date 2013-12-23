@@ -218,9 +218,12 @@ struct netmap_ring {
 	 */
 	const ssize_t	buf_ofs;
 	const uint32_t	num_slots;	/* number of slots in the ring. */
-	uint32_t	avail;		/* number of usable slots */
-	uint32_t        cur;		/* 'current' r/w position */
-	uint32_t	reserved;	/* not refilled before current */
+	//uint32_t	avail;		/* number of usable slots */
+	uint32_t        head;		/* RX: (u) first buf owned by userspace */
+					/* TX: (k) first unsent buffer */
+	uint32_t        cur;		/* (u) 'current' r/w position */
+	uint32_t        tail;		/* (k) first buf owned by kernel */
+	//uint32_t	reserved;	/* not refilled before current */
 
 	const uint16_t	nr_buf_size;
 	uint16_t	flags;
@@ -241,7 +244,16 @@ struct netmap_ring {
 static inline int
 nm_ring_empty(struct netmap_ring *ring)
 {
-	return (ring->avail == 0);
+	return (ring->cur == ring->tail);
+}
+
+static inline u_int
+nm_ring_space(struct netmap_ring *ring)
+{
+	int ret = ring->tail - ring->cur;
+	if (ret < 0)
+		ret += ring->num_slots;
+	return ret;
 }
 
 /*

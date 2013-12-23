@@ -217,8 +217,11 @@ struct netmap_kring {
 	struct netmap_ring *ring;
 	uint32_t nr_hwcur;
 	uint32_t nr_hwavail;
-	uint32_t nr_kflags;	/* private driver flags */
+	uint32_t rtail;		/* last tail reported to user ring */
+				/* we don't trust the user code */
+
 	int32_t nr_hwreserved;	/* tx: packets not sent to driver */
+	uint32_t nr_kflags;	/* private driver flags */
 #define NKR_PENDINTR	0x1	// Pending interrupt.
 	uint32_t nkr_num_slots;
 	int32_t	nkr_hwofs;	/* offset between NIC and netmap ring */
@@ -745,6 +748,24 @@ u_int nm_txsync_prologue(struct netmap_kring *, u_int *);
  */
 u_int nm_rxsync_prologue(struct netmap_kring *, u_int *);
 
+static inline uint32_t
+nm_tx_ktail(struct netmap_kring *kring)
+{
+	uint32_t ret = kring->nr_hwcur + kring->nr_hwreserved + kring->nr_hwavail;
+	if (ret >= kring->nkr_num_slots)
+		ret -= kring->nkr_num_slots;
+	return ret;
+}
+
+static inline uint32_t
+nm_rx_ktail(struct netmap_kring *kring)
+{
+	uint32_t ret = kring->nr_hwcur + kring->nr_hwavail;
+	if (ret >= kring->nkr_num_slots)
+		ret -= kring->nkr_num_slots;
+	return ret;
+}
+
 /*
  * update kring and ring at the end of txsync
  */
@@ -757,8 +778,8 @@ nm_txsync_finalize(struct netmap_kring *kring, u_int cur)
 		kring->nr_hwreserved += kring->nkr_num_slots;
 
 	/* update avail and reserved to what the kernel knows */
-	kring->ring->avail = kring->nr_hwavail;
-	kring->ring->reserved = kring->nr_hwreserved;
+	kring->ring->tail = kring->rtail = nm_tx_ktail(kring);
+	kring->ring->head = kring->nr_hwcur;
 }
 
 
@@ -769,7 +790,7 @@ static inline void
 nm_rxsync_finalize(struct netmap_kring *kring, u_int resvd)
 {
 	/* tell userspace that there might be new packets */
-	kring->ring->avail = kring->nr_hwavail - resvd;
+	kring->ring->tail = kring->rtail = nm_rx_ktail(kring);
 }
 
 

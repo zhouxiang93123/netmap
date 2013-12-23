@@ -42,10 +42,12 @@ process_rings(struct netmap_ring *rxring, struct netmap_ring *txring,
 			msg, rxring->flags, txring->flags);
 	j = rxring->cur; /* RX */
 	k = txring->cur; /* TX */
-	if (rxring->avail < limit)
-		limit = rxring->avail;
-	if (txring->avail < limit)
-		limit = txring->avail;
+	m = nm_ring_space(rxring);
+	if (m < limit)
+		limit = m;
+	m = nm_ring_space(txring);
+	if (m < limit)
+		limit = m;
 	m = limit;
 	while (limit-- > 0) {
 		struct netmap_slot *rs = &rxring->slot[j];
@@ -84,9 +86,7 @@ process_rings(struct netmap_ring *rxring, struct netmap_ring *txring,
 		j = NETMAP_RING_NEXT(rxring, j);
 		k = NETMAP_RING_NEXT(txring, k);
 	}
-	rxring->avail -= m;
-	txring->avail -= m;
-	rxring->cur = j;
+	rxring->head = rxring->cur = j;
 	txring->cur = k;
 	if (verbose && m > 0)
 		D("%s sent %d packets to %p", msg, m, txring);
@@ -133,7 +133,7 @@ pkt_queued(struct my_ring *me, int tx)
 	for (i = me->begin; i < me->end; i++) {
 		struct netmap_ring *ring = tx ?
 			NETMAP_TXRING(me->nifp, i) : NETMAP_RXRING(me->nifp, i);
-		tot += ring->avail;
+		tot += nm_ring_space(ring);
 	}
 	if (0 && verbose && tot && !tx)
 		D("ring %s %s %s has %d avail at %d",
@@ -288,12 +288,12 @@ main(int argc, char **argv)
 		if (ret < 0)
 			continue;
 		if (pollfd[0].revents & POLLERR) {
-			D("error on fd0, rxcur %d@%d",
-				me[0].rx->avail, me[0].rx->cur);
+			D("error on fd0, rx [%d,%d)",
+				me[0].rx->cur, me[0].rx->tail);
 		}
 		if (pollfd[1].revents & POLLERR) {
-			D("error on fd1, rxcur %d@%d",
-				me[1].rx->avail, me[1].rx->cur);
+			D("error on fd1, rx [%d,%d)",
+				me[1].rx->cur, me[1].rx->tail);
 		}
 		if (pollfd[0].revents & POLLOUT) {
 			move(me + 1, me, burst);

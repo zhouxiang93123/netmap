@@ -754,26 +754,20 @@ netmap_send_up(struct ifnet *dst, struct mbq *q)
 static void
 netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
 {
-	/* Take packets from hwcur to cur-reserved and pass them up.
+	/* Take packets from hwcur to ring->head and pass them up.
 	 * In case of no buffers we give up. At the end of the loop,
 	 * the queue is drained in all cases.
 	 * XXX handle reserved
 	 */
-	u_int lim = kring->nkr_num_slots - 1;
+	u_int const lim = kring->nkr_num_slots - 1;
 	struct mbuf *m;
-	u_int k = kring->ring->cur, n = kring->ring->reserved;
+	u_int const head = kring->ring->head;
+	u_int n;
 	struct netmap_adapter *na = kring->na;
 
-	/* compute the final position, ring->cur - ring->reserved */
-	if (n > 0) {
-		if (k < n)
-			k += kring->nkr_num_slots;
-		k += n;
-	}
-	for (n = kring->nr_hwcur; n != k;) {
+	for (n = kring->nr_hwcur; n != head; n = nm_next(n, lim)) {
 		struct netmap_slot *slot = &kring->ring->slot[n];
 
-		n = nm_next(n, lim);
 		if ((slot->flags & NS_FORWARD) == 0 && !force)
 			continue;
 		if (slot->len < 14 || slot->len > NETMAP_BDG_BUF_SIZE(na->nm_mem)) {
@@ -808,22 +802,24 @@ netmap_sw_to_nic(struct netmap_adapter *na, u_int n)
 	/* scan rings to find space, then fill as much as possible */
 	for (i = 0; i < na->num_tx_rings; i++) {
 		struct netmap_kring *kdst = &na->tx_rings[i];
+		struct netmap_ring *rdst = kdst->ring;
 		u_int const dst_lim = kdst->nkr_num_slots - 1;
 
-		if (nm_ring_empty(kdst->ring))
+		if (nm_ring_empty(rdst))
 			continue;	/* skip tx rings with no space */
 
-		for (;n > 0 && !nm_ring_empty(kdst->ring);
+		for (;n > 0 && !nm_ring_empty(rdst);
 		    n--, rxcur = nm_next(rxcur, src_lim) ) {
 			struct netmap_slot *src, *dst, tmp;
-
-			if (! (netmap_fwd ||
-				    kring->ring->flags & NR_FORWARD) )
-				continue;
-			sent++;
+			u_int dst_cur = rdst->cur;
 
 			src = &rxslot[rxcur];
-			dst = &kdst->ring->slot[kdst->ring->cur];
+			if ((src->flags & NS_FORWARD) == 0 && !netmap_fwd)
+				continue;
+
+			sent++;
+
+			dst = &rdst->slot[dst_cur];
 
 			tmp = *src;
 
@@ -834,8 +830,7 @@ netmap_sw_to_nic(struct netmap_adapter *na, u_int n)
 			dst->len = tmp.len;
 			dst->flags = NS_BUF_CHANGED;
 
-			kdst->ring->cur = nm_next(kdst->ring->cur, dst_lim);
-			kdst->ring->avail--;
+			rdst->cur = nm_next(dst_cur, dst_lim);
 		}
 		/* if (sent) XXX txsync ? */
 	}
@@ -854,7 +849,7 @@ netmap_txsync_to_host(struct netmap_adapter *na)
 {
 	struct netmap_kring *kring = &na->tx_rings[na->num_tx_rings];
 	struct netmap_ring *ring = kring->ring;
-	u_int k, lim = kring->nkr_num_slots - 1;
+	u_int cur, lim = kring->nkr_num_slots - 1;
 	struct mbq q;
 	int error;
 
@@ -864,8 +859,8 @@ netmap_txsync_to_host(struct netmap_adapter *na)
 			D("ring %p busy (user error)", kring);
 		return;
 	}
-	k = ring->cur;
-	if (k > lim) {
+	cur = ring->cur;
+	if (cur > lim) {
 		D("invalid ring index in stack TX kring %p", kring);
 		netmap_ring_reinit(kring);
 		nm_kr_put(kring);
@@ -877,9 +872,11 @@ netmap_txsync_to_host(struct netmap_adapter *na)
 	 * the queue is drained in all cases.
 	 */
 	mbq_init(&q);
-	netmap_grab_packets(kring, &q, 1);
-	kring->nr_hwcur = k;
-	kring->nr_hwavail = ring->avail = lim;
+	netmap_grab_packets(kring, &q, 1 /* force */);
+	kring->nr_hwcur = cur;
+	kring->nr_hwavail = lim;
+	kring->nr_hwreserved = 0;
+	ring->tail = nm_tx_ktail(kring);
 
 	nm_kr_put(kring);
 	netmap_send_up(na->ifp, &q);
@@ -960,8 +957,9 @@ netmap_rxsync_from_host(struct netmap_adapter *na, struct thread *td, void *pwai
 		kring->nr_hwavail -= n;
 		kring->nr_hwcur = cur;
 	}
-	n = ring->avail = kring->nr_hwavail - resvd;
-	if (n == 0 && td)
+	ring->tail = nm_rx_ktail(kring);
+	n = ring->cur != ring->tail ? 1 : 0;
+	if (n == 0 && td) /* no bufs available */
 		selrecord(td, &kring->si);
 	if (n && (netmap_verbose & NM_VERB_HOST))
 		D("%d pkts from stack", n);
@@ -1156,9 +1154,8 @@ nm_txsync_prologue(struct netmap_kring *kring, u_int *new_slots)
 {
 	struct netmap_ring *ring = kring->ring;
 	u_int cur = ring->cur; /* read only once */
-	u_int avail = ring->avail; /* read only once */
 	u_int n = kring->nkr_num_slots;
-	u_int kstart, kend, a;
+	u_int kstart, kend;
 
 #if 1 /* kernel sanity checks */
 	if (kring->nr_hwcur >= n ||
@@ -1170,31 +1167,28 @@ nm_txsync_prologue(struct netmap_kring *kring, u_int *new_slots)
 	if (kstart >= n)
 		kstart -= n;
 	kend = kstart + kring->nr_hwavail;
-	/* user sanity checks. a is the expected avail */
+	/* user sanity checks */
 	if (cur < kstart) {
 		/* too low, but maybe wraparound */
 		if (cur + n > kend)
 			goto error;
 		*new_slots = cur + n - kstart;
-		a = kend - cur - n;
 	} else {
 		if (cur > kend)
 			goto error;
 		*new_slots = cur - kstart;
-		a = kend - cur;
 	}
-	if (a != avail) {
-		RD(5, "wrong but fixable avail have %d need %d",
-			avail, a);
-		ring->avail = avail = a;
+	if (kring->rtail != ring->tail) {
+		RD(5, "tail overwritten was %d need %d",
+			ring->tail, kring->rtail);
 	}
 	return cur;
 
 error:
-	RD(5, "kring error: hwcur %d hwres %d hwavail %d cur %d av %d",
+	RD(5, "kring error: hwcur %d hwres %d hwavail %d cur %d tail %d",
 		kring->nr_hwcur,
 		kring->nr_hwreserved, kring->nr_hwavail,
-		cur, avail);
+		cur, ring->tail);
 	return n;
 }
 
@@ -1224,54 +1218,32 @@ nm_rxsync_prologue(struct netmap_kring *kring, u_int *resvd)
 {
 	struct netmap_ring *ring = kring->ring;
 	u_int cur = ring->cur; /* read only once */
-	u_int avail = ring->avail; /* read only once */
-	u_int res = ring->reserved; /* read only once */
+	u_int head = ring->head; /* read only once */
 	u_int n = kring->nkr_num_slots;
 	u_int kend = kring->nr_hwcur + kring->nr_hwavail;
-	u_int a;
 
 #if 1 /* kernel sanity checks */
 	if (kring->nr_hwcur >= n || kring->nr_hwavail >= n)
 		goto error;
 #endif /* kernel sanity checks */
 	/* user sanity checks */
-	if (res >= n)
-		goto error;
-	/* check that cur is valid, a is the expected value of avail */
-	if (cur < kring->nr_hwcur) {
+	/* XXX should do more */
+	if (head < kring->nr_hwcur) {
 		/* too low, but maybe wraparound */
-		if (cur + n > kend)
+		if (head + n > kend)
 			goto error;
-		a = kend - (cur + n);
 	} else  {
-		if (cur > kend)
+		if (head > kend)
 			goto error;
-		a = kend - cur;
 	}
-	if (a != avail) {
-		RD(5, "wrong but fixable avail have %d need %d",
-			avail, a);
-		ring->avail = avail = a;
-	}
-	if (res != 0) {
-		/* then repeat the check for cur + res */
-		cur = (cur >= res) ? cur - res : n + cur - res;
-		if (cur < kring->nr_hwcur) {
-			/* too low, but maybe wraparound */
-			if (cur + n > kend)
-				goto error;
-		} else if (cur > kend) {
-			goto error;
-		}
-	}
-	*resvd = res;
+	*resvd = (cur >= head) ? cur - head : cur + n - head;
 	return cur;
 
 error:
-	RD(5, "kring error: hwcur %d hwres %d hwavail %d cur %d av %d res %d",
+	RD(5, "kring error: hwcur %d hwres %d hwavail %d head %d cur %d tail %d",
 		kring->nr_hwcur,
 		kring->nr_hwreserved, kring->nr_hwavail,
-		ring->cur, avail, res);
+		head, cur, ring->tail);
 	return n;
 }
 
@@ -1320,13 +1292,14 @@ netmap_ring_reinit(struct netmap_kring *kring)
 
 		RD(10, "total %d errors", errors);
 		errors++;
-		RD(10, "%s %s[%d] reinit, cur %d -> %d avail %d -> %d",
+		RD(10, "%s %s[%d] reinit, cur %d -> %d tail %d -> %d",
 			NM_IFPNAME(kring->na->ifp),
 			pos < n ?  "TX" : "RX", pos < n ? pos : pos - n,
 			ring->cur, kring->nr_hwcur,
-			ring->avail, kring->nr_hwavail);
+			ring->tail, nm_tx_ktail(kring));
 		ring->cur = kring->nr_hwcur;
-		ring->avail = kring->nr_hwavail;
+		ring->head = kring->nr_hwcur;
+		ring->tail = nm_tx_ktail(kring);
 	}
 	return (errors ? 1 : 0);
 }
