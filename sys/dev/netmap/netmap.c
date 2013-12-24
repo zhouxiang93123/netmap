@@ -2171,7 +2171,7 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_kring *kring;
 	u_int len = MBUF_LEN(m);
-	u_int error = EBUSY, lim;
+	u_int error = ENOBUFS, lim;
 	struct mbq *q;
 
 	// XXX [Linux] we do not need this lock
@@ -2203,11 +2203,13 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	mtx_lock(&q->lock);
 
 	if (kring->nr_hwavail + mbq_len(q) >= lim) {
-		D("stack ring %s full avail %d queue %d",
-			 NM_IFPNAME(ifp), kring->nr_hwavail, mbq_len(q));
+		RD(10, "%s full avail %d queue %d len %d m %p",
+			 NM_IFPNAME(ifp), kring->nr_hwavail, mbq_len(q),
+			len, m);
 	} else {
 		mbq_enqueue(q, m);
-		D("now %d bufs in queue", mbq_len(q));
+		ND(10, "%s %d bufs in queue len %d m %p",
+			NM_IFPNAME(ifp), mbq_len(q), len, m);
 		/* notify outside the lock */
 		m = NULL;
 		error = 0;

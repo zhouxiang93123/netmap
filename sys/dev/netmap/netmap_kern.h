@@ -821,8 +821,8 @@ static inline void
 nm_rxsync_finalize(struct netmap_kring *kring)
 {
 	/* tell userspace that there might be new packets */
-	struct netmap_ring *ring = kring->ring;
-	D("head %d cur %d tail %d -> %d", ring->head, ring->cur, ring->tail, nm_rx_ktail(kring));
+	//struct netmap_ring *ring = kring->ring;
+	ND("head %d cur %d tail %d -> %d", ring->head, ring->cur, ring->tail, nm_rx_ktail(kring));
 	kring->ring->tail = kring->rtail = nm_rx_ktail(kring);
 }
 
