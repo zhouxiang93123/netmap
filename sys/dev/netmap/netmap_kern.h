@@ -800,7 +800,8 @@ nm_rx_ktail(struct netmap_kring *kring)
 }
 
 /*
- * update kring and ring at the end of txsync
+ * update kring and ring at the end of txsync.
+ * when 2nd arg removed, only good after an nm_txsync_prologue()
  */
 static inline void
 nm_txsync_finalize(struct netmap_kring *kring, u_int cur)

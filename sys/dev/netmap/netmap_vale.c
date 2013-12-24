@@ -1487,31 +1487,29 @@ static int
 netmap_vp_txsync(struct netmap_vp_adapter *na, u_int ring_nr, int flags)
 {
 	struct netmap_kring *kring = &na->up.tx_rings[ring_nr];
-	struct netmap_ring *ring = kring->ring;
-	u_int j, k, lim = kring->nkr_num_slots - 1;
+	u_int done, n;
+	u_int const cur = nm_txsync_prologue(kring, &n);
+	u_int const lim = kring->nkr_num_slots - 1;
 
-	k = ring->cur;
-	if (k > lim)
+	if (cur > lim)
 		return netmap_ring_reinit(kring);
 
 	if (bridge_batch <= 0) { /* testing only */
-		j = k; // used all
+		done = cur; // used all
 		goto done;
 	}
 	if (bridge_batch > NM_BDG_BATCH)
 		bridge_batch = NM_BDG_BATCH;
 
-	j = nm_bdg_preflush(na, ring_nr, kring, k);
-	if (j != k)
-		D("early break at %d/ %d, avail %d", j, k, kring->nr_hwavail);
-	/* k-j modulo ring size is the number of slots processed */
-	if (k < j)
-		k += kring->nkr_num_slots;
-
+	done = nm_bdg_preflush(na, ring_nr, kring, cur);
 done:
-	kring->nr_hwavail = lim - (k - j);
-	kring->nr_hwcur = j;
-	ring->tail = kring->rtail = nm_tx_ktail(kring); // nm_prev(j, lim);
+	if (done != cur)
+		D("early break at %d/ %d, avail %d", done, cur, kring->nr_hwavail);
+
+	n = cur >= done ? cur - done : cur + lim + 1 - done;
+	kring->nr_hwavail = lim - n;
+	kring->nr_hwcur = done;
+	nm_txsync_finalize(kring, done);
 	if (netmap_verbose)
 		D("%s ring %d flags %d", NM_IFPNAME(na->up.ifp), ring_nr, flags);
 	return 0;
@@ -1718,10 +1716,16 @@ netmap_bwrap_intr_notify(struct netmap_adapter *na, u_int ring_nr, enum txrx tx,
 
 	/* Here we expect ring->head = ring->cur = ring->tail
 	 * because everything has been released from the previous round.
+	 * However the ring is shared and we might have info from
+	 * the wrong side (the tx ring). Hence we overwrite with
+	 * the info from the rx kring.
 	 */
 	D("%s head %d cur %d tail %d (kring %d %d %d)",  NM_IFPNAME(ifp),
 		ring->head, ring->cur, ring->tail,
 		kring->rhead, kring->rcur, kring->rtail);
+	ring->head = kring->rhead;
+	ring->cur = kring->rcur;
+	ring->tail = kring->rtail;
 
 	if (is_host_ring) {
 		netmap_rxsync_from_host(na, NULL, NULL);
@@ -1740,15 +1744,23 @@ netmap_bwrap_intr_notify(struct netmap_adapter *na, u_int ring_nr, enum txrx tx,
 			NM_IFPNAME(ifp));
 		goto put_out;
 	}
-	/* mark all buffers as released on this ring */
-	ring->head = ring->cur = nm_kr_rxpos(kring);
 
+	/* set the ring pointer correctly for the tx ring */
+	ring->cur = ring->tail;
 	/* pass packets to the switch */
 	netmap_vp_txsync(vpna, ring_nr, flags);
 
+	/* mark all buffers as released on this ring */
+	ring->head = ring->cur = nm_kr_rxpos(kring);
 	/* another call to actually release the buffers */
-	if (!is_host_ring)
+	if (!is_host_ring) {
 		error = na->nm_rxsync(na, ring_nr, 0);
+	} else {
+		/* duplicate second part of netmap_rxsync_from_host() */
+		kring->nr_hwcur = nm_rx_ktail(kring);
+		kring->nr_hwavail = 0;
+		nm_rxsync_finalize(kring);
+	}
 
 put_out:
 	nm_kr_put(kring);

@@ -1185,7 +1185,10 @@ nm_txsync_prologue(struct netmap_kring *kring, u_int *new_slots)
 	if (kring->rtail != ring->tail) {
 		RD(5, "tail overwritten was %d need %d",
 			ring->tail, kring->rtail);
+		ring->tail = kring->rtail;
 	}
+	kring->rhead = ring->head;
+	kring->rcur = ring->cur;
 	return cur;
 
 error:
