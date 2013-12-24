@@ -926,7 +926,7 @@ netmap_rxsync_from_host(struct netmap_adapter *na, struct thread *td, void *pwai
 
 	/* First part: import newly received packets */
 	n = mbq_len(q);
-	D("%d packets from stack, %d/%d slots busy",
+	ND(5, "%d packets from stack, %d/%d slots busy",
 		n, kring->nr_hwavail, lim);
 	if (n) { /* grab packets from the queue */
 		struct mbuf *m;
@@ -953,7 +953,7 @@ netmap_rxsync_from_host(struct netmap_adapter *na, struct thread *td, void *pwai
 			ret = netmap_sw_to_nic(na, n);
 		n = head >= nm_i ? head - nm_i : head + lim + 1 - nm_i;
 		kring->nr_hwavail -= n;
-		D("hwavail %u after releasing %d", kring->nr_hwavail, n);
+		ND(5, "hwavail %u after releasing %d", kring->nr_hwavail, n);
 		kring->nr_hwcur = head;
 	}
 	nm_rxsync_finalize(kring);
@@ -2202,7 +2202,7 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	 */
 	mtx_lock(&q->lock);
 
-	if (kring->nr_hwavail + mbq_len(q) >= lim) {
+	if (kring->nr_hwavail + mbq_len(q) >= lim) { // XXX
 		RD(10, "%s full avail %d queue %d len %d m %p",
 			 NM_IFPNAME(ifp), kring->nr_hwavail, mbq_len(q),
 			len, m);
