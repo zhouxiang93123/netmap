@@ -441,6 +441,9 @@ netmap_krings_create(struct netmap_adapter *na, u_int ntx, u_int nrx, u_int tail
 	}
 	na->rx_rings = na->tx_rings + ntx;
 
+	/*
+	 * All fields in krings are 0 except the one initialized below.
+	 */
 	ndesc = na->num_tx_desc;
 	for (i = 0; i < ntx; i++) { /* Transmit rings */
 		kring = &na->tx_rings[i];
@@ -449,10 +452,7 @@ netmap_krings_create(struct netmap_adapter *na, u_int ntx, u_int nrx, u_int tail
 		kring->ring_id = i;
 		kring->nkr_num_slots = ndesc;
 		/*
-		 * IMPORTANT:
-		 * Always keep one slot empty, so we can detect new
-		 * transmissions comparing cur and nr_hwcur (they are
-		 * the same only if there are no new transmissions).
+		 * IMPORTANT: Always keep one slot empty.
 		 */
 		kring->nr_hwavail = ndesc - 1;
 		mtx_init(&kring->q_lock, "nm_txq_lock", NULL, MTX_DEF);
@@ -900,7 +900,7 @@ netmap_txsync_to_host(struct netmap_adapter *na)
  * returns the number of packets delivered to tx queues in
  * transparent mode, or a negative value if error
  */
-static int
+int
 netmap_rxsync_from_host(struct netmap_adapter *na, struct thread *td, void *pwait)
 {
 	struct netmap_kring *kring = &na->rx_rings[na->num_rx_rings];

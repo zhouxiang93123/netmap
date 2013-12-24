@@ -1685,7 +1685,7 @@ netmap_bwrap_intr_notify(struct netmap_adapter *na, u_int ring_nr, enum txrx tx,
 	struct netmap_vp_adapter *vpna = &bna->up;
 	int error = 0;
 
-	ND("%s[%d] %s %x", NM_IFPNAME(ifp), ring_nr, (tx == NR_TX ? "TX" : "RX"), flags);
+	D("%s[%d] %s %x", NM_IFPNAME(ifp), ring_nr, (tx == NR_TX ? "TX" : "RX"), flags);
 
 	if (flags & NAF_DISABLE_NOTIFY) {
 		kring = tx == NR_TX ? na->tx_rings : na->rx_rings;
@@ -1717,12 +1717,14 @@ netmap_bwrap_intr_notify(struct netmap_adapter *na, u_int ring_nr, enum txrx tx,
 	}
 
 	/* Here we expect ring->head = ring->cur = ring->tail
-	 * because everything has been released from the previous round
+	 * because everything has been released from the previous round.
 	 */
-	D("%s head %d cur %d tail %d",  NM_IFPNAME(ifp),
-		ring->head, ring->cur, ring->tail);
+	D("%s head %d cur %d tail %d (kring %d %d %d)",  NM_IFPNAME(ifp),
+		ring->head, ring->cur, ring->tail,
+		kring->rhead, kring->rcur, kring->rtail);
 
 	if (is_host_ring) {
+		netmap_rxsync_from_host(na, NULL, NULL);
 		vpna = hostna;
 		ring_nr = 0;
 	} else {
@@ -1762,7 +1764,7 @@ netmap_bwrap_register(struct netmap_adapter *na, int onoff)
 	struct netmap_vp_adapter *hostna = &bna->host;
 	int error;
 
-	ND("%s %d", NM_IFPNAME(ifp), onoff);
+	D("%s %s", NM_IFPNAME(na->ifp), onoff ? "on" : "off");
 
 	if (onoff) {
 		int i;

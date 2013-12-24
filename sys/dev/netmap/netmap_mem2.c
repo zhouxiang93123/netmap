@@ -960,7 +960,7 @@ netmap_mem_rings_create(struct netmap_adapter *na)
 		ND("txring[%d] at %p ofs %d", i, ring);
 		kring->ring = ring;
 		*(uint32_t *)(uintptr_t)&ring->num_slots = ndesc;
-		*(ssize_t *)(uintptr_t)&ring->buf_ofs =
+		*(int64_t *)(uintptr_t)&ring->buf_ofs =
 		    (na->nm_mem->pools[NETMAP_IF_POOL].memtotal +
 			na->nm_mem->pools[NETMAP_RING_POOL].memtotal) -
 			netmap_ring_offset(na->nm_mem, ring);
@@ -989,7 +989,7 @@ netmap_mem_rings_create(struct netmap_adapter *na)
 
 		kring->ring = ring;
 		*(uint32_t *)(uintptr_t)&ring->num_slots = ndesc;
-		*(ssize_t *)(uintptr_t)&ring->buf_ofs =
+		*(int64_t *)(uintptr_t)&ring->buf_ofs =
 		    (na->nm_mem->pools[NETMAP_IF_POOL].memtotal +
 		        na->nm_mem->pools[NETMAP_RING_POOL].memtotal) -
 			netmap_ring_offset(na->nm_mem, ring);

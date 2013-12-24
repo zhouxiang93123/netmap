@@ -852,6 +852,8 @@ nm_rxsync_finalize(struct netmap_kring *kring)
 int netmap_update_config(struct netmap_adapter *na);
 int netmap_krings_create(struct netmap_adapter *na, u_int ntx, u_int nrx, u_int tailroom);
 void netmap_krings_delete(struct netmap_adapter *na);
+int netmap_rxsync_from_host(struct netmap_adapter *na, struct thread *td, void *pwait);
+
 
 struct netmap_if *
 netmap_do_regif(struct netmap_priv_d *priv, struct netmap_adapter *na,
