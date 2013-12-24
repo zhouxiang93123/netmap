@@ -321,9 +321,9 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct netmap_ring *ring = kring->ring;
 	u_int nm_i;	/* index into the netmap ring */
 	// u_int nic_i;	/* index into the NIC ring */
-	u_int n, resvd;
+	u_int n;
 	u_int const lim = kring->nkr_num_slots - 1;
-	u_int const cur = nm_rxsync_prologue(kring, &resvd); /* cur + res */
+	u_int const head = nm_rxsync_prologue(kring);
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 
 	/* device-specific */
@@ -334,7 +334,7 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 
 	/* XXX netif_carrier_ok ? */
 
-	if (cur > lim)
+	if (head > lim)
 		return netmap_ring_reinit(kring);
 
 	rmb();
@@ -375,8 +375,8 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	 * Second part: skip past packets that userspace has released.
 	 */
 	nm_i = kring->nr_hwcur; /* netmap ring index */
-	if (nm_i != cur) {
-		for (n = 0; nm_i != cur; n++) {
+	if (nm_i != head) {
+		for (n = 0; nm_i != head; n++) {
 			struct netmap_slot *slot = &ring->slot[nm_i];
 			void *addr = NMB(slot);
                         int err;
@@ -399,7 +399,7 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			nm_i = nm_next(nm_i, lim);
 		}
 		kring->nr_hwavail -= n;
-		kring->nr_hwcur = cur;
+		kring->nr_hwcur = head;
 	}
 
 	/* We have finished processing used RX buffers, so we have to tell
@@ -409,7 +409,7 @@ virtio_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
         virtqueue_enable_cb(vq);
 
 	/* tell userspace that there might be new packets. */
-	nm_rxsync_finalize(kring, resvd);
+	nm_rxsync_finalize(kring);
 
         ND("[C] %d %d %d %d", ring->cur, ring->reserved, kring->nr_hwcur,
 			      kring->nr_hwavail);

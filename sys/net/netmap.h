@@ -216,22 +216,23 @@ struct netmap_ring {
 	 * It contains the offset of the buffer region from this
 	 * descriptor.
 	 */
-	const ssize_t	buf_ofs;
+	const int64_t	buf_ofs;
 	const uint32_t	num_slots;	/* number of slots in the ring. */
-	//uint32_t	avail;		/* number of usable slots */
+	const uint32_t	nr_buf_size;
+
 	uint32_t        head;		/* RX: (u) first buf owned by userspace */
 					/* TX: (k) first unsent buffer */
 	uint32_t        cur;		/* (u) 'current' r/w position */
 	uint32_t        tail;		/* (k) first buf owned by kernel */
-	//uint32_t	reserved;	/* not refilled before current */
 
-	const uint16_t	nr_buf_size;
-	uint16_t	flags;
+	uint32_t	flags;
 #define	NR_TIMESTAMP	0x0002		/* set timestamp on *sync() */
 #define	NR_FORWARD	0x0004		/* enable NS_FORWARD for ring */
 #define	NR_RX_TSTMP	0x0008		/* set rx timestamp in slots */
 
-	struct timeval	ts;		/* time of last *sync() */
+	struct timeval	ts;		/* (k) time of last *sync() */
+
+	// room for a semaphore ?
 
 	/* the slots follow. This struct has variable size */
 	struct netmap_slot slot[0];	/* array of slots. */

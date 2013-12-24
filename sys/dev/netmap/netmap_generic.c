@@ -648,12 +648,12 @@ generic_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int nm_i;	/* index into the netmap ring */ //j,
-	u_int n, resvd;
+	u_int n;
 	u_int const lim = kring->nkr_num_slots - 1;
-	u_int const cur = nm_rxsync_prologue(kring, &resvd); /* cur + res */
+	u_int const head = nm_rxsync_prologue(kring);
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 
-	if (cur > lim)
+	if (head > lim)
 		return netmap_ring_reinit(kring);
 
 	/*
@@ -664,7 +664,7 @@ generic_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		 * slot before nr_hwcur (stop_i)
 		 */
 		uint16_t slot_flags = kring->nkr_slot_flags;
-		u_int stop_i = nm_prev(cur, lim);
+		u_int stop_i = nm_prev(kring->nr_hwcur, lim);
 
 		nm_i = kring->nr_ntc; /* first empty slot in the receive ring */
 		for (n = 0; nm_i != stop_i; n++) {
@@ -705,19 +705,19 @@ generic_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	 * Second part: skip past packets that userspace has released.
 	 */
 	nm_i = kring->nr_hwcur;
-	if (nm_i != cur) {
+	if (nm_i != head) {
 		/* Userspace has released some packets. */
-		for (n = 0; nm_i != cur; n++) {
+		for (n = 0; nm_i != head; n++) {
 			struct netmap_slot *slot = &ring->slot[nm_i];
 
 			slot->flags &= ~NS_BUF_CHANGED;
 			nm_i = nm_next(nm_i, lim);
 		}
 		kring->nr_hwavail -= n;
-		kring->nr_hwcur = cur;
+		kring->nr_hwcur = head;
 	}
 	/* tell userspace that there might be new packets. */
-	ring->tail = kring->rtail = nm_rx_ktail(kring);
+	nm_rxsync_finalize(kring);
 	IFRATE(rate_ctx.new.rxsync++);
 
 	return 0;

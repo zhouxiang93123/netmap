@@ -215,12 +215,19 @@ extern NMG_LOCK_T	netmap_global_lock;
  */
 struct netmap_kring {
 	struct netmap_ring *ring;
+
 	uint32_t nr_hwcur;
 	uint32_t nr_hwavail;
+
+	/* copies of values in user rings in case we need
+	 * to use them multiple times.
+	 */
+	uint32_t rhead;		/* last head read from user ring */
+	uint32_t rcur;		/* last cur read from user ring */
 	uint32_t rtail;		/* last tail reported to user ring */
-				/* we don't trust the user code */
 
 	int32_t nr_hwreserved;	/* tx: packets not sent to driver */
+
 	uint32_t nr_kflags;	/* private driver flags */
 #define NKR_PENDINTR	0x1	// Pending interrupt.
 	uint32_t nkr_num_slots;
@@ -390,6 +397,30 @@ struct netmap_adapter {
 	 * the generic netmap functions.
 	 */
 	struct ifnet *ifp; /* adapter is ifp->if_softc */
+
+	/*---- callbacks for this netmap adapter -----*/
+	/*
+	 * nm_dtor() is the cleanup routine called when destroying
+	 *	the adapter.
+	 *
+	 * nm_register() is called on NIOCREGIF and close() to enter
+	 *	or exit netmap mode on the NIC
+	 *
+	 * nm_txsync() pushes packets to the underlying hw/switch
+	 *
+	 * nm_rxsync() collects packets from the underlying hw/switch
+	 *
+	 * nm_config() returns configuration information from the OS
+	 *
+	 * nm_krings_create() XXX
+	 *
+	 * nm_krings_delete() XXX
+	 *
+	 * nm_notify() is used to act after data have become available.
+	 *	For hw devices this is typically a selwakeup(),
+	 *	but for NIC/host ports attached to a switch (or vice-versa)
+	 *	we also need to invoke the 'txsync' code downstream.
+	 */
 
 	/* private cleanup */
 	void (*nm_dtor)(struct netmap_adapter *);
@@ -746,7 +777,7 @@ u_int nm_txsync_prologue(struct netmap_kring *, u_int *);
  * and the 'reserved' value in the argument.
  * If any error, returns cur > lim to force a reinit.
  */
-u_int nm_rxsync_prologue(struct netmap_kring *, u_int *);
+u_int nm_rxsync_prologue(struct netmap_kring *);
 
 static inline uint32_t
 nm_tx_ktail(struct netmap_kring *kring)
@@ -787,9 +818,11 @@ nm_txsync_finalize(struct netmap_kring *kring, u_int cur)
  * update kring and ring at the end of rxsync
  */
 static inline void
-nm_rxsync_finalize(struct netmap_kring *kring, u_int resvd)
+nm_rxsync_finalize(struct netmap_kring *kring)
 {
 	/* tell userspace that there might be new packets */
+	struct netmap_ring *ring = kring->ring;
+	D("head %d cur %d tail %d -> %d", ring->head, ring->cur, ring->tail, nm_rx_ktail(kring));
 	kring->ring->tail = kring->rtail = nm_rx_ktail(kring);
 }
 

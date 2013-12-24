@@ -903,14 +903,13 @@ netmap_rxsync_from_host(struct netmap_adapter *na, struct thread *td, void *pwai
 	struct netmap_ring *ring = kring->ring;
 	u_int nm_i, n;
 	u_int const lim = kring->nkr_num_slots - 1;
-	u_int resvd;
-	u_int const cur = nm_rxsync_prologue(kring, &resvd); /* cur + res */
+	u_int const head = nm_rxsync_prologue(kring);
 	int ret = 0;
 	struct mbq *q = &kring->rx_queue;
 
 	(void)pwait;	/* disable unused warnings */
 
-	if (cur > lim) {
+	if (head > lim) {
 		netmap_ring_reinit(kring);
 		return EINVAL;
 	}
@@ -925,14 +924,13 @@ netmap_rxsync_from_host(struct netmap_adapter *na, struct thread *td, void *pwai
 		goto unlock_out;
 	}
 
-	D("import packets ");
 	/* First part: import newly received packets */
-
 	n = mbq_len(q);
+	D("%d packets from stack, %d/%d slots busy",
+		n, kring->nr_hwavail, lim);
 	if (n) { /* grab packets from the queue */
 		struct mbuf *m;
 
-		D("drain %d packets from queue", n);
 		nm_i = nm_kr_rxpos(kring); /* hwcur + hwavail */
 		while ( kring->nr_hwavail < lim &&
 		    (m = mbq_dequeue(q)) != NULL ) { 
@@ -950,14 +948,16 @@ netmap_rxsync_from_host(struct netmap_adapter *na, struct thread *td, void *pwai
 	 * Second part: skip past packets that userspace has released.
 	 */
 	nm_i = kring->nr_hwcur;
-	if (nm_i != cur) { /* something was released */
+	if (nm_i != head) { /* something was released */
 		if (netmap_fwd || kring->ring->flags & NR_FORWARD)
 			ret = netmap_sw_to_nic(na, n);
-		n = cur >= nm_i ? cur - nm_i : cur + lim + 1 - nm_i;
+		n = head >= nm_i ? head - nm_i : head + lim + 1 - nm_i;
 		kring->nr_hwavail -= n;
-		kring->nr_hwcur = cur;
+		D("hwavail %u after releasing %d", kring->nr_hwavail, n);
+		kring->nr_hwcur = head;
 	}
-	ring->tail = nm_rx_ktail(kring);
+	nm_rxsync_finalize(kring);
+
 	n = ring->cur != ring->tail ? 1 : 0;
 	if (n == 0 && td) /* no bufs available */
 		selrecord(td, &kring->si);
@@ -1214,14 +1214,15 @@ error:
  *
  */
 u_int
-nm_rxsync_prologue(struct netmap_kring *kring, u_int *resvd)
+nm_rxsync_prologue(struct netmap_kring *kring)
 {
 	struct netmap_ring *ring = kring->ring;
-	u_int cur = ring->cur; /* read only once */
-	u_int head = ring->head; /* read only once */
-	u_int n = kring->nkr_num_slots;
+	u_int head;
+	u_int const n = kring->nkr_num_slots;
 	u_int kend = kring->nr_hwcur + kring->nr_hwavail;
 
+	kring->rcur = ring->cur;	/* read only once */
+	head = kring->rhead = ring->head;	/* read only once */
 #if 1 /* kernel sanity checks */
 	if (kring->nr_hwcur >= n || kring->nr_hwavail >= n)
 		goto error;
@@ -1236,14 +1237,13 @@ nm_rxsync_prologue(struct netmap_kring *kring, u_int *resvd)
 		if (head > kend)
 			goto error;
 	}
-	*resvd = (cur >= head) ? cur - head : cur + n - head;
-	return cur;
+	return head;
 
 error:
 	RD(5, "kring error: hwcur %d hwres %d hwavail %d head %d cur %d tail %d",
 		kring->nr_hwcur,
 		kring->nr_hwreserved, kring->nr_hwavail,
-		head, cur, ring->tail);
+		kring->rhead, kring->rcur, ring->tail);
 	return n;
 }
 
@@ -2203,11 +2203,11 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	mtx_lock(&q->lock);
 
 	if (kring->nr_hwavail + mbq_len(q) >= lim) {
-		if (netmap_verbose)
-			D("stack ring %s full\n", NM_IFPNAME(ifp));
+		D("stack ring %s full avail %d queue %d",
+			 NM_IFPNAME(ifp), kring->nr_hwavail, mbq_len(q));
 	} else {
 		mbq_enqueue(q, m);
-		ND("now %d bufs in queue", mbq_len(q));
+		D("now %d bufs in queue", mbq_len(q));
 		/* notify outside the lock */
 		m = NULL;
 		error = 0;
@@ -2217,8 +2217,8 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 done:
 	if (m)
 		m_freem(m);
-	else /* wake up listeners */
-		na->nm_notify(na, na->num_rx_rings, NR_RX, 0);
+	/* unconditionally wake up listeners */
+	na->nm_notify(na, na->num_rx_rings, NR_RX, 0);
 
 	return (error);
 }

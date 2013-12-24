@@ -431,9 +431,9 @@ bnx2x_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct netmap_ring *ring = kring->ring;
 	u_int nm_i;	/* index into the netmap ring */
 	u_int nic_i;	/* index into the NIC ring */
-	u_int n, resvd;
+	u_int n;
 	u_int const lim = kring->nkr_num_slots - 1;
-	u_int const cur = nm_rxsync_prologue(kring, &resvd); /* cur + res */
+	u_int const head = nm_rxsync_prologue(kring);
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 
 	struct SOFTC_T *adapter = netdev_priv(ifp);
@@ -445,7 +445,7 @@ return 0; // XXX unsupported now
 	if (!netif_carrier_ok(ifp))
 		return 0;
 
-	if (cur > lim)
+	if (head > lim)
 		return netmap_ring_reinit(kring);
 
 	rmb();
@@ -507,11 +507,11 @@ goto done; // XXX debugging
 	 * Second part: skip past packets that userspace has released.
 	 */
 	nm_i = kring->nr_hwcur;
-	if (nm_i != cur) { /* userspace has released some packets. */
+	if (nm_i != head) { /* userspace has released some packets. */
 		uint16_t sw_comp_prod = 0; // XXX
 
 		nic_i = netmap_idx_k2n(kring, nic_i);
-		for (n = 0; nm_i != cur; n++) {
+		for (n = 0; nm_i != head; n++) {
 #if 0 // XXX receive code still incomplete
 			struct netmap_slot *slot = &ring->slot[nm_i];
 			union ixgbe_adv_rx_desc *curr = IXGBE_RX_DESC_ADV(rxr, nic_i);
@@ -532,7 +532,7 @@ goto done; // XXX debugging
 			nic_i = nm_next(nic_i, lim);
 		}
 		kring->nr_hwavail -= n;
-		kring->nr_hwcur = cur;
+		kring->nr_hwcur = head;
 		// XXXX cons = ...
 		wmb();
 		/* Update producers */
@@ -541,7 +541,7 @@ goto done; // XXX debugging
 	}
 done:
 	/* tell userspace that there are new packets */
-	nm_rxsync_finalize(kring, resvd);
+	nm_rxsync_finalize(kring);
 
 	return 0;
 

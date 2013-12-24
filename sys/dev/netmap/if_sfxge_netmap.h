@@ -277,7 +277,7 @@ sfxge_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct netmap_ring *ring = kring->ring;
 	u_int j, l, n, lim = kring->nkr_num_slots - 1;
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
-	u_int k = ring->cur, resvd = ring->reserved;
+	u_int k = ring->cur;
 
 	if (k > lim)
 		return netmap_ring_reinit(kring);
@@ -381,7 +381,7 @@ sfxge_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		//IXGBE_WRITE_REG(&adapter->hw, IXGBE_RDT(rxr->me), l);
 	}
 	/* tell userspace that there are new packets */
-	nm_rxsync_finalize(kring, resvd);
+	nm_rxsync_finalize(kring);
 
 	return 0;
 

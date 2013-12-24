@@ -1543,8 +1543,7 @@ bdg_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	struct netmap_kring *kring = &na->rx_rings[ring_nr];
 	struct netmap_ring *ring = kring->ring;
 	u_int nm_i, lim = kring->nkr_num_slots - 1;
-	u_int resvd;
-	u_int head = nm_rxsync_prologue(kring, &resvd);
+	u_int head = nm_rxsync_prologue(kring);
 	int n;
 
 	mtx_lock(&kring->q_lock);
@@ -1554,11 +1553,12 @@ bdg_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		goto done;
 	}
 
-	// XXX invert order ?
+	/* First part, import newly received packets. */
+	/* actually nothing to do here, they are already in the kring */
 
-	/* skip past packets that userspace has released */
-	nm_i = kring->nr_hwcur;    /* netmap ring index */
-	if (nm_i != head) { /* userspace has released some packets. */
+	/* Second part, skip past packets that userspace has released. */
+	nm_i = kring->nr_hwcur;
+	if (nm_i != head) {
 		/* consistency check, but nothing really important here */
 		for (n = 0; likely(nm_i != head); n++) {
 			struct netmap_slot *slot = &ring->slot[nm_i];
@@ -1574,8 +1574,9 @@ bdg_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		kring->nr_hwavail -= n;
 		kring->nr_hwcur = head;
 	}
+
 	/* tell userspace that there are new packets */
-	ring->tail = kring->rtail = nm_rx_ktail(kring);
+	nm_rxsync_finalize(kring);
 	n = 0;
 done:
 	mtx_unlock(&kring->q_lock);
@@ -1657,7 +1658,10 @@ netmap_bwrap_dtor(struct netmap_adapter *na)
 }
 
 /*
- * Pass packets from nic to the bridge.
+ * Intr callback for NICs connected to a bridge.
+ * Simply ignore tx interrupts (maybe we could try to recover space ?)
+ * and pass received packets from nic to the bridge.
+ *
  * XXX TODO check locking: this is called from the interrupt
  * handler so we should make sure that the interface is not
  * disconnected while passing down an interrupt.
@@ -1696,6 +1700,7 @@ netmap_bwrap_intr_notify(struct netmap_adapter *na, u_int ring_nr, enum txrx tx,
 	if (ifp == NULL || !(ifp->if_capenable & IFCAP_NETMAP))
 		return 0;
 
+	/* we only care about receive interrupts */
 	if (tx == NR_TX)
 		return 0;
 
@@ -1710,6 +1715,12 @@ netmap_bwrap_intr_notify(struct netmap_adapter *na, u_int ring_nr, enum txrx tx,
 		error = bna->save_notify(na, ring_nr, tx, flags);
 		goto put_out;
 	}
+
+	/* Here we expect ring->head = ring->cur = ring->tail
+	 * because everything has been released from the previous round
+	 */
+	D("%s head %d cur %d tail %d",  NM_IFPNAME(ifp),
+		ring->head, ring->cur, ring->tail);
 
 	if (is_host_ring) {
 		vpna = hostna;
@@ -1727,10 +1738,13 @@ netmap_bwrap_intr_notify(struct netmap_adapter *na, u_int ring_nr, enum txrx tx,
 			NM_IFPNAME(ifp));
 		goto put_out;
 	}
-	/* XXX avail ? */
-	ring->cur = nm_kr_rxpos(kring);
+	/* mark all buffers as released on this ring */
+	ring->head = ring->cur = nm_kr_rxpos(kring);
+
+	/* pass packets to the switch */
 	netmap_vp_txsync(vpna, ring_nr, flags);
 
+	/* another call to actually release the buffers */
 	if (!is_host_ring)
 		error = na->nm_rxsync(na, ring_nr, 0);
 
