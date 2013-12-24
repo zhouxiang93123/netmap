@@ -446,6 +446,7 @@ netmap_krings_create(struct netmap_adapter *na, u_int ntx, u_int nrx, u_int tail
 		kring = &na->tx_rings[i];
 		bzero(kring, sizeof(*kring));
 		kring->na = na;
+		kring->ring_id = i;
 		kring->nkr_num_slots = ndesc;
 		/*
 		 * IMPORTANT:
@@ -463,6 +464,7 @@ netmap_krings_create(struct netmap_adapter *na, u_int ntx, u_int nrx, u_int tail
 		kring = &na->rx_rings[i];
 		bzero(kring, sizeof(*kring));
 		kring->na = na;
+		kring->ring_id = i;
 		kring->nkr_num_slots = ndesc;
 		mtx_init(&kring->q_lock, "nm_rxq_lock", NULL, MTX_DEF);
 		init_waitqueue_head(&kring->si);
@@ -849,7 +851,9 @@ netmap_txsync_to_host(struct netmap_adapter *na)
 {
 	struct netmap_kring *kring = &na->tx_rings[na->num_tx_rings];
 	struct netmap_ring *ring = kring->ring;
-	u_int cur, lim = kring->nkr_num_slots - 1;
+	u_int const lim = kring->nkr_num_slots - 1;
+	u_int new_slots;
+	u_int cur = nm_txsync_prologue(kring, &new_slots);
 	struct mbq q;
 	int error;
 
@@ -859,7 +863,6 @@ netmap_txsync_to_host(struct netmap_adapter *na)
 			D("ring %p busy (user error)", kring);
 		return;
 	}
-	cur = ring->cur;
 	if (cur > lim) {
 		D("invalid ring index in stack TX kring %p", kring);
 		netmap_ring_reinit(kring);
@@ -868,15 +871,16 @@ netmap_txsync_to_host(struct netmap_adapter *na)
 	}
 
 	/* Take packets from hwcur to cur and pass them up.
+	 * force head = cur since netmap_grab_packets() stops at head
 	 * In case of no buffers we give up. At the end of the loop,
 	 * the queue is drained in all cases.
 	 */
 	mbq_init(&q);
+	ring->head = cur;
 	netmap_grab_packets(kring, &q, 1 /* force */);
 	kring->nr_hwcur = cur;
 	kring->nr_hwavail = lim;
-	kring->nr_hwreserved = 0;
-	ring->tail = nm_tx_ktail(kring);
+	nm_txsync_finalize(kring, cur);
 
 	nm_kr_put(kring);
 	netmap_send_up(na->ifp, &q);
@@ -944,6 +948,7 @@ netmap_rxsync_from_host(struct netmap_adapter *na, struct thread *td, void *pwai
 			nm_i = nm_next(nm_i, lim);
 		}
 	}
+
 	/*
 	 * Second part: skip past packets that userspace has released.
 	 */
@@ -956,13 +961,12 @@ netmap_rxsync_from_host(struct netmap_adapter *na, struct thread *td, void *pwai
 		ND(5, "hwavail %u after releasing %d", kring->nr_hwavail, n);
 		kring->nr_hwcur = head;
 	}
+
 	nm_rxsync_finalize(kring);
 
-	n = ring->cur != ring->tail ? 1 : 0;
-	if (n == 0 && td) /* no bufs available */
+	if (nm_ring_empty(ring) && td) /* no bufs available */
 		selrecord(td, &kring->si);
-	if (n && (netmap_verbose & NM_VERB_HOST))
-		D("%d pkts from stack", n);
+
 unlock_out:
 
 	mtx_unlock(&q->lock);
@@ -1185,7 +1189,8 @@ nm_txsync_prologue(struct netmap_kring *kring, u_int *new_slots)
 	return cur;
 
 error:
-	RD(5, "kring error: hwcur %d hwres %d hwavail %d cur %d tail %d",
+	RD(5, "%s %d kring error: hwcur %d hwres %d hwavail %d cur %d tail %d",
+		NM_IFPNAME(kring->na->ifp), kring->ring_id,
 		kring->nr_hwcur,
 		kring->nr_hwreserved, kring->nr_hwavail,
 		cur, ring->tail);
@@ -2271,8 +2276,9 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
 		new_hwofs -= lim + 1;
 
 	/* Always set the new offset value and realign the ring. */
-	D("%s hwofs %d -> %d, hwavail %d -> %d",
-		tx == NR_TX ? "TX" : "RX",
+	D("%s %s%d hwofs %d -> %d, hwavail %d -> %d",
+		NM_IFPNAME(na->ifp),
+		tx == NR_TX ? "TX" : "RX", n,
 		kring->nkr_hwofs, new_hwofs,
 		kring->nr_hwavail,
 		tx == NR_TX ? lim : kring->nr_hwavail);
