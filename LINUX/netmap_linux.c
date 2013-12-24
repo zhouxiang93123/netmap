@@ -582,7 +582,10 @@ static int netmap_common_sendmsg(struct netmap_adapter *na, struct msghdr *m,
     nm_buf_size = ring->nr_buf_size;
 
     i = last = ring->cur;
-    avail = ring->avail;
+    avail = ring->tail + ring->num_slots - ring->cur;
+    if (avail >= ring->num_slots)
+	avail -= ring->num_slots;
+
     ND("A) cur=%d avail=%d, hwcur=%d, hwavail=%d\n", i, avail, na->tx_rings[0].nr_hwcur,
                                                                na->tx_rings[0].nr_hwavail);
     if (avail < iovcnt) {
@@ -635,7 +638,6 @@ static int netmap_common_sendmsg(struct netmap_adapter *na, struct msghdr *m,
     ring->slot[last].flags &= ~NS_MOREFRAG;
 
     ring->cur = i;
-    ring->avail = avail;
 
     if (!(flags & MSG_MORE))
         na->nm_txsync(na, 0, 0);
@@ -733,7 +735,11 @@ static int netmap_common_recvmsg(struct netmap_adapter *na,
 	/* Grab the netmap RX ring normally used from userspace. */
 	ring = na->rx_rings[0].ring;
 	i = ring->cur;
-	avail = ring->avail;
+
+	avail = ring->tail + ring->num_slots - ring->cur;
+	if (avail >= ring->num_slots)
+	    avail -= ring->num_slots;
+
         ND("A) cur=%d avail=%d, hwcur=%d, hwavail=%d\n", i, avail, na->rx_rings[0].nr_hwcur,
                                                                na->rx_rings[0].nr_hwavail);
 
@@ -813,8 +819,7 @@ static int netmap_common_recvmsg(struct netmap_adapter *na,
 				"incomplete packet\n");
 	}
 
-	ring->cur = i;
-	ring->avail = avail;
+	ring->head = ring->cur = i;
 
 	ND("read %d bytes using %d iovecs", copied, j);
         ND("B) cur=%d avail=%d, hwcur=%d, hwavail=%d\n", i, avail, na->rx_rings[0].nr_hwcur,
