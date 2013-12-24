@@ -226,7 +226,7 @@ struct netmap_kring {
 	uint32_t rcur;		/* last cur read from user ring */
 	uint32_t rtail;		/* last tail reported to user ring */
 
-	int32_t nr_hwreserved;	/* tx: packets not sent to driver */
+	uint32_t nr_hwreserved;	/* tx: packets not sent to driver */
 
 	uint32_t nr_kflags;	/* private driver flags */
 #define NKR_PENDINTR	0x1	// Pending interrupt.
@@ -234,6 +234,8 @@ struct netmap_kring {
 	int32_t	nkr_hwofs;	/* offset between NIC and netmap ring */
 
 	uint16_t	nkr_slot_flags;	/* initial value for flags */
+
+	uint32_t	ring_id;
 
 	struct netmap_adapter *na;
 
@@ -804,9 +806,8 @@ static inline void
 nm_txsync_finalize(struct netmap_kring *kring, u_int cur)
 {
 	/* recompute hwreserved */
-	kring->nr_hwreserved = cur - kring->nr_hwcur;
-	if (kring->nr_hwreserved < 0)
-		kring->nr_hwreserved += kring->nkr_num_slots;
+	int tmp = cur - kring->nr_hwcur;
+	kring->nr_hwreserved = tmp < 0 ? tmp + kring->nkr_num_slots : tmp;
 
 	/* update avail and reserved to what the kernel knows */
 	kring->ring->tail = kring->rtail = nm_tx_ktail(kring);
