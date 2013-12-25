@@ -696,19 +696,13 @@ nm_bdg_attach(struct nmreq *nmr)
 	if (npriv == NULL)
 		return ENOMEM;
 	NMG_LOCK();
-	/* XXX probably netmap_get_bdg_na() */
-	error = netmap_get_na(nmr, &na, 1 /* create if not exists */);
+	error = netmap_get_bdg_na(nmr, &na, 1 /* create if not exists */);
 	if (error) /* no device, or another bridge or user owns the device */
 		goto unlock_exit;
-	/* netmap_get_na() sets na_bdg if this is a physical interface
-	 * that we can attach to a switch.
-	 */
-	if (!nma_is_bwrap(na)) {
-		/* got reference to a virtual port or direct access to a NIC.
-		 * perhaps specified no bridge prefix or wrong NIC name
-		 */
+
+	if (na == NULL) { /* VALE prefix missing */
 		error = EINVAL;
-		goto unref_exit;
+		goto unlock_exit;
 	}
 
 	if (na->active_fds > 0) { /* already registered */
@@ -745,17 +739,16 @@ nm_bdg_detach(struct nmreq *nmr)
 	int last_instance;
 
 	NMG_LOCK();
-	error = netmap_get_na(nmr, &na, 0 /* don't create */);
+	error = netmap_get_bdg_na(nmr, &na, 0 /* don't create */);
 	if (error) { /* no device, or another bridge or user owns the device */
 		goto unlock_exit;
 	}
-	if (!nma_is_bwrap(na)) {
-		/* got reference to a virtual port or direct access to a NIC.
-		 * perhaps specified no bridge's prefix or wrong NIC's name
-		 */
+
+	if (na == NULL) { /* VALE prefix missing */
 		error = EINVAL;
-		goto unref_exit;
+		goto unlock_exit;
 	}
+
 	bna = (struct netmap_bwrap_adapter *)na;
 
 	if (na->active_fds == 0) { /* not registered */
