@@ -136,6 +136,8 @@ lem_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
 			D("nm %d nic %d len %d",
 				nm_i, nic_i, len);
+			if (netmap_verbose)
+				D("%s", nm_dump_buf(addr,len, 128, NULL));
 
 			/* Fill the slot in the NIC ring. */
 			curr->upper.data = 0;
@@ -163,7 +165,7 @@ lem_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	/*
 	 * Second part: reclaim buffers for completed transmissions.
 	 */
-	if (flags & NAF_FORCE_RECLAIM || kring->nr_hwavail < 1) {
+	if (1 || flags & NAF_FORCE_RECLAIM || kring->nr_hwavail < 1) {
 		int delta;
 
 		/* record completed transmissions using TDH */
@@ -177,6 +179,7 @@ lem_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			/* some completed, increment hwavail. */
 			if (delta < 0)
 				delta += kring->nkr_num_slots;
+			D("recover %d at nic %d", delta, adapter->next_tx_to_clean);
 			adapter->next_tx_to_clean = nic_i;
 			kring->nr_hwavail += delta;
 		}

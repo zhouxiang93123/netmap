@@ -779,7 +779,7 @@ netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
 		slot->flags &= ~NS_FORWARD; // XXX needed ?
 		/* XXX adapt to the case of a multisegment packet */
 		m = m_devget(BDG_NMB(na, slot), slot->len, 0, na->ifp, NULL);
-		D("nm %d len %d m %p", n, slot->len, m);
+		ND("nm %d len %d m %p", n, slot->len, m);
 
 		if (m == NULL)
 			break;
@@ -944,7 +944,10 @@ netmap_rxsync_from_host(struct netmap_adapter *na, struct thread *td, void *pwai
 			struct netmap_slot *slot = &ring->slot[nm_i];
 
 			m_copydata(m, 0, len, BDG_NMB(na, slot));
-			D("nm %d len %d", nm_i, len);
+			ND("nm %d len %d", nm_i, len);
+			if (netmap_verbose)
+                                D("%s", nm_dump_buf(BDG_NMB(na, slot),len, 128, NULL));
+
 			slot->len = len;
 			slot->flags = kring->nkr_slot_flags;
 			kring->nr_hwavail++;
@@ -1164,7 +1167,7 @@ _nm_txsync_prologue(struct netmap_kring *kring, u_int *new_slots, const char *fn
 	u_int n = kring->nkr_num_slots;
 	u_int kstart, kend;
 
-	D("%s %s TX%d kc %d ka %d h %d c %d t %d",
+	ND("%s %s TX%d kc %d ka %d h %d c %d t %d",
 		fn,
 		NM_IFPNAME(kring->na->ifp), kring->ring_id,
 		kring->nr_hwcur, kring->nr_hwavail,
@@ -1237,7 +1240,7 @@ nm_rxsync_prologue(struct netmap_kring *kring)
 	u_int const n = kring->nkr_num_slots;
 	u_int kend = kring->nr_hwcur + kring->nr_hwavail;
 
-	D("%s RX%d kc %d ka %d h %d c %d t %d",
+	ND("%s RX%d kc %d ka %d h %d c %d t %d",
 		NM_IFPNAME(kring->na->ifp), kring->ring_id,
 		kring->nr_hwcur, kring->nr_hwavail,
 		ring->head, ring->cur, ring->tail);
@@ -2291,7 +2294,7 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
 		new_hwofs -= lim + 1;
 
 	/* Always set the new offset value and realign the ring. */
-	D("%s %s%d hwofs %d -> %d, hwavail %d -> %d",
+	ND("%s %s%d hwofs %d -> %d, hwavail %d -> %d",
 		NM_IFPNAME(na->ifp),
 		tx == NR_TX ? "TX" : "RX", n,
 		kring->nkr_hwofs, new_hwofs,
