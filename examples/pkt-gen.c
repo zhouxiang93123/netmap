@@ -156,7 +156,8 @@ extract_ip_range(struct ip_range *r)
 	char *ap, *pp;
 	struct in_addr a;
 
-	D("extract IP range from %s", r->name);
+	if (verbose)
+		D("extract IP range from %s", r->name);
 	r->port0 = r->port1 = 0;
 	r->start = r->end = 0;
 
@@ -202,7 +203,8 @@ extract_ip_range(struct ip_range *r)
 		a.s_addr = htonl(r->end);
 		strncpy(buf1, inet_ntoa(a), sizeof(buf1));
 		a.s_addr = htonl(r->start);
-		D("range is %s:%d to %s:%d",
+		if (1)
+		    D("range is %s:%d to %s:%d",
 			inet_ntoa(a), r->port0, buf1, r->port1);
 	}
 }
@@ -210,7 +212,8 @@ extract_ip_range(struct ip_range *r)
 static void
 extract_mac_range(struct mac_range *r)
 {
-	D("extract MAC range from %s", r->name);
+	if (verbose)
+	    D("extract MAC range from %s", r->name);
 	bcopy(ether_aton(r->name), &r->start, 6);
 	bcopy(ether_aton(r->name), &r->end, 6);
 #if 0
@@ -225,7 +228,8 @@ extract_mac_range(struct mac_range *r)
 	if (p)
 		targ->dst_mac_range = atoi(p+1);
 #endif
-	D("%s starts at %s", r->name, ether_ntoa(&r->start));
+	if (verbose)
+		D("%s starts at %s", r->name, ether_ntoa(&r->start));
 }
 
 static struct targ *targs;
