@@ -1488,8 +1488,8 @@ netmap_vp_txsync(struct netmap_vp_adapter *na, u_int ring_nr, int flags)
 {
 	struct netmap_kring *kring = &na->up.tx_rings[ring_nr];
 	u_int done, n;
-	u_int const cur = nm_txsync_prologue(kring, &n);
 	u_int const lim = kring->nkr_num_slots - 1;
+	u_int const cur = nm_txsync_prologue(kring, &n);
 
 	if (cur > lim)
 		return netmap_ring_reinit(kring);
@@ -1683,7 +1683,8 @@ netmap_bwrap_intr_notify(struct netmap_adapter *na, u_int ring_nr, enum txrx tx,
 	struct netmap_vp_adapter *vpna = &bna->up;
 	int error = 0;
 
-	D("%s[%d] %s %x", NM_IFPNAME(ifp), ring_nr, (tx == NR_TX ? "TX" : "RX"), flags);
+	D("%s %s%d 0x%x", NM_IFPNAME(ifp),
+		(tx == NR_TX ? "TX" : "RX"), ring_nr, flags);
 
 	if (flags & NAF_DISABLE_NOTIFY) {
 		kring = tx == NR_TX ? na->tx_rings : na->rx_rings;
@@ -1723,9 +1724,11 @@ netmap_bwrap_intr_notify(struct netmap_adapter *na, u_int ring_nr, enum txrx tx,
 	D("%s head %d cur %d tail %d (kring %d %d %d)",  NM_IFPNAME(ifp),
 		ring->head, ring->cur, ring->tail,
 		kring->rhead, kring->rcur, kring->rtail);
+if (1) {
 	ring->head = kring->rhead;
 	ring->cur = kring->rcur;
 	ring->tail = kring->rtail;
+}
 
 	if (is_host_ring) {
 		netmap_rxsync_from_host(na, NULL, NULL);
@@ -1747,6 +1750,9 @@ netmap_bwrap_intr_notify(struct netmap_adapter *na, u_int ring_nr, enum txrx tx,
 
 	/* set the ring pointer correctly for the tx ring */
 	ring->cur = ring->tail;
+	bkring = tx == NR_TX ? vpna->up.rx_rings : vpna->up.tx_rings;
+	ring->tail = nm_tx_ktail(bkring);
+
 	/* pass packets to the switch */
 	netmap_vp_txsync(vpna, ring_nr, flags);
 
@@ -1904,10 +1910,10 @@ netmap_bwrap_notify(struct netmap_adapter *na, u_int ring_n, enum txrx tx, int f
 	if (hwna->ifp == NULL || !(hwna->ifp->if_capenable & IFCAP_NETMAP))
 		return 0;
 	ring->cur = k;
-	ND("%s[%d] PRE rx(%d, %d, %d, %d) ring(%d, %d, %d) tx(%d, %d)",
+	D("%s[%d] PRE rx(%d, %d, %d, %d) ring(h %d, c %d, t %d) tx(%d, %d)",
 		NM_IFPNAME(na->ifp), ring_n,
 		kring->nr_hwcur, kring->nr_hwavail, kring->nkr_hwlease, kring->nr_hwreserved,
-		ring->cur, ring->avail, ring->reserved,
+		ring->head, ring->cur, ring->tail,
 		hw_kring->nr_hwcur, hw_kring->nr_hwavail);
 	if (ring_n == na->num_rx_rings) {
 		netmap_txsync_to_host(hwna);
@@ -1918,10 +1924,10 @@ netmap_bwrap_notify(struct netmap_adapter *na, u_int ring_n, enum txrx tx, int f
 	kring->nr_hwavail = 0;
 	// XXX lr 20131223 it seems wrong to use hwreserved on a receive ring
 	// kring->nr_hwreserved = lim - ring->avail;
-	ND("%s[%d] PST rx(%d, %d, %d, %d) ring(%d, %d, %d) tx(%d, %d)",
+	D("%s[%d] PST rx(%d, %d, %d, %d) ring(h%d c%d t%d) tx(%d, %d)",
 		NM_IFPNAME(na->ifp), ring_n,
 		kring->nr_hwcur, kring->nr_hwavail, kring->nkr_hwlease, kring->nr_hwreserved,
-		ring->cur, ring->avail, ring->reserved,
+		ring->head, ring->cur, ring->tail,
 		hw_kring->nr_hwcur, hw_kring->nr_hwavail);
 
 	return error;

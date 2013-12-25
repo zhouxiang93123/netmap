@@ -125,9 +125,9 @@ struct hrtimer {
 	do {							\
 		struct timeval __xxts;				\
 		microtime(&__xxts);				\
-		printf("%03d.%06d %s [%d] " format "\n",	\
+		printf("%03d.%06d [%4d] %-25s " format "\n",	\
 		(int)__xxts.tv_sec % 1000, (int)__xxts.tv_usec,	\
-		__FUNCTION__, __LINE__, ##__VA_ARGS__);		\
+		__LINE__, __FUNCTION__, ##__VA_ARGS__);		\
 	} while (0)
 
 /* rate limited, lps indicates how many per second */
@@ -772,7 +772,8 @@ nm_clear_native_flags(struct netmap_adapter *na)
  * and the 'new_slots' value in the argument.
  * If any error, returns cur > lim to force a reinit.
  */
-u_int nm_txsync_prologue(struct netmap_kring *, u_int *);
+u_int _nm_txsync_prologue(struct netmap_kring *, u_int *, const char *fn);
+#define nm_txsync_prologue(_a, _b) _nm_txsync_prologue(_a, _b, __FUNCTION__)
 
 /*
  * validates parameters in the ring/kring, returns a value for cur,
@@ -812,7 +813,9 @@ nm_txsync_finalize(struct netmap_kring *kring, u_int cur)
 
 	/* update avail and reserved to what the kernel knows */
 	kring->ring->tail = kring->rtail = nm_tx_ktail(kring);
-	kring->ring->head = kring->nr_hwcur;
+	kring->ring->head = kring->rhead = kring->nr_hwcur;
+	/* make a copy of the state for next round */
+	kring->rcur = kring->ring->cur;
 }
 
 
@@ -826,6 +829,9 @@ nm_rxsync_finalize(struct netmap_kring *kring)
 	//struct netmap_ring *ring = kring->ring;
 	ND("head %d cur %d tail %d -> %d", ring->head, ring->cur, ring->tail, nm_rx_ktail(kring));
 	kring->ring->tail = kring->rtail = nm_rx_ktail(kring);
+	/* make a copy of the state for next round */
+	kring->rhead = kring->ring->head;
+	kring->rcur = kring->ring->cur;
 }
 
 

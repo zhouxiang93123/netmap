@@ -779,6 +779,7 @@ netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
 		slot->flags &= ~NS_FORWARD; // XXX needed ?
 		/* XXX adapt to the case of a multisegment packet */
 		m = m_devget(BDG_NMB(na, slot), slot->len, 0, na->ifp, NULL);
+		D("nm %d len %d m %p", n, slot->len, m);
 
 		if (m == NULL)
 			break;
@@ -878,6 +879,7 @@ netmap_txsync_to_host(struct netmap_adapter *na)
 	mbq_init(&q);
 	ring->head = cur;
 	netmap_grab_packets(kring, &q, 1 /* force */);
+	D("have %d pkts in queue", mbq_len(&q));
 	kring->nr_hwcur = cur;
 	kring->nr_hwavail = lim;
 	nm_txsync_finalize(kring, cur);
@@ -942,6 +944,7 @@ netmap_rxsync_from_host(struct netmap_adapter *na, struct thread *td, void *pwai
 			struct netmap_slot *slot = &ring->slot[nm_i];
 
 			m_copydata(m, 0, len, BDG_NMB(na, slot));
+			D("nm %d len %d", nm_i, len);
 			slot->len = len;
 			slot->flags = kring->nkr_slot_flags;
 			kring->nr_hwavail++;
@@ -1154,13 +1157,18 @@ out:
  *
  */
 u_int
-nm_txsync_prologue(struct netmap_kring *kring, u_int *new_slots)
+_nm_txsync_prologue(struct netmap_kring *kring, u_int *new_slots, const char *fn)
 {
 	struct netmap_ring *ring = kring->ring;
 	u_int cur = ring->cur; /* read only once */
 	u_int n = kring->nkr_num_slots;
 	u_int kstart, kend;
 
+	D("%s %s TX%d kc %d ka %d h %d c %d t %d",
+		fn,
+		NM_IFPNAME(kring->na->ifp), kring->ring_id,
+		kring->nr_hwcur, kring->nr_hwavail,
+		ring->head, ring->cur, ring->tail);
 #if 1 /* kernel sanity checks */
 	if (kring->nr_hwcur >= n ||
 	    kring->nr_hwreserved >= n || kring->nr_hwavail >= n ||
@@ -1229,6 +1237,10 @@ nm_rxsync_prologue(struct netmap_kring *kring)
 	u_int const n = kring->nkr_num_slots;
 	u_int kend = kring->nr_hwcur + kring->nr_hwavail;
 
+	D("%s RX%d kc %d ka %d h %d c %d t %d",
+		NM_IFPNAME(kring->na->ifp), kring->ring_id,
+		kring->nr_hwcur, kring->nr_hwavail,
+		ring->head, ring->cur, ring->tail);
 	kring->rcur = ring->cur;	/* read only once */
 	head = kring->rhead = ring->head;	/* read only once */
 #if 1 /* kernel sanity checks */
