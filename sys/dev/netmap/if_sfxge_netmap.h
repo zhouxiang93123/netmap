@@ -377,7 +377,7 @@ sfxge_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		/* IMPORTANT: we must leave one free slot in the ring,
 		 * so move l back by one unit
 		 */
-		l = (l == 0) ? lim : l - 1;
+		l = nm_prev(l, lim);
 		//IXGBE_WRITE_REG(&adapter->hw, IXGBE_RDT(rxr->me), l);
 	}
 	/* tell userspace that there are new packets */

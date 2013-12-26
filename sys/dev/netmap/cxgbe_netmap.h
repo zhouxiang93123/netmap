@@ -340,7 +340,7 @@ cxgbe_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		/* IMPORTANT: we must leave one free slot in the ring,
 		 * so move j back by one unit
 		 */
-		j = (j == 0) ? lim : j - 1;
+		j = nm_prev(j, lim);
 		IXGBE_WRITE_REG(&adapter->hw, IXGBE_RDT(rxr->me), j);
 	}
 	/* tell userspace that there are new packets */

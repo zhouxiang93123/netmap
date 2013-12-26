@@ -299,7 +299,7 @@ igb_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		 * IMPORTANT: we must leave one free slot in the ring,
 		 * so move nic_i back by one unit
 		 */
-		nic_i = (nic_i == 0) ? lim : nic_i - 1;
+		nic_i = nm_prev(nic_i, lim);
 		writel(nic_i, rxr->tail);
 	}
 
