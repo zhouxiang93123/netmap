@@ -225,9 +225,6 @@ enum { NETMAP_ADMODE_BEST = 0,	/* use native, fallback to generic */
 	NETMAP_ADMODE_NATIVE,	/* either native or none */
 	NETMAP_ADMODE_GENERIC,	/* force generic */
 	NETMAP_ADMODE_LAST };
-#define NETMAP_ADMODE_NATIVE        1  /* Force native netmap adapter. */
-#define NETMAP_ADMODE_GENERIC       2  /* Force generic netmap adapter. */
-#define NETMAP_ADMODE_BEST          0  /* Priority to native netmap adapter. */
 static int netmap_admode = NETMAP_ADMODE_BEST;
 
 int netmap_generic_mit = 100*1000;   /* Generic mitigation interval in nanoseconds. */
@@ -251,6 +248,10 @@ nm_kr_get(struct netmap_kring *kr)
 }
 
 
+/*
+ * mark the ring as stopped, and run through the locks
+ * to make sure other users get to see it.
+ */
 void
 netmap_disable_ring(struct netmap_kring *kr)
 {
@@ -379,7 +380,6 @@ nm_dump_buf(char *p, int len, int lim, char *dst)
 }
 
 
-
 /*
  * Fetch configuration from the device, to cope with dynamic
  * reconfigurations after loading the module.
@@ -477,6 +477,7 @@ netmap_krings_create(struct netmap_adapter *na, u_int ntx, u_int nrx, u_int tail
 	return 0;
 }
 
+
 /* XXX check boundaries */
 void
 netmap_krings_delete(struct netmap_adapter *na)
@@ -494,6 +495,11 @@ netmap_krings_delete(struct netmap_adapter *na)
 }
 
 
+/*
+ * Destructor for NIC ports. They also have an mbuf queue
+ * on the rings connected to the host so we need to purge
+ * them first.
+ */
 void
 netmap_hw_krings_delete(struct netmap_adapter *na)
 {
@@ -504,6 +510,7 @@ netmap_hw_krings_delete(struct netmap_adapter *na)
 	mbq_safe_destroy(q);
 	netmap_krings_delete(na);
 }
+
 
 static struct netmap_if*
 netmap_if_new(const char *ifname, struct netmap_adapter *na)
@@ -733,6 +740,7 @@ netmap_dtor(void *data)
 
 /*
  * pass a chain of buffers to the host stack as coming from 'dst'
+ * We do not need to lock because the queue is private.
  */
 static void
 netmap_send_up(struct ifnet *dst, struct mbq *q)
@@ -751,35 +759,31 @@ netmap_send_up(struct ifnet *dst, struct mbq *q)
 
 /*
  * put a copy of the buffers marked NS_FORWARD into an mbuf chain.
- * Run from hwcur to cur - reserved
+ * Take packets from hwcur to ring->head marked NS_FORWARD (or forced)
+ * and pass them up. Drop remaining packets in the unlikely event
+ * of an mbuf shortage.
  */
 static void
 netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
 {
-	/* Take packets from hwcur to ring->head and pass them up.
-	 * In case of no buffers we give up. At the end of the loop,
-	 * the queue is drained in all cases.
-	 * XXX handle reserved
-	 */
 	u_int const lim = kring->nkr_num_slots - 1;
-	struct mbuf *m;
 	u_int const head = kring->ring->head;
 	u_int n;
 	struct netmap_adapter *na = kring->na;
 
 	for (n = kring->nr_hwcur; n != head; n = nm_next(n, lim)) {
+		struct mbuf *m;
 		struct netmap_slot *slot = &kring->ring->slot[n];
 
 		if ((slot->flags & NS_FORWARD) == 0 && !force)
 			continue;
 		if (slot->len < 14 || slot->len > NETMAP_BDG_BUF_SIZE(na->nm_mem)) {
-			D("bad pkt at %d len %d", n, slot->len);
+			RD(5, "bad pkt at %d len %d", n, slot->len);
 			continue;
 		}
 		slot->flags &= ~NS_FORWARD; // XXX needed ?
-		/* XXX adapt to the case of a multisegment packet */
+		/* XXX TODO: adapt to the case of a multisegment packet */
 		m = m_devget(BDG_NMB(na, slot), slot->len, 0, na->ifp, NULL);
-		ND("nm %d len %d m %p", n, slot->len, m);
 
 		if (m == NULL)
 			break;
@@ -789,16 +793,17 @@ netmap_grab_packets(struct netmap_kring *kring, struct mbq *q, int force)
 
 
 /*
+ * Send to the NIC rings packets marked NS_FORWARD between
+ * kring->nr_hwcur and kring->rhead
  * Called under kring->rx_queue.lock on the sw rx ring,
- * push packets marked as forward to the NIC rings.
- * Start at nr_hwcur and do at most n steps (argument)
  */
 static u_int
-netmap_sw_to_nic(struct netmap_adapter *na, u_int n)
+netmap_sw_to_nic(struct netmap_adapter *na)
 {
 	struct netmap_kring *kring = &na->rx_rings[na->num_rx_rings];
 	struct netmap_slot *rxslot = kring->ring->slot;
 	u_int i, rxcur = kring->nr_hwcur;
+	u_int const head = kring->rhead;
 	u_int const src_lim = kring->nkr_num_slots - 1;
 	u_int sent = 0;
 
@@ -808,11 +813,9 @@ netmap_sw_to_nic(struct netmap_adapter *na, u_int n)
 		struct netmap_ring *rdst = kdst->ring;
 		u_int const dst_lim = kdst->nkr_num_slots - 1;
 
-		if (nm_ring_empty(rdst))
-			continue;	/* skip tx rings with no space */
-
-		for (;n > 0 && !nm_ring_empty(rdst);
-		    n--, rxcur = nm_next(rxcur, src_lim) ) {
+		/* XXX do we trust ring or kring->rcur,rtail ? */
+		for (; rxcur != head && !nm_ring_empty(rdst);
+		     rxcur = nm_next(rxcur, src_lim) ) {
 			struct netmap_slot *src, *dst, tmp;
 			u_int dst_cur = rdst->cur;
 
@@ -961,7 +964,7 @@ netmap_rxsync_from_host(struct netmap_adapter *na, struct thread *td, void *pwai
 	nm_i = kring->nr_hwcur;
 	if (nm_i != head) { /* something was released */
 		if (netmap_fwd || kring->ring->flags & NR_FORWARD)
-			ret = netmap_sw_to_nic(na, n);
+			ret = netmap_sw_to_nic(na);
 		n = head >= nm_i ? head - nm_i : head + lim + 1 - nm_i;
 		kring->nr_hwavail -= n;
 		ND(5, "hwavail %u after releasing %d", kring->nr_hwavail, n);
@@ -1154,9 +1157,9 @@ out:
  *         |
  *         v<--hwres-->|<-----hwavail---->
  *   ------+------------------------------+-------- ring
- *                          |
- *                          |<---avail--->
- *                          +--cur
+ *                          |         |
+ *                          |         |
+ *                          +--cur    +--tail
  *
  */
 u_int
@@ -1214,10 +1217,8 @@ error:
 
 /*
  * validate parameters on entry for *_rxsync()
- * Returns ring->cur - ring->reserved if ok,
- * or something >= kring->nkr_num_slots
- * in case of error. The extra argument is a pointer to
- * 'resvd'. XXX this may be deprecated at some point.
+ * Returns ring->head (the old cur - reserved) if ok,
+ * or something >= kring->nkr_num_slots in case of error.
  *
  * Below is a correct configuration on input. ring->cur and
  * ring->reserved must be in the region covered by kring->hwavail,
@@ -1227,9 +1228,9 @@ error:
  *            |
  *            v<-------hwavail---------->
  *   ---------+--------------------------+-------- ring
- *               |<--res-->|
- *                         |<---avail--->
- *                         +--cur
+ *               |         |          |
+ *               |         |          |
+ *               +--head   +--cur     +--tail
  *
  */
 u_int
@@ -1273,7 +1274,7 @@ error:
 
 /*
  * Error routine called when txsync/rxsync detects an error.
- * Can't do much more than resetting cur = hwcur, avail = hwavail.
+ * Can't do much more than resetting head =cur = hwcur, tail = hwcur+hwavail.
  * Return 1 on reinit.
  *
  * This routine is only called by the upper half of the kernel.
@@ -1292,37 +1293,39 @@ netmap_ring_reinit(struct netmap_kring *kring)
 
 	// XXX KASSERT nm_kr_tryget
 	RD(10, "called for %s", NM_IFPNAME(kring->na->ifp));
+	kring->rhead = ring->head;
+	kring->rcur  = ring->cur;
+	kring->rtail = ring->tail;
+
 	if (ring->cur > lim)
+		errors++;
+	if (ring->head > lim)
+		errors++;
+	if (ring->tail > lim)
 		errors++;
 	for (i = 0; i <= lim; i++) {
 		u_int idx = ring->slot[i].buf_idx;
 		u_int len = ring->slot[i].len;
 		if (idx < 2 || idx >= netmap_total_buffers) {
-			if (!errors++)
-				D("bad buffer at slot %d idx %d len %d ", i, idx, len);
+			RD(5, "bad index at slot %d idx %d len %d ", i, idx, len);
 			ring->slot[i].buf_idx = 0;
 			ring->slot[i].len = 0;
 		} else if (len > NETMAP_BDG_BUF_SIZE(kring->na->nm_mem)) {
 			ring->slot[i].len = 0;
-			if (!errors++)
-				D("bad len %d at slot %d idx %d",
-					len, i, idx);
+			RD(5, "bad len at slot %d idx %d len %d", i, idx, len);
 		}
 	}
 	if (errors) {
-		int pos = kring - kring->na->tx_rings;
-		int n = kring->na->num_tx_rings + 1;
-
 		RD(10, "total %d errors", errors);
-		errors++;
 		RD(10, "%s %s[%d] reinit, cur %d -> %d tail %d -> %d",
 			NM_IFPNAME(kring->na->ifp),
-			pos < n ?  "TX" : "RX", pos < n ? pos : pos - n,
+			kring < kring->na->rx_rings ? "TX" : "RX",
+			kring->ring_id,
 			ring->cur, kring->nr_hwcur,
 			ring->tail, nm_tx_ktail(kring));
-		ring->cur = kring->nr_hwcur;
-		ring->head = kring->nr_hwcur;
-		ring->tail = nm_tx_ktail(kring);
+		ring->head = kring->rhead = kring->nr_hwcur;
+		ring->cur  = kring->rcur  = kring->nr_hwcur;
+		ring->tail = kring->rtail = nm_tx_ktail(kring);
 	}
 	return (errors ? 1 : 0);
 }
@@ -1987,12 +1990,14 @@ do_retry_rx:
 	return (revents);
 }
 
-/*------- driver support routines ------*/
+
+/*-------------------- driver support routines -------------------*/
 
 static int netmap_hw_krings_create(struct netmap_adapter *);
 
 static int
-netmap_notify(struct netmap_adapter *na, u_int n_ring, enum txrx tx, int flags)
+netmap_notify(struct netmap_adapter *na, u_int n_ring,
+	enum txrx tx, int flags)
 {
 	struct netmap_kring *kring;
 
@@ -2368,6 +2373,7 @@ netmap_common_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 	}
 }
 
+
 /*
  * Default functions to handle rx/tx interrupts from a physical device.
  * "work_done" is non-null on the RX path, NULL for the TX path.
@@ -2414,6 +2420,7 @@ netmap_rx_irq(struct ifnet *ifp, u_int q, u_int *work_done)
 static struct cdev *netmap_dev; /* /dev/netmap character device. */
 extern struct cdevsw netmap_cdevsw;
 
+
 void
 netmap_fini(void)
 {
@@ -2424,6 +2431,7 @@ netmap_fini(void)
 	NMG_LOCK_DESTROY();
 	printf("netmap: unloaded module.\n");
 }
+
 
 int
 netmap_init(void)

@@ -280,12 +280,12 @@ nma_is_hw(struct netmap_adapter *na)
 	return !nma_is_vp(na) && !nma_is_host(na) && !nma_is_generic(na);
 }
 
+
 static __inline int
 nma_is_bwrap(struct netmap_adapter *na)
 {
 	return na->nm_register == netmap_bwrap_register;
 }
-
 
 
 /*
@@ -316,7 +316,6 @@ pkt_copy(void *_src, void *_dst, int l)
                 *dst++ = *src++;
         }
 }
-
 
 
 /*
@@ -502,6 +501,7 @@ netmap_bdg_detach_common(struct nm_bridge *b, int hw, int sw)
 	}
 }
 
+
 static void
 netmap_adapter_vp_dtor(struct netmap_adapter *na)
 {
@@ -519,6 +519,7 @@ netmap_adapter_vp_dtor(struct netmap_adapter *na)
 	free(ifp, M_DEVBUF);
 	na->ifp = NULL;
 }
+
 
 /* Try to get a reference to a netmap adapter attached to a VALE switch.
  * If the adapter is found (or is created), this function returns 0, a
@@ -735,6 +736,7 @@ unlock_exit:
 	free(npriv, M_DEVBUF);
 	return error;
 }
+
 
 static int
 nm_bdg_detach(struct nmreq *nmr)
@@ -957,6 +959,7 @@ netmap_vp_krings_create(struct netmap_adapter *na)
 	return 0;
 }
 
+
 static void
 netmap_vp_krings_delete(struct netmap_adapter *na)
 {
@@ -1037,10 +1040,6 @@ nm_bdg_preflush(struct netmap_vp_adapter *na, u_int ring_nr,
 }
 
 
-/*
- *---- support for virtual bridge -----
- */
-
 /* ----- FreeBSD if_bridge hash function ------- */
 
 /*
@@ -1061,6 +1060,7 @@ do {                                                                    \
         b -= c; b -= a; b ^= (a << 10);                                 \
         c -= a; c -= b; c ^= (b >> 15);                                 \
 } while (/*CONSTCOND*/0)
+
 
 static __inline uint32_t
 nm_bridge_rthash(const uint8_t *addr)
@@ -1483,6 +1483,7 @@ cleanup:
 	return 0;
 }
 
+
 static int
 netmap_vp_txsync(struct netmap_vp_adapter *na, u_int ring_nr, int flags)
 {
@@ -1581,6 +1582,7 @@ done:
 	return n;
 }
 
+
 static int
 bdg_netmap_attach(struct nmreq *nmr, struct ifnet *ifp)
 {
@@ -1630,6 +1632,7 @@ bdg_netmap_attach(struct nmreq *nmr, struct ifnet *ifp)
 	return 0;
 }
 
+
 static void
 netmap_bwrap_dtor(struct netmap_adapter *na)
 {
@@ -1654,6 +1657,7 @@ netmap_bwrap_dtor(struct netmap_adapter *na)
 	na->ifp = NULL;
 
 }
+
 
 /*
  * Intr callback for NICs connected to a bridge.
@@ -1775,6 +1779,7 @@ put_out:
 	return error;
 }
 
+
 static int
 netmap_bwrap_register(struct netmap_adapter *na, int onoff)
 {
@@ -1828,6 +1833,7 @@ netmap_bwrap_register(struct netmap_adapter *na, int onoff)
 	return 0;
 }
 
+
 static int
 netmap_bwrap_config(struct netmap_adapter *na, u_int *txr, u_int *txd,
 				    u_int *rxr, u_int *rxd)
@@ -1846,6 +1852,7 @@ netmap_bwrap_config(struct netmap_adapter *na, u_int *txr, u_int *txd,
 
 	return 0;
 }
+
 
 static int
 netmap_bwrap_krings_create(struct netmap_adapter *na)
@@ -1874,6 +1881,7 @@ netmap_bwrap_krings_create(struct netmap_adapter *na)
 	return 0;
 }
 
+
 static void
 netmap_bwrap_krings_delete(struct netmap_adapter *na)
 {
@@ -1886,6 +1894,7 @@ netmap_bwrap_krings_delete(struct netmap_adapter *na)
 	hwna->nm_krings_delete(hwna);
 	netmap_vp_krings_delete(na);
 }
+
 
 /* notify method for the bridge-->hwna direction */
 static int
@@ -1935,6 +1944,7 @@ netmap_bwrap_notify(struct netmap_adapter *na, u_int ring_n, enum txrx tx, int f
 	return error;
 }
 
+
 static int
 netmap_bwrap_host_notify(struct netmap_adapter *na, u_int ring_n, enum txrx tx, int flags)
 {
@@ -1944,6 +1954,7 @@ netmap_bwrap_host_notify(struct netmap_adapter *na, u_int ring_n, enum txrx tx, 
 		return ENXIO;
 	return netmap_bwrap_notify(port_na, port_na->num_rx_rings, NR_RX, flags);
 }
+
 
 /* attach a bridge wrapper to the 'real' device */
 static int
@@ -2010,6 +2021,7 @@ netmap_bwrap_attach(struct ifnet *fake, struct ifnet *real)
 	}
 	return 0;
 }
+
 
 void
 netmap_init_bridges(void)
