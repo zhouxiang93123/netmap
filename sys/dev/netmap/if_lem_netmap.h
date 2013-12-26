@@ -134,10 +134,6 @@ lem_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 				netmap_reload_map(adapter->txtag, txbuf->map, addr);
 			}
 			slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
-			D("nm %d nic %d len %d",
-				nm_i, nic_i, len);
-			if (netmap_verbose)
-				D("%s", nm_dump_buf(addr,len, 128, NULL));
 
 			/* Fill the slot in the NIC ring. */
 			curr->upper.data = 0;
@@ -157,7 +153,6 @@ lem_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 		bus_dmamap_sync(adapter->txdma.dma_tag, adapter->txdma.dma_map,
 			BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 
-		D("start tx up to nic %d host %d", nic_i, nm_i);
 		/* (re)start the tx unit up to slot nic_i (excluded) */
 		E1000_WRITE_REG(&adapter->hw, E1000_TDT(0), nic_i);
 	}
@@ -179,7 +174,7 @@ lem_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			/* some completed, increment hwavail. */
 			if (delta < 0)
 				delta += kring->nkr_num_slots;
-			D("recover %d at nic %d", delta, adapter->next_tx_to_clean);
+			ND("recover %d at nic %d", delta, adapter->next_tx_to_clean);
 			adapter->next_tx_to_clean = nic_i;
 			kring->nr_hwavail += delta;
 		}
@@ -238,8 +233,6 @@ lem_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 				D("bogus pkt size %d nic idx %d", len, nic_i);
 				len = 0;
 			}
-			D("nm %d nic %d len %d",
-				nm_i, nic_i, len);
 			ring->slot[nm_i].len = len;
 			ring->slot[nm_i].flags = slot_flags;
 			bus_dmamap_sync(adapter->rxtag,
@@ -249,7 +242,7 @@ lem_netmap_rxsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 			nic_i = nm_next(nic_i, lim);
 		}
 		if (n) { /* update the state variables */
-			D("%d new packets at nic %d nm %d tail %d",
+			ND("%d new packets at nic %d nm %d tail %d",
 				n,
 				adapter->next_rx_desc_to_check,
 				netmap_idx_n2k(kring, adapter->next_rx_desc_to_check),

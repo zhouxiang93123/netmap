@@ -879,7 +879,7 @@ netmap_txsync_to_host(struct netmap_adapter *na)
 	mbq_init(&q);
 	ring->head = cur;
 	netmap_grab_packets(kring, &q, 1 /* force */);
-	D("have %d pkts in queue", mbq_len(&q));
+	ND("have %d pkts in queue", mbq_len(&q));
 	kring->nr_hwcur = cur;
 	kring->nr_hwavail = lim;
 	nm_txsync_finalize(kring, cur);
@@ -2148,7 +2148,7 @@ netmap_hw_krings_create(struct netmap_adapter *na)
 	if (ret == 0) {
 		/* initialize the mbq for the sw rx ring */
 		mbq_safe_init(&na->rx_rings[na->num_rx_rings].rx_queue);
-		D("initialized sw rx queue %d", na->num_rx_rings);
+		ND("initialized sw rx queue %d", na->num_rx_rings);
 	}
 	return ret;
 }
@@ -2294,7 +2294,8 @@ netmap_reset(struct netmap_adapter *na, enum txrx tx, u_int n,
 		new_hwofs -= lim + 1;
 
 	/* Always set the new offset value and realign the ring. */
-	ND("%s %s%d hwofs %d -> %d, hwavail %d -> %d",
+	if (netmap_verbose)
+	    D("%s %s%d hwofs %d -> %d, hwavail %d -> %d",
 		NM_IFPNAME(na->ifp),
 		tx == NR_TX ? "TX" : "RX", n,
 		kring->nkr_hwofs, new_hwofs,

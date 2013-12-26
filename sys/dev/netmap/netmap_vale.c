@@ -1683,7 +1683,8 @@ netmap_bwrap_intr_notify(struct netmap_adapter *na, u_int ring_nr, enum txrx tx,
 	struct netmap_vp_adapter *vpna = &bna->up;
 	int error = 0;
 
-	D("%s %s%d 0x%x", NM_IFPNAME(ifp),
+	if (netmap_verbose)
+	    D("%s %s%d 0x%x", NM_IFPNAME(ifp),
 		(tx == NR_TX ? "TX" : "RX"), ring_nr, flags);
 
 	if (flags & NAF_DISABLE_NOTIFY) {
@@ -1721,7 +1722,8 @@ netmap_bwrap_intr_notify(struct netmap_adapter *na, u_int ring_nr, enum txrx tx,
 	 * the wrong side (the tx ring). Hence we overwrite with
 	 * the info from the rx kring.
 	 */
-	D("%s head %d cur %d tail %d (kring %d %d %d)",  NM_IFPNAME(ifp),
+	if (netmap_verbose)
+	    D("%s head %d cur %d tail %d (kring %d %d %d)",  NM_IFPNAME(ifp),
 		ring->head, ring->cur, ring->tail,
 		kring->rhead, kring->rcur, kring->rtail);
 if (1) {
@@ -1782,7 +1784,7 @@ netmap_bwrap_register(struct netmap_adapter *na, int onoff)
 	struct netmap_vp_adapter *hostna = &bna->host;
 	int error;
 
-	D("%s %s", NM_IFPNAME(na->ifp), onoff ? "on" : "off");
+	ND("%s %s", NM_IFPNAME(na->ifp), onoff ? "on" : "off");
 
 	if (onoff) {
 		int i;
@@ -1910,7 +1912,7 @@ netmap_bwrap_notify(struct netmap_adapter *na, u_int ring_n, enum txrx tx, int f
 	if (hwna->ifp == NULL || !(hwna->ifp->if_capenable & IFCAP_NETMAP))
 		return 0;
 	ring->cur = k;
-	D("%s[%d] PRE rx(%d, %d, %d, %d) ring(h %d, c %d, t %d) tx(%d, %d)",
+	ND("%s[%d] PRE rx(%d, %d, %d, %d) ring(h %d, c %d, t %d) tx(%d, %d)",
 		NM_IFPNAME(na->ifp), ring_n,
 		kring->nr_hwcur, kring->nr_hwavail, kring->nkr_hwlease, kring->nr_hwreserved,
 		ring->head, ring->cur, ring->tail,
@@ -1924,7 +1926,7 @@ netmap_bwrap_notify(struct netmap_adapter *na, u_int ring_n, enum txrx tx, int f
 	kring->nr_hwavail = 0;
 	// XXX lr 20131223 it seems wrong to use hwreserved on a receive ring
 	// kring->nr_hwreserved = lim - ring->avail;
-	D("%s[%d] PST rx(%d, %d, %d, %d) ring(h%d c%d t%d) tx(%d, %d)",
+	ND("%s[%d] PST rx(%d, %d, %d, %d) ring(h%d c%d t%d) tx(%d, %d)",
 		NM_IFPNAME(na->ifp), ring_n,
 		kring->nr_hwcur, kring->nr_hwavail, kring->nkr_hwlease, kring->nr_hwreserved,
 		ring->head, ring->cur, ring->tail,
