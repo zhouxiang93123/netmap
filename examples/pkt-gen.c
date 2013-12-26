@@ -387,7 +387,7 @@ setaffinity(pthread_t me, int i)
 	CPU_SET(i, &cpumask);
 
 	if (pthread_setaffinity_np(me, sizeof(cpuset_t), &cpumask) != 0) {
-		D("Unable to set affinity");
+		D("Unable to set affinity: %s", strerror(errno));
 		return 1;
 	}
 #else
@@ -705,7 +705,8 @@ pinger_body(void *data)
 	    }
 		/* should use a parameter to decide how often to send */
 		if (poll(fds, 1, 3000) <= 0) {
-			D("poll error/timeout on queue %d", targ->me);
+			D("poll error/timeout on queue %d: %s", targ->me,
+				strerror(errno));
 			continue;
 		}
 		/* see what we got back */
@@ -782,7 +783,8 @@ ponger_body(void *data)
 		ioctl(fds[0].fd, NIOCRXSYNC, NULL);
 #else
 		if (poll(fds, 1, 1000) <= 0) {
-			D("poll error/timeout on queue %d", targ->me);
+			D("poll error/timeout on queue %d: %s", targ->me,
+				strerror(errno));
 			continue;
 		}
 #endif
@@ -985,7 +987,8 @@ sender_body(void *data)
 		if (poll(fds, 1, 2000) <= 0) {
 			if (targ->cancel)
 				break;
-			D("poll error/timeout on queue %d", targ->me);
+			D("poll error/timeout on queue %d: %s", targ->me,
+				strerror(errno));
 			goto quit;
 		}
 		if (fds[0].revents & POLLERR) {
@@ -1270,7 +1273,7 @@ start_threads(struct glob_arg *g)
 		/* register interface. */
 		tfd = open("/dev/netmap", O_RDWR);
 		if (tfd == -1) {
-			D("Unable to open /dev/netmap");
+			D("Unable to open /dev/netmap: %s", strerror(errno));
 			continue;
 		}
 		targs[i].fd = tfd;
@@ -1291,7 +1294,7 @@ start_threads(struct glob_arg *g)
 		}
 
 		if ((ioctl(tfd, NIOCREGIF, &tifreq)) == -1) {
-			D("Unable to register %s", g->ifname);
+			D("Unable to register %s: %s", g->ifname, strerror(errno));
 			continue;
 		}
 		D("memsize is %d MB", tifreq.nr_memsize >> 20);
@@ -1319,7 +1322,7 @@ start_threads(struct glob_arg *g)
 
 		if (pthread_create(&targs[i].thread, NULL, g->td_body,
 				   &targs[i]) == -1) {
-			D("Unable to create thread %d", i);
+			D("Unable to create thread %d: %s", i, strerror(errno));
 			targs[i].used = 0;
 		}
 	}
@@ -1466,7 +1469,7 @@ tap_alloc(char *dev)
 
 	/* try to create the device */
 	if( (err = ioctl(fd, TUNSETIFF, (void *) &ifr)) < 0 ) {
-		D("failed to to a TUNSETIFF");
+		D("failed to to a TUNSETIFF: %s", strerror(errno));
 		close(fd);
 		return err;
 	}
@@ -1719,7 +1722,7 @@ main(int arc, char **argv)
 	 */
 	g.main_fd = open("/dev/netmap", O_RDWR);
 	if (g.main_fd == -1) {
-		D("Unable to open /dev/netmap");
+		D("Unable to open /dev/netmap: %s", strerror(errno));
 		// fail later
 	}
 	/*
@@ -1735,14 +1738,14 @@ main(int arc, char **argv)
 	strncpy(nmr.nr_name, g.ifname, sizeof(nmr.nr_name));
 	parse_nmr_config(g.nmr_config, &nmr);
 	if (ioctl(g.main_fd, NIOCREGIF, &nmr) == -1) {
-		D("Unable to register interface %s", g.ifname);
+		D("Unable to register interface %s: %s", g.ifname, strerror(errno));
 		//continue, fail later
 	}
 	ND("%s: txr %d txd %d rxr %d rxd %d", g.ifname,
 			nmr.nr_tx_rings, nmr.nr_tx_slots,
 			nmr.nr_rx_rings, nmr.nr_rx_slots);
 	if ((ioctl(g.main_fd, NIOCGINFO, &nmr)) == -1) {
-		D("Unable to get if info for %s", g.ifname);
+		D("Unable to get if info for %s: %s", g.ifname, strerror(errno));
 	}
 	devqueues = nmr.nr_rx_rings;
 
@@ -1763,7 +1766,7 @@ main(int arc, char **argv)
 					    PROT_WRITE | PROT_READ,
 					    MAP_SHARED, g.main_fd, 0);
 	if (g.mmap_addr == MAP_FAILED) {
-		D("Unable to mmap %d KB", nmr.nr_memsize >> 10);
+		D("Unable to mmap %d KB: %s", nmr.nr_memsize >> 10, strerror(errno));
 		// continue, fail later
 	}
 
