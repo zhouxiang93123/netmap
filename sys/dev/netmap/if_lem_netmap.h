@@ -160,9 +160,10 @@ lem_netmap_txsync(struct netmap_adapter *na, u_int ring_nr, int flags)
 	/*
 	 * Second part: reclaim buffers for completed transmissions.
 	 */
-	if (1 || flags & NAF_FORCE_RECLAIM || kring->nr_hwavail < 1) {
+	if (ticks != kring->last_reclaim || flags & NAF_FORCE_RECLAIM || kring->nr_hwavail < 1) {
 		int delta;
 
+		kring->last_reclaim = ticks;
 		/* record completed transmissions using TDH */
 		nic_i = E1000_READ_REG(&adapter->hw, E1000_TDH(0));
 		if (nic_i >= kring->nkr_num_slots) { /* XXX can it happen ? */
