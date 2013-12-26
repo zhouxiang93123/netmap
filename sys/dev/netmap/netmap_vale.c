@@ -392,8 +392,8 @@ nm_free_bdgfwd(struct netmap_adapter *na)
 	struct netmap_kring *kring;
 
 	NMG_LOCK_ASSERT();
-	nrings = nma_is_vp(na) ? na->num_tx_rings : na->num_rx_rings;
-	kring = nma_is_vp(na) ? na->tx_rings : na->rx_rings;
+	nrings = na->num_tx_rings;
+	kring = na->tx_rings;
 	for (i = 0; i < nrings; i++) {
 		if (kring[i].nkr_ft) {
 			free(kring[i].nkr_ft, M_DEVBUF);
