@@ -2,6 +2,7 @@
 
 f1() {	# default setting
 	sysctl kern.timecounter.hardware=TSC-low
+	ifconfig em0 -rxcsum -txcsum
 	return
 	ifconfig ed2 delete
 	dhclient ed2
