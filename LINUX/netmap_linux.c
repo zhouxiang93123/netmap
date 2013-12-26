@@ -1102,7 +1102,7 @@ module_exit(linux_netmap_fini);
 /* export certain symbols to other modules */
 EXPORT_SYMBOL(netmap_attach);		/* driver attach routines */
 EXPORT_SYMBOL(netmap_detach);		/* driver detach routines */
-EXPORT_SYMBOL(nm_txsync_prologue);	/* txsync support */
+EXPORT_SYMBOL(_nm_txsync_prologue);	/* txsync support */
 EXPORT_SYMBOL(nm_rxsync_prologue);	/* rxsync support */
 EXPORT_SYMBOL(netmap_ring_reinit);	/* ring init on error */
 EXPORT_SYMBOL(netmap_buffer_lut);
