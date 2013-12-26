@@ -219,8 +219,9 @@ struct netmap_kring {
 	uint32_t nr_hwcur;
 	uint32_t nr_hwavail;
 
-	/* copies of values in user rings in case we need
-	 * to use them multiple times.
+	/* Copies of values in user rings, so we do not need to
+	 * look at the ring (which is racy). These are set in the
+	 * *sync_prologue()/finalize() routines.
 	 */
 	uint32_t rhead;		/* last head read from user ring */
 	uint32_t rcur;		/* last cur read from user ring */
@@ -235,10 +236,19 @@ struct netmap_kring {
 
 	uint16_t	nkr_slot_flags;	/* initial value for flags */
 
-	uint32_t	ring_id;
+	/* last_reclaim is opaque marker to help reduce the frequency
+	 * of operations such as reclaiming tx buffers. A possible use
+	 * is to set it to ticks or seconds and do the reclaim only
+	 * once per tick.
+	 */
+	uint64_t	last_reclaim;
+
+	/* XXX maybe we would like a string with the full name ? */
+	uint32_t	ring_id;	/* debugging and more */
 
 	struct netmap_adapter *na;
 
+	/* The folloiwing fields are for VALE switch support */
 	struct nm_bdg_fwd *nkr_ft;
 	uint32_t *nkr_leases;
 #define NR_NOSLOT	((uint32_t)~0)	/* used in nkr_*lease* */
@@ -270,6 +280,7 @@ nm_next(uint32_t i, uint32_t lim)
 {
 	return unlikely (i == lim) ? 0 : i + 1;
 }
+
 
 /* return the previous index, with wraparound */
 static inline uint32_t
