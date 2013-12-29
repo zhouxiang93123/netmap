@@ -1050,12 +1050,13 @@ netmap_get_hw_na(struct ifnet *ifp, struct netmap_adapter **na)
 /*
  * MUST BE CALLED UNDER NMG_LOCK()
  *
- * get a refcounted reference to an interface.
+ * Get a refcounted reference to a netmap adapter attached
+ * to the interface specified by nmr.
  * This is always called in the execution of an ioctl().
  *
- * Return ENXIO if the interface does not exist, EINVAL if netmap
- * is not supported by the interface.
- * If successful, hold a reference.
+ * Return ENXIO if the interface specified by the request does
+ * not exist, EINVAL if netmap is not supported by the interface.
+ * If successful, hold a reference to the netmap adapter.
  *
  * When the NIC is attached to a bridge, reference is managed
  * at na->na_bdg_refcount using ADD/DROP_BDG_REF() as well as
@@ -1065,7 +1066,7 @@ netmap_get_hw_na(struct ifnet *ifp, struct netmap_adapter **na)
  *
  * This function uses if_rele() when we want to prevent the NIC from
  * being detached from the bridge in error handling.  But once refcount
- * is acquired by this function, it must be released using nm_if_rele().
+ * is acquired by this function, it must be released using if_rele().
  */
 int
 netmap_get_na(struct nmreq *nmr, struct netmap_adapter **na, int create)
